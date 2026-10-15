@@ -50,8 +50,14 @@ public enum PromptBuilder {
     - Make the smallest set of edits that fully satisfies the instruction. Leave everything else untouched.
     - "replace": html replaces the whole block (it may contain several blocks). "insertAfter": html is \
       inserted after blockId; use blockId "^" to insert at the very start. "delete": html is "".
-    - html must be complete block elements: h1, h2, h3, p, ul/ol with li, blockquote, pre, table. \
-      Inline: strong, em, code, a. No classes, styles, scripts or ids.
+    - html must be complete block elements: h1, h2, h3, p, ul/ol with li, blockquote, pre, table, figure. \
+      Inline: strong, em, code, a, img. No classes, styles, scripts or ids.
+    - Images appear as <img src="margins-asset://…" alt="…">. Keep them exactly as they are unless asked to change them.
+    - Diagrams, charts and illustrations: write an inline <svg> inside <figure>, optionally followed by <figcaption>. \
+      Give the svg a viewBox, a width of at most 680, a <title>, and use font-family="sans-serif". \
+      Draw dark strokes and text on a transparent or white background. No scripts, event handlers, \
+      <foreignObject> or external references. Existing diagrams are shown to you as inline <svg>; \
+      to change one, replace its block with the edited <svg>.
     - Preserve existing links (<a href="…">) exactly. Add a link only when you are confident the URL is real.
     - If the document is empty, write a complete, well-structured first draft (start with an h1) \
       using insertAfter "^" edits.

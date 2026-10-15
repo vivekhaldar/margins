@@ -8,16 +8,26 @@ import MarginsCore
 final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let webView: WKWebView
     var onMessage: ((String, [String: Any]) -> Void)?
+    /// Resolves `margins-asset://img/<id>.<ext>` for the web view.
+    var assetLookup: ((String) -> Asset?)? {
+        get { assetHandler.lookup }
+        set { assetHandler.lookup = newValue }
+    }
+    /// Stores pasted/dropped image bytes and returns their `margins-asset://` URL.
+    var onAddAsset: ((Data, String) -> String?)?
     private var isReady = false
     private var readyWaiters: [CheckedContinuation<Void, Never>] = []
+    private let assetHandler = AssetSchemeHandler()
 
     override init() {
         let config = WKWebViewConfiguration()
         let controller = WKUserContentController()
         config.userContentController = controller
+        config.setURLSchemeHandler(assetHandler, forURLScheme: MarginsDocument.assetScheme)
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
         controller.add(WeakHandler(self), name: "margins")
+        controller.addScriptMessageHandler(AssetUploadHandler(self), contentWorld: .page, name: "assets")
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
         #if DEBUG
@@ -134,6 +144,16 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     func reveal(step: Int) async { _ = try? await call("window.margins.revealStep(step)", ["step": step]) }
     func preview(_ html: String) async { _ = try? await call("window.margins.preview(html)", ["html": html]) }
     func endPreview() async { _ = try? await call("window.margins.endPreview()") }
+    func insertImage(src: String, alt: String) async {
+        _ = try? await call("window.margins.insertImage(src, alt)", ["src": src, "alt": alt])
+    }
+    func editLink() async { _ = try? await call("window.margins.editLink()") }
+
+    fileprivate func addAsset(_ body: Any) -> String? {
+        guard let d = body as? [String: Any], let mime = d["mime"] as? String, mime.hasPrefix("image/"),
+              let b64 = d["data"] as? String, let data = Data(base64Encoded: b64) else { return nil }
+        return onAddAsset?(data, mime)
+    }
 
     static let openableSchemes: Set<String> = ["http", "https", "mailto"]
 
@@ -162,4 +182,38 @@ struct EditorView: NSViewRepresentable {
     let bridge: EditorBridge
     func makeNSView(context: Context) -> WKWebView { bridge.webView }
     func updateNSView(_ nsView: WKWebView, context: Context) {}
+}
+
+/// Serves images stored in the document to the editor. `<img>` rendering means SVG scripts never run.
+private final class AssetSchemeHandler: NSObject, WKURLSchemeHandler {
+    var lookup: ((String) -> Asset?)?
+
+    func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
+        guard let url = task.request.url, let id = MarginsDocument.assetID(fromSrc: url.absoluteString),
+              let asset = lookup?(id) else {
+            task.didFailWithError(URLError(.fileDoesNotExist))
+            return
+        }
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
+            "Content-Type": asset.mime,
+            "Content-Length": String(asset.data.count),
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+        ])!
+        task.didReceive(response)
+        task.didReceive(asset.data)
+        task.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
+}
+
+/// `await webkit.messageHandlers.assets.postMessage({mime, data})` → asset URL.
+private final class AssetUploadHandler: NSObject, WKScriptMessageHandlerWithReply {
+    weak var bridge: EditorBridge?
+    init(_ b: EditorBridge) { bridge = b }
+    @MainActor
+    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
+        guard let src = bridge?.addAsset(message.body) else { return (nil, "Unsupported image") }
+        return (src, nil)
+    }
 }

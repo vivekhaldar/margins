@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import MarginsCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PendingInfo: Equatable {
     var total = 0
@@ -45,6 +46,8 @@ final class AppState: ObservableObject {
         fileURL = Self.newUntitledURL()
 
         editor.onMessage = { [weak self] type, body in self?.handle(type, body) }
+        editor.assetLookup = { [weak self] id in self?.doc.assets[id] }
+        editor.onAddAsset = { [weak self] data, mime in self?.doc.addAsset(data, mime: mime) }
         let savedZoom = ud.double(forKey: "zoom")
         setZoom(savedZoom > 0 ? savedZoom : 1.0)
 
@@ -133,11 +136,12 @@ final class AppState: ObservableObject {
                 let snapshot = try await editor.blocks()
                 let request = GenerationRequest(
                     system: PromptBuilder.system,
-                    prompt: PromptBuilder.editPrompt(blocks: snapshot.blocks, instruction: text, focus: snapshot.focus),
+                    prompt: PromptBuilder.editPrompt(blocks: forPrompt(snapshot.blocks), instruction: text, focus: snapshot.focus),
                     model: config.model.isEmpty ? nil : config.model)
                 let plan = try await provider.editPlan(request)
                 let direct = snapshot.blocks.isEmpty
-                let result = try await editor.apply(step: step, edits: plan.edits, direct: direct)
+                let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
+                let result = try await editor.apply(step: step, edits: edits, direct: direct)
                 updateIntent(step) {
                     $0.summary = plan.summary
                     $0.notes = plan.notes
@@ -167,7 +171,7 @@ final class AppState: ObservableObject {
             updateIntent(ctx.step) { $0.refinements.append(.init(text: instruction)) }
             do {
                 let provider = try provider(for: config)
-                let blocks = try await editor.blocks().blocks
+                let blocks = forPrompt(try await editor.blocks().blocks)
                 let plan = try await provider.editPlan(GenerationRequest(
                     system: PromptBuilder.system,
                     prompt: PromptBuilder.refinePrompt(blocks: blocks, blockId: ctx.blockId, original: ctx.original,
@@ -178,7 +182,7 @@ final class AppState: ObservableObject {
                     throw ProviderError.protocolError("The model returned no refinement.")
                 }
                 let count = doc.intents.first { $0.step == ctx.step }?.refinements.count ?? 1
-                if let html = await editor.applyRefinement(cid: cid, html: edit.html, count: count) {
+                if let html = await editor.applyRefinement(cid: cid, html: doc.internalizeImages(edit.html), count: count) {
                     doc.snapshot(html: html, slug: "refined: \(instruction.lowercased().prefix(40))", author: .agent,
                                  detail: original.map { "Change from “\($0.text)”" } ?? "")
                     scheduleSave()
@@ -188,6 +192,11 @@ final class AppState: ObservableObject {
                 updateIntent(ctx.step) { $0.notes.append("Refine failed: \(error.localizedDescription)") }
             }
         }
+    }
+
+    /// Blocks as the model should see them: stored SVG diagrams expanded back to inline `<svg>`.
+    private func forPrompt(_ blocks: [Block]) -> [Block] {
+        blocks.map { Block(id: $0.id, html: doc.expandSVGForPrompt($0.html), pending: $0.pending) }
     }
 
     func review(step: Int, accept: Bool) { Task { await editor.resolve(accept: accept, step: step) } }
@@ -229,7 +238,7 @@ final class AppState: ObservableObject {
                 else if doc.intents[i].status == .reviewed && n > 0 { doc.intents[i].status = .pending }
             }
         case "edited":
-            let html = body["html"] as? String ?? doc.html
+            let html = doc.internalizeImages(body["html"] as? String ?? doc.html)
             let sections = body["sections"] as? [String] ?? []
             let where_ = sections.isEmpty ? "the document" : sections.map { "§\($0)" }.joined(separator: ", ")
             let text = "You edited \(where_)"
@@ -310,7 +319,8 @@ final class AppState: ObservableObject {
 
     func open(_ url: URL) {
         do {
-            let d = try MarginsDocument.decode(Data(contentsOf: url))
+            var d = try MarginsDocument.decode(Data(contentsOf: url))
+            d.pruneAssets()
             saveNow()
             doc = d
             fileURL = url
@@ -354,7 +364,7 @@ final class AppState: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
             let blocks = (try? await editor.blocks().blocks) ?? []
-            let body = blocks.map(\.html).joined(separator: "\n")
+            let body = doc.inliningAssets(blocks.map(\.html).joined(separator: "\n"))
             let page = "<!doctype html><meta charset=utf-8><title>\(doc.title)</title>\n<body style=\"max-width:720px;margin:40px auto;font:16px/1.6 -apple-system,sans-serif\">\n\(body)\n</body>"
             try? page.write(to: url, atomically: true, encoding: .utf8)
         }
@@ -385,6 +395,7 @@ final class AppState: ObservableObject {
             let newURL = Self.uniqueURL(named: String(safe))
             if FileManager.default.fileExists(atPath: fileURL.path) { try? FileManager.default.moveItem(at: fileURL, to: newURL) }
             try? FileManager.default.removeItem(at: markdownURL)
+            try? FileManager.default.removeItem(at: assetsFolderURL)
             fileURL = newURL
         }
         do {
@@ -400,8 +411,20 @@ final class AppState: ObservableObject {
     /// Plain-Markdown mirror of the current accepted text, kept next to the `.margins` file.
     var markdownURL: URL { fileURL.deletingPathExtension().appendingPathExtension("md") }
 
+    /// `<Title>.assets/`, holding the images the Markdown mirror points at.
+    var assetsFolderURL: URL {
+        fileURL.deletingPathExtension().appendingPathExtension("assets")
+    }
+
     private func writeMarkdown() {
-        let md = MarkdownExporter.markdown(fromHTML: doc.html)
+        let folder = assetsFolderURL
+        let folderName = folder.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? folder.lastPathComponent
+        let used = MarginsDocument.assetIDs(in: doc.html).filter { doc.assets[$0] != nil }
+        syncAssetFolder(folder, ids: used)
+        let md = MarkdownExporter.markdown(fromHTML: doc.html) { [doc] src in
+            guard let id = MarginsDocument.assetID(fromSrc: src), let a = doc.assets[id] else { return src }
+            return "\(folderName)/\(id).\(a.fileExtension)"
+        }
         let url = markdownURL
         if let existing = try? String(contentsOf: url, encoding: .utf8), existing == md { return }
         do {
@@ -410,6 +433,37 @@ final class AppState: ObservableObject {
             lastError = "Couldn't write Markdown: \(error.localizedDescription)"
         }
     }
+
+    private func syncAssetFolder(_ folder: URL, ids: Set<String>) {
+        let fm = FileManager.default
+        guard !ids.isEmpty else { try? fm.removeItem(at: folder); return }
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let wanted = Dictionary(uniqueKeysWithValues: ids.compactMap { id in doc.assets[id].map { ("\(id).\($0.fileExtension)", $0) } })
+        for name in (try? fm.contentsOfDirectory(atPath: folder.path)) ?? [] where wanted[name] == nil {
+            try? fm.removeItem(at: folder.appendingPathComponent(name))
+        }
+        for (name, asset) in wanted where !fm.fileExists(atPath: folder.appendingPathComponent(name).path) {
+            try? asset.data.write(to: folder.appendingPathComponent(name), options: .atomic)
+        }
+    }
+
+    func insertImageFromFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image, .svg]
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        Task {
+            for url in panel.urls {
+                guard let data = try? Data(contentsOf: url),
+                      let mime = Asset.mime(forExtension: url.pathExtension) ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType,
+                      mime.hasPrefix("image/") else { continue }
+                let src = doc.addAsset(data, mime: mime)
+                await editor.insertImage(src: src, alt: url.deletingPathExtension().lastPathComponent)
+            }
+        }
+    }
+
+    func editLink() { Task { await editor.editLink() } }
 
     func revealMarkdown() {
         saveNow()

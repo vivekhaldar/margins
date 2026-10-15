@@ -36,14 +36,17 @@
   // ---------- html hygiene ----------
   const INLINE = new Set(['A', 'B', 'STRONG', 'I', 'EM', 'CODE', 'SPAN', 'U', 'S', 'SUB', 'SUP', 'MARK', 'SMALL', 'BR', 'IMG']);
   const KEEP_ATTRS = new Set(['href', 'src', 'alt', 'colspan', 'rowspan', 'start']);
+  const SAFE_IMG = /^(margins-asset:|https?:|data:image\/(png|jpe?g|gif|webp|svg\+xml);)/i;
 
   function blocksFrom(html) {
     const t = document.createElement('template');
     t.innerHTML = html || '';
-    t.content.querySelectorAll('script,style,iframe,object,embed,link,meta').forEach((x) => x.remove());
+    // Diagrams reach the editor as <img src="margins-asset://…">; Swift lifts inline <svg> out first.
+    t.content.querySelectorAll('script,style,iframe,object,embed,link,meta,svg,math,foreignObject').forEach((x) => x.remove());
     t.content.querySelectorAll('*').forEach((x) => {
       [...x.attributes].forEach((a) => { if (!KEEP_ATTRS.has(a.name) || /^\s*javascript:/i.test(a.value)) x.removeAttribute(a.name); });
     });
+    t.content.querySelectorAll('img').forEach((x) => { if (!SAFE_IMG.test(x.getAttribute('src') || '')) x.remove(); });
     const out = [];
     let para = null;
     [...t.content.childNodes].forEach((n) => {
@@ -451,6 +454,68 @@
     s.collapseToEnd();
   });
 
+  // ---------- images ----------
+  // Remember where the caret was so menu-driven inserts land there even after focus moves away.
+  let lastRange = null;
+  document.addEventListener('selectionchange', () => {
+    const s = getSelection();
+    if (s && s.rangeCount && doc.contains(s.anchorNode) && !doc.classList.contains('ro')) lastRange = s.getRangeAt(0).cloneRange();
+  });
+  const imageFiles = (dt) => [...((dt && dt.files) || [])].filter((f) => /^image\//.test(f.type));
+  function readBase64(file) {
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result).split(',')[1] || '');
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+  }
+  async function storeImage(mime, data) {
+    const h = window.webkit && webkit.messageHandlers && webkit.messageHandlers.assets;
+    if (h) { try { return await h.postMessage({ mime, data }); } catch (_) { return null; } }
+    return `data:${mime};base64,${data}`; // standalone (browser) testing
+  }
+  function insertImage(src, alt) {
+    if (doc.classList.contains('ro') || !SAFE_IMG.test(src || '')) return false;
+    doc.focus();
+    const s = getSelection();
+    s.removeAllRanges();
+    if (lastRange && doc.contains(lastRange.startContainer)) s.addRange(lastRange);
+    else { const r = document.createRange(); r.selectNodeContents(doc); r.collapse(false); s.addRange(r); }
+    const marker = 'margins-img-' + Math.random().toString(36).slice(2);
+    document.execCommand('insertImage', false, src + '#' + marker);
+    const img = [...doc.querySelectorAll('img')].find((i) => i.getAttribute('src').endsWith('#' + marker));
+    if (!img) return false;
+    img.removeAttribute('style');
+    img.setAttribute('src', src);
+    img.setAttribute('alt', alt || '');
+    normalize();
+    noteEdit(img);
+    return true;
+  }
+  async function insertFiles(files) {
+    for (const f of files) {
+      const src = await storeImage(f.type, await readBase64(f));
+      if (src) insertImage(src, f.name.replace(/\.[^.]+$/, ''));
+    }
+  }
+  doc.addEventListener('paste', (e) => {
+    const files = imageFiles(e.clipboardData);
+    if (!files.length || doc.classList.contains('ro')) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    insertFiles(files);
+  }, true);
+  doc.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+  doc.addEventListener('drop', (e) => {
+    const files = imageFiles(e.dataTransfer);
+    if (!files.length || doc.classList.contains('ro')) return;
+    e.preventDefault();
+    const pos = document.caretRangeFromPoint && document.caretRangeFromPoint(e.clientX, e.clientY);
+    if (pos && doc.contains(pos.startContainer)) lastRange = pos;
+    insertFiles(files);
+  });
+
   // ---------- keyboard review ----------
   let cur = -1;
   function move(d) {
@@ -557,6 +622,8 @@
       emitPending();
       return currentHTML();
     },
+    insertImage: (src, alt) => insertImage(src, alt),
+    editLink: () => editLink(),
     refineFailed(cid) { const ch = byCid(cid); if (ch) ch.classList.remove('refining'); },
     highlightStep(step) {
       chgs().forEach((c) => c.classList.toggle('peek', step != null && c.dataset.step === String(step)));

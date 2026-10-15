@@ -68,6 +68,9 @@ A pending change is a wrapper element:
 | `accept/reject({all\|step\|selected\|cid})` | `edited {sections, html}` (debounced, user typing) |
 | `refineContext(cid)`, `applyRefinement(cid, html, n)` | `reviewed {accepted, rejected, sections, html}` |
 | `highlightStep`, `revealStep`, `preview`, `endPreview` | `refine {cid, step, instruction}` |
+| `insertImage(src, alt)`, `editLink()` | `openURL {url}` |
+
+Two more channels serve images. `webkit.messageHandlers.assets` is a reply handler: pasted or dropped image bytes go in as `{mime, data}` and the stored asset's URL comes back. A `WKURLSchemeHandler` for `margins-asset://` serves those assets back to the page.
 
 ## Flow of one instruction
 
@@ -87,10 +90,22 @@ A pending change is a wrapper element:
   "intents":  [{ "id": "…", "step": 1, "kind": "instruction", "text": "…", "status": "done", "summary": "…",
                  "notes": [], "provider": "GitHub Copilot", "refinements": 0, "createdAt": "…" }],
   "versions": [{ "id": "…", "number": 1, "slug": "draft rate limiting design note", "author": "agent",
-                 "detail": "<instruction>", "html": "…", "createdAt": "…" }] }
+                 "detail": "<instruction>", "html": "…", "createdAt": "…" }],
+  "assets":   { "3f9a…": { "mime": "image/svg+xml", "data": "<base64>" } } }
 ```
 
+`assets` is optional, so older files without it still open.
+
 Pending changes are saved as part of `html`, so you can quit mid-review and pick it up later.
+
+### Images and diagrams
+
+Images live once in `assets`, keyed by the first 128 bits of their SHA-256. The HTML, including every version snapshot, refers to them as `<img src="margins-asset://img/<id>.<ext>">`, so history does not duplicate image bytes.
+
+- **Agent diagrams.** The system prompt asks for diagrams as inline `<svg>` inside `<figure>`, with an optional `<figcaption>`. Before applying an edit, `MarginsDocument.internalizeImages` moves each `<svg>` (and any `data:` image) into `assets` and replaces it with an `<img>`. Rendering SVG through `<img>` sandboxes it: scripts, external loads and `foreignObject` tricks don't run. When building a prompt, `expandSVGForPrompt` inlines the SVG source again, so the model can revise its own diagrams.
+- **User images.** Paste or drag-and-drop image files, or use Insert → Image… (⇧⌘I). They go through the `assets` reply handler.
+- **Hygiene.** The editor's sanitizer strips raw `<svg>`/`<math>` and any `<img>` whose `src` isn't `margins-asset:`, `http(s):` or `data:image/…`. Orphaned assets (referenced by neither `html` nor any version) are pruned when a document is opened.
+- **Exports.** HTML export inlines assets as `data:` URIs. The Markdown mirror writes them to `<Title>.assets/<id>.<ext>` and links them relatively.
 
 ### Markdown mirror
 

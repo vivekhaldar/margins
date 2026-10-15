@@ -6,9 +6,10 @@ import Foundation
 /// exported as the accepted text: the `<del>` side is kept and the proposed `<ins>` side is
 /// dropped, so the Markdown always reflects what the author has actually signed off on.
 public enum MarkdownExporter {
-    public static func markdown(fromHTML html: String) -> String {
+    /// - Parameter imageSrc: rewrites `<img src>` values (e.g. `margins-asset://` → a relative file path).
+    public static func markdown(fromHTML html: String, imageSrc: @escaping (String) -> String = { $0 }) -> String {
         let root = HTMLNode.parse(html)
-        var r = Renderer()
+        var r = Renderer(imageSrc: imageSrc)
         let out = r.blocks(root.children, indent: "")
         return out.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
     }
@@ -150,9 +151,11 @@ final class HTMLNode {
 // MARK: - Markdown rendering
 
 private struct Renderer {
+    var imageSrc: (String) -> String = { $0 }
+
     static let blockTags: Set<String> = ["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "pre",
                                          "blockquote", "hr", "table", "thead", "tbody", "tr", "section", "article",
-                                         "header", "footer", "figure", "del", "ins"]
+                                         "header", "footer", "figure", "figcaption", "del", "ins"]
 
     /// Children of a pending change that represent the accepted (pre-change) content.
     func accepted(_ chg: HTMLNode) -> [HTMLNode] {
@@ -195,6 +198,9 @@ private struct Renderer {
             return inline(n.children).trimmingCharacters(in: .whitespacesAndNewlines)
         case "hr":
             return "---"
+        case "figcaption":
+            let t = oneLine(inline(n.children))
+            return t.isEmpty ? "" : "*\(t)*"
         case "pre":
             let code = textContent(n).trimmingCharacters(in: .newlines)
             let lang = n.children.first(where: { $0.tag == "code" })?.classes.first(where: { $0.hasPrefix("language-") })?
@@ -244,7 +250,7 @@ private struct Renderer {
             for c in x.children {
                 if c.tag == "tr" {
                     rows.append(c.children.filter { $0.tag == "td" || $0.tag == "th" }.map {
-                        var r = Renderer()
+                        var r = Renderer(imageSrc: imageSrc)
                         return r.oneLine(r.inline($0.children)).replacingOccurrences(of: "|", with: "\\|")
                     })
                 } else if !c.tag.isEmpty { collect(c) }
@@ -274,7 +280,7 @@ private struct Renderer {
                 let label = inline(n.children)
                 if let href = n.attrs["href"], !href.isEmpty { out += "[\(label)](\(href))" } else { out += label }
             case "img":
-                out += "![\(n.attrs["alt"] ?? "")](\(n.attrs["src"] ?? ""))"
+                out += "![\(n.attrs["alt"] ?? "")](\(imageSrc(n.attrs["src"] ?? "")))"
             case "del": continue  // inline pending deletion markers aren't produced by the editor; skip proposals
             case "ins": continue
             default:

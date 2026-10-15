@@ -86,3 +86,14 @@ article.ro a,.chg>del a{cursor:pointer}
 .lpop input{width:100%;font:inherit;font-size:13px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:7px;padding:6px 8px;outline:none}
 .lpop input:focus{border-color:var(--accline);box-shadow:0 0 0 3px var(--accbg)}
 .lpop .pf{font-size:11px;color:var(--mute);margin-top:4px;padding:0 2px}
+
+/* images & diagrams */
+article img{max-width:100%;height:auto;vertical-align:middle;border-radius:4px}
+article figure{margin:1.2em 0;text-align:center}
+article figure img{display:block;margin:0 auto}
+article figcaption{font-size:.85em;color:var(--mute);margin-top:.5em;font-style:italic}
+article img:hover{outline:2px solid var(--accline);outline-offset:2px}
+.chg>del img{opacity:.45;filter:grayscale(1)}
+@media (prefers-color-scheme:dark){
+  article img[src$=".svg"]{background:#fff;padding:10px;border-radius:8px}
+}

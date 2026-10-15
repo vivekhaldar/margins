@@ -11,12 +11,26 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
     public var intents: [Intent]
     public var versions: [Version]
     public var nextStep: Int
+    /// Images referenced from `html` / version snapshots, keyed by content hash.
+    public var assets: [String: Asset] = [:]
 
     public init(html: String = "", intents: [Intent] = [], versions: [Version] = [], nextStep: Int = 1) {
         self.html = html
         self.intents = intents
         self.versions = versions
         self.nextStep = nextStep
+    }
+
+    enum CodingKeys: String, CodingKey { case format, html, intents, versions, nextStep, assets }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        format = try c.decodeIfPresent(Int.self, forKey: .format) ?? MarginsDocument.currentFormat
+        html = try c.decode(String.self, forKey: .html)
+        intents = try c.decode([Intent].self, forKey: .intents)
+        versions = try c.decode([Version].self, forKey: .versions)
+        nextStep = try c.decode(Int.self, forKey: .nextStep)
+        assets = try c.decodeIfPresent([String: Asset].self, forKey: .assets) ?? [:]
     }
 
     /// Title = text of the first <h1>, else "Untitled".

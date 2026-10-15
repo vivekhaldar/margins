@@ -25,6 +25,10 @@ struct MarginsApp: App {
                 Button("Show in Finder") { state.revealInFinder() }
                 Button("Show Markdown in Finder") { state.revealMarkdown() }
             }
+            CommandMenu("Insert") {
+                Button("Link…") { state.editLink() }.keyboardShortcut("k")
+                Button("Image…") { state.insertImageFromFile() }.keyboardShortcut("i", modifiers: [.command, .shift])
+            }
             CommandGroup(before: .toolbar) {
                 Button("Zoom In") { state.zoomIn() }.keyboardShortcut("+")
                 Button("Zoom Out") { state.zoomOut() }.keyboardShortcut("-")

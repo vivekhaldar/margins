@@ -28,6 +28,7 @@ The output isn't a reply. It's the document.
   - all at once.
 - **💬 Refine a single change.** Ask the agent to redo just that hunk ("shorter", "more formal"…) without touching the rest of the document.
 - **Edit inline.** The document is plain editable rich text. Your edits are respected and recorded.
+- **Images and diagrams.** Ask for one ("add a diagram of the request flow"), and the agent draws it as SVG; it can revise it later like any other text. Paste or drag in images, or use Insert → Image… (⇧⌘I). Images are stored inside the `.margins` file, once each, no matter how many versions reference them.
 - **Links.** ⌘K links the selection (or edits the link under the caret), and pasting a URL over selected text links it. Click a link for Open ↗ / Edit / Remove; ⌘-click opens it in your browser.
 - **History.** Every version gets a short slug ("add summary at top"), an author (agent / you / review) and the instruction that produced it. You can preview or restore any version.
 - **Bring your own subscription.** Margins uses the model access you already pay for. See [Model providers](#model-providers).
@@ -51,7 +52,7 @@ swift run margins-cli edit copilot "Draft a haiku about tracked changes"
 
 > `swift test` and SwiftUI's `@State` macro both need plugins that ship only with Xcode. The project avoids them: the tests are a self-test executable, and view-local state uses a tiny `Local<T>` ObservableObject.
 
-Documents autosave to `~/Documents/Margins/<Title>.margins`, which is JSON and includes the full version history. A plain `<Title>.md` beside it is kept in sync with the current accepted text (File → Show Markdown in Finder). Use ⌘O to open, ⇧⌘S to save a copy elsewhere, and ⇧⌘E to export HTML. ⌘+ / ⌘− / ⌘0 zoom the document; the zoom level is remembered.
+Documents autosave to `~/Documents/Margins/<Title>.margins`, which is JSON and includes the full version history. A plain `<Title>.md` beside it is kept in sync with the current accepted text, with images in `<Title>.assets/` (File → Show Markdown in Finder). Use ⌘O to open, ⇧⌘S to save a copy elsewhere, and ⇧⌘E to export HTML. ⌘+ / ⌘− / ⌘0 zoom the document; the zoom level is remembered.
 
 ## Model providers
 

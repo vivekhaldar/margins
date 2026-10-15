@@ -113,6 +113,37 @@ test("markdown export") {
     check(md.contains("line  \nbreak"), "line break")
 }
 
+test("assets") {
+    var doc = MarginsDocument()
+    let svg = #"<svg viewBox="0 0 10 10" width="100"><title>Flow</title><rect width="5" height="5"/></svg>"#
+    let html = doc.internalizeImages("<figure>\(svg)<figcaption>Cap</figcaption></figure><p><img src=\"data:image/png;base64,iVBORw0KGgo=\" alt=\"x\"></p>")
+    check(!html.contains("<svg") && !html.contains("data:"), "inline svg + data uri moved out")
+    check(doc.assets.count == 2, "two assets stored")
+    check(html.contains("alt=\"Flow\"") && html.contains(".svg\""), "svg alt from <title>, .svg url")
+    let ids = MarginsDocument.assetIDs(in: html)
+    check(ids.count == 2 && ids.allSatisfy { doc.assets[$0] != nil }, "ids resolve")
+    let svgID = ids.first { doc.assets[$0]?.mime == "image/svg+xml" }!
+    check(String(data: doc.assets[svgID]!.data, encoding: .utf8)!.contains("xmlns=\"http://www.w3.org/2000/svg\""), "xmlns added")
+    let again = doc.internalizeImages(svg)
+    check(doc.assets.count == 2 && MarginsDocument.assetIDs(in: again) == [svgID], "content-addressed dedupe")
+    let expanded = doc.expandSVGForPrompt(html)
+    check(expanded.contains("<rect") && !expanded.contains(".svg\"") && expanded.contains(".png\""), "svg expanded for prompt, png kept")
+    check(doc.inliningAssets(html).contains("data:image/svg+xml;base64,"), "export inlines assets")
+    doc.snapshot(html: html, slug: "x", author: .agent)
+    doc.snapshot(html: "<p>no images</p>", slug: "y", author: .you)
+    doc.addAsset(Data("orphan".utf8), mime: "image/png")
+    doc.pruneAssets()
+    check(doc.assets.count == 2, "prune keeps history-referenced, drops orphans")
+    let round = try MarginsDocument.decode(try doc.encoded())
+    check(round.assets == doc.assets, "assets round-trip")
+    let legacy = try MarginsDocument.decode(Data(#"{"format":1,"html":"","intents":[],"versions":[],"nextStep":1}"#.utf8))
+    check(legacy.assets.isEmpty, "old files without assets decode")
+    let md = MarkdownExporter.markdown(fromHTML: html) { src in
+        MarginsDocument.assetID(fromSrc: src).map { "T.assets/\($0).svg" } ?? src
+    }
+    check(md.contains("![Flow](T.assets/") && md.contains("*Cap*"), "markdown image + caption")
+}
+
 test("binary locator") {
     check(BinaryLocator.locate("sh") != nil, "finds sh")
     check(BinaryLocator.locate("definitely-not-a-binary-xyz") == nil, "missing")
