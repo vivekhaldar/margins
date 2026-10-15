@@ -103,7 +103,8 @@ public enum PromptBuilder {
     """
     }
 
-    public static func editPrompt(blocks: [Block], instruction: String, focus: [String] = []) -> String {
+    public static func editPrompt(blocks: [Block], instruction: String, focus: [String] = [],
+                                  sources: [SourceMaterial] = []) -> String {
         var s = "DOCUMENT\n"
         if blocks.isEmpty {
             s += "(empty)\n"
@@ -116,7 +117,21 @@ public enum PromptBuilder {
             s += "\nThe author has selected blocks \(focus.map { "[\($0)]" }.joined(separator: ", ")). "
             s += "Restrict edits to these blocks unless the instruction clearly requires otherwise.\n"
         }
+        if !sources.isEmpty {
+            s += "\n" + sourceSection(sources)
+        }
         s += "\nINSTRUCTION\n\(instruction)\n\nReturn the JSON edit plan now."
+        return s
+    }
+
+    /// Material Margins already fetched for URLs in the instruction.
+    public static func sourceSection(_ sources: [SourceMaterial]) -> String {
+        var s = "SOURCE MATERIAL\nMargins has already fetched the following for URLs in the instruction. "
+        s += "Base the document on it, link to the source URL, and do not try to fetch these URLs again.\n"
+        for (i, src) in sources.enumerated() {
+            s += "\n=== [S\(i + 1)] \(src.title)\(src.byline.isEmpty ? "" : " — \(src.byline)")\n"
+            s += "URL: \(src.url)\nKind: \(src.kind)\(src.truncated ? " (truncated)" : "")\n<<<\n\(src.text)\n>>>\n"
+        }
         return s
     }
 

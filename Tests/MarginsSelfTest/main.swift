@@ -222,6 +222,21 @@ test("document id round-trips; old docs get one") {
     check(legacy.intents[0].steps == nil, "legacy intent decodes")
 }
 
+// MARK: YouTube sources
+check(YouTube.videoIDs(in: "summarize https://www.youtube.com/watch?v=4Go39b2Vq9I&pp=ugUEEgJlbtIHCQ%3D and https://youtu.be/qeMMnOiF51A?t=3") == ["4Go39b2Vq9I", "qeMMnOiF51A"], "youtube ids: watch + youtu.be")
+check(YouTube.videoIDs(in: "youtube.com/watch?feature=x&v=abcdefghijk youtube.com/shorts/ABCDEFGHIJK https://www.youtube.com/watch?v=abcdefghijk") == ["abcdefghijk", "ABCDEFGHIJK"], "youtube ids: v= not first, shorts, dedupe")
+check(YouTube.videoIDs(in: "https://example.com/watch?v=abcdefghijk youtube.com/watch?v=tooshort") == [], "youtube ids: ignore non-youtube and bad ids")
+check(YouTube.apiKey(inWatchPage: #"x "INNERTUBE_API_KEY": "AIzaKEY_1" y"#) == "AIzaKEY_1", "innertube key extracted")
+let ytXML = #"<?xml version="1.0"?><transcript><text start="0.1" dur="2">So, AI solved</text><text start="1.2" dur="2">a math problem &amp;#39;s here.</text><text start="9.0" dur="1">New &lt;b&gt;thought&lt;/b&gt;</text></transcript>"#
+check(YouTube.transcript(fromXML: ytXML) == "So, AI solved a math problem 's here.\n\nNew thought", "transcript: entities, tags, pause paragraphs")
+check(YouTube.transcript(fromXML: #"<timedtext><body><p t="0" d="1">one</p><p t="1500" d="1">two</p></body></timedtext>"#) == "one two", "transcript: srv3 cues")
+let ytTracks = [YouTube.Track(language: "ar", auto: true, url: "a"), YouTube.Track(language: "en", auto: true, url: "b"), YouTube.Track(language: "en", auto: false, url: "c")]
+check(YouTube.pick(ytTracks, languages: ["en"])?.url == "c", "tracks: human English first")
+check(YouTube.pick(Array(ytTracks.prefix(2)), languages: ["fr", "en"])?.url == "b", "tracks: then auto in preferred language")
+let srcPrompt = PromptBuilder.editPrompt(blocks: [], instruction: "summarize", sources: [SourceMaterial(url: "https://www.youtube.com/watch?v=x", title: "Talk", byline: "Chan · 9:54", kind: "YouTube transcript (en)", text: "hello world")])
+check(srcPrompt.contains("SOURCE MATERIAL") && srcPrompt.contains("[S1] Talk — Chan · 9:54") && srcPrompt.contains("<<<\nhello world\n>>>"), "prompt includes fetched sources")
+check(srcPrompt.range(of: "SOURCE MATERIAL")!.lowerBound < srcPrompt.range(of: "INSTRUCTION")!.lowerBound, "sources precede instruction")
+
 let sem = DispatchSemaphore(value: 0)
 Task {
     let r = try! await ProcessRunner.run(URL(fileURLWithPath: "/bin/cat"), arguments: [], stdin: "hello")

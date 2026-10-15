@@ -35,6 +35,7 @@ The output isn't a reply. It's the document.
 - **Outline.** A map of the headings sits beside the page. Click a heading to jump to it; the current section is highlighted, and dots mark sections with pending changes. When the window is narrow it shrinks to a strip of ticks on the right edge that expands on hover. Toggle it with ⌃⌘O or the toolbar button ([mock](docs/mocks/outline.html)).
 - **History.** Every version gets a short slug ("add summary at top"), an author (agent / you / review) and the instruction that produced it. You can preview or restore any version.
 - **A real agent behind the page.** The backend is a full agent, not a one-shot completion. It can reason, search the web, fetch pages, read files and (if you allow it) run commands before writing its edit. Each tool call streams live onto the instruction card, so you can watch what it's doing. Stop a run with the card's Stop button or ⌘. See [Agent tools](#agent-tools).
+- **YouTube links just work.** Paste a YouTube URL into an instruction ("summarize this talk: https://youtu.be/…"), and Margins fetches the video's transcript itself and hands it to the agent, with any provider and at any tool level.
 - **Bring your own subscription.** Margins uses the model access you already pay for. See [Model providers](#model-providers).
 
 ## Build and run
@@ -82,7 +83,7 @@ Pick a tool level from the model menu in the toolbar or from the **Agent → Too
 | **Research** (default) | Search the web, fetch pages and read files freely. Copilot **asks you inline** (Allow / Allow all / Deny) before running a command or writing a file. Codex and Claude just aren't given those tools. |
 | **Full agent** | Run commands, write files and use the network inside the document's workspace, without asking. |
 
-Each document has its own agent workspace at `~/Library/Application Support/Margins/Workspaces/<doc-id>/`, where the agent can keep scratch files across instructions (Agent → Reveal Agent Workspace). Whatever the agent does, its final answer is still an edit plan, so every change arrives as a tracked change for you to review. The OpenAI-compatible provider is always one-shot.
+Each document has its own agent workspace at `~/Library/Application Support/Margins/Workspaces/<doc-id>/`, where the agent can keep scratch files across instructions (Agent → Reveal Agent Workspace). Margins also fetches some sources itself, before the agent starts: currently the transcript of any YouTube video linked in the instruction, which agents can't reliably get on their own. Whatever the agent does, its final answer is still an edit plan, so every change arrives as a tracked change for you to review. The OpenAI-compatible provider is always one-shot.
 
 Command-line equivalent: `swift run margins-cli edit copilot --tools research --yes "summarize https://…"` (`--yes` auto-approves permission asks).
 

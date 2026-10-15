@@ -75,6 +75,7 @@ Two more channels serve images. `webkit.messageHandlers.assets` is a reply handl
 ## Flow of one instruction
 
 1. The composer submits; `AppState` appends an `Intent` (status *working*).
+   - `fetchSources` fetches material Margins can get more reliably than an agent: for every YouTube link in the instruction, `YouTube.fetch` (in `MarginsCore`) reads the watch page, calls the innertube `player` endpoint, picks a caption track (human captions in your language first, then auto-captions) and turns the caption XML into paragraphs. Each fetch shows as a step on the card. The result goes into the prompt as a `SOURCE MATERIAL` section (capped at 150k characters per source). A failed fetch is recorded on the step, and the agent still runs.
 2. `editor.getBlocks()` → blocks + focus; `PromptBuilder.editPrompt` builds the prompt.
 3. The active `ModelProvider` returns text; `EditPlanParser` extracts the plan, with one retry on invalid JSON.
 4. `editor.applyEdits(step, edits, direct: isEmptyDoc)` renders the changes; the intent gets its summary/notes and status *N pending* or *applied*.

@@ -85,7 +85,9 @@ Design points:
 - **Visible and stoppable.** Tool calls stream onto the instruction card. Stop (⌘.) cancels the run (ACP `session/cancel`, or the subprocess is terminated).
 - **Security.** Codex has the strongest guarantee (OS sandbox). Copilot relies on its permission protocol, which Margins answers per policy. Claude relies on its allow-list. In *Full agent*, commands can still reach outside the workspace on Copilot and Claude, so use it deliberately.
 
-Measured on "populate doc with summary of <a YouTube talk>": Copilot (Research) fetched the page, asked to run `curl`/`pip`, found no transcript and wrote the summary from the description in ~15 s. Codex (Full) ran searches and commands, found a transcript of the same talk and wrote a detailed summary in ~65 s.
+**Margins-side sources.** Some content is hard for any agent to reach. YouTube is the clearest case: the watch page has no transcript in its HTML, web search doesn't index captions, and Codex's Research sandbox blocks network commands, so agents ended up "summarizing" the video description. Margins now fetches YouTube transcripts natively, before the model runs, and passes them in as source material. This works for every provider, even with tools off. With the transcript provided, Codex in Research mode wrote a full, linked summary of the talk in ~30 s.
+
+Measured before that change, on "populate doc with summary of <a YouTube talk>": Copilot (Research) fetched the page, asked to run `curl`/`pip`, found no transcript and wrote the summary from the description in ~15 s. Codex (Full) ran searches and commands, found a transcript of the same talk and wrote a detailed summary in ~65 s.
 
 ## Measured (M-series Mac, this prototype)
 

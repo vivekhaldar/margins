@@ -75,9 +75,19 @@ do {
             err("  ? permission: \(req.title) — \(req.detail) → \(autoYes ? "allow" : "deny")")
             return autoYes ? .allowOnce : .deny
         })
+        var sources: [SourceMaterial] = []
+        for id in YouTube.videoIDs(in: instruction) {
+            do {
+                let src = try await YouTube.fetch(id: id)
+                err("  [done] fetch: YouTube transcript · \(src.wordCount) words — \(src.title)")
+                sources.append(src)
+            } catch {
+                err("  [failed] fetch: YouTube \(id) — \(error.localizedDescription)")
+            }
+        }
         let plan = try await provider.editPlan(GenerationRequest(
             system: PromptBuilder.system(tools: policy == .off || !kind.supportsTools ? nil : agent),
-            prompt: PromptBuilder.editPrompt(blocks: blocks, instruction: instruction),
+            prompt: PromptBuilder.editPrompt(blocks: blocks, instruction: instruction, sources: sources),
             model: model, agent: agent))
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]

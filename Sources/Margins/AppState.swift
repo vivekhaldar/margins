@@ -161,11 +161,14 @@ final class AppState: ObservableObject {
             defer { finish(step) }
             do {
                 let provider = try provider(for: config)
+                let sources = await fetchSources(for: text, step: step)
+                try Task.checkCancellation()
                 let snapshot = try await editor.blocks()
                 let agent = agentContext(step: step, kind: config.kind)
                 let request = GenerationRequest(
                     system: PromptBuilder.system(tools: agent),
-                    prompt: PromptBuilder.editPrompt(blocks: forPrompt(snapshot.blocks), instruction: text, focus: snapshot.focus),
+                    prompt: PromptBuilder.editPrompt(blocks: forPrompt(snapshot.blocks), instruction: text,
+                                                     focus: snapshot.focus, sources: sources),
                     model: config.model.isEmpty ? nil : config.model, agent: agent)
                 let plan = try await provider.editPlan(request)
                 let direct = snapshot.blocks.isEmpty
@@ -194,6 +197,31 @@ final class AppState: ObservableObject {
     }
 
     // MARK: - agent
+
+    /// Fetch what agents can't reliably get themselves (YouTube transcripts), shown as steps on the card.
+    /// Failures are recorded on the step; the agent still runs and may find another way.
+    private func fetchSources(for text: String, step: Int) async -> [SourceMaterial] {
+        var out: [SourceMaterial] = []
+        for id in YouTube.videoIDs(in: text) {
+            let url = "https://www.youtube.com/watch?v=\(id)"
+            var s = AgentStep(id: "yt-\(id)", kind: .fetch, title: "Fetching YouTube transcript", detail: url)
+            apply(.step(s), step: step)
+            do {
+                let src = try await YouTube.fetch(id: id)
+                out.append(src)
+                s.title = "YouTube transcript · \(src.wordCount.formatted()) words"
+                s.detail = src.title
+                s.status = .done
+            } catch {
+                s.title = "No YouTube transcript"
+                s.detail = error.localizedDescription
+                s.status = .failed
+            }
+            apply(.step(s), step: step)
+            if Task.isCancelled { break }
+        }
+        return out
+    }
 
     /// Agent context for one instruction: tool policy, the document's workspace, and callbacks
     /// that stream tool calls onto the instruction card. Nil when tools are off or unsupported.
