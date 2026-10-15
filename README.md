@@ -51,7 +51,7 @@ swift build --product Margins && swift run Margins   # run unpackaged
 swift run MarginsSelfTest                            # core-logic checks
 swift run margins-cli models copilot                 # list models via a provider
 swift run margins-cli edit copilot "Draft a haiku about tracked changes"
-swift scripts/make-icon.swift                        # re-render assets/AppIcon.svg → AppIcon.icns
+swift scripts/make-icon.swift                        # resize assets/AppIcon-source.png → AppIcon.png + AppIcon.icns
 ```
 
 > `swift test` and SwiftUI's `@State` macro both need plugins that ship only with Xcode. The project avoids them: the tests are a self-test executable, and view-local state uses a tiny `Local<T>` ObservableObject.
