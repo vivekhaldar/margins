@@ -50,7 +50,7 @@ swift run margins-cli edit copilot "Draft a haiku about tracked changes"
 
 > `swift test` and SwiftUI's `@State` macro both need plugins that ship only with Xcode. The project avoids them: the tests are a self-test executable, and view-local state uses a tiny `Local<T>` ObservableObject.
 
-Documents autosave to `~/Documents/Margins/<Title>.margins`, which is JSON. Use ⌘O to open, ⇧⌘S to save a copy elsewhere, and ⇧⌘E to export HTML.
+Documents autosave to `~/Documents/Margins/<Title>.margins`, which is JSON. Use ⌘O to open, ⇧⌘S to save a copy elsewhere, and ⇧⌘E to export HTML. ⌘+ / ⌘− / ⌘0 zoom the document; the zoom level is remembered.
 
 ## Model providers
 

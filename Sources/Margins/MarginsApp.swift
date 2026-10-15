@@ -24,6 +24,12 @@ struct MarginsApp: App {
                 Button("Export HTML…") { state.exportHTML() }.keyboardShortcut("e", modifiers: [.command, .shift])
                 Button("Show in Finder") { state.revealInFinder() }
             }
+            CommandGroup(before: .toolbar) {
+                Button("Zoom In") { state.zoomIn() }.keyboardShortcut("+")
+                Button("Zoom Out") { state.zoomOut() }.keyboardShortcut("-")
+                Button("Actual Size") { state.resetZoom() }.keyboardShortcut("0")
+                Divider()
+            }
             CommandMenu("Review") {
                 Button("Accept All Changes") { state.reviewAll(accept: true) }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
@@ -45,6 +51,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Needed when launched as a bare SwiftPM executable (no Info.plist).
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        installZoomKeys()
+    }
+
+    /// ⌘= / ⌘+ / ⌘- / ⌘0 regardless of Shift or keyboard layout quirks (menu matching alone misses unshifted ⌘=).
+    private var zoomMonitor: Any?
+    private func installZoomKeys() {
+        zoomMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let mods = event.modifierFlags.intersection([.command, .option, .control])
+            guard mods == .command, let ch = event.charactersIgnoringModifiers else { return event }
+            let state = MainActor.assumeIsolated { AppState.shared }
+            switch ch {
+            case "=", "+": MainActor.assumeIsolated { state.zoomIn() }
+            case "-", "_": MainActor.assumeIsolated { state.zoomOut() }
+            case "0": MainActor.assumeIsolated { state.resetZoom() }
+            default: return event
+            }
+            return nil
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

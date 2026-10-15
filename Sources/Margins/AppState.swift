@@ -25,6 +25,7 @@ final class AppState: ObservableObject {
     @Published var providers: [ProviderConfig] { didSet { persistProviders() } }
     @Published var activeProviderID: UUID { didSet { defaults.set(activeProviderID.uuidString, forKey: "activeProvider") } }
     @Published var models: [UUID: [ModelInfo]] = [:]
+    @Published private(set) var zoom: Double = 1.0
 
     let editor = EditorBridge()
     private var instances: [UUID: (config: ProviderConfig, provider: ModelProvider)] = [:]
@@ -44,10 +45,26 @@ final class AppState: ObservableObject {
         fileURL = Self.newUntitledURL()
 
         editor.onMessage = { [weak self] type, body in self?.handle(type, body) }
+        let savedZoom = ud.double(forKey: "zoom")
+        setZoom(savedZoom > 0 ? savedZoom : 1.0)
 
         if let last = defaults.url(forKey: "lastDocument"), FileManager.default.fileExists(atPath: last.path) {
             open(last)
         }
+    }
+
+    // MARK: - zoom
+
+    private static let zoomSteps: [Double] = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+
+    func zoomIn() { setZoom(Self.zoomSteps.first { $0 > zoom + 0.001 } ?? zoom) }
+    func zoomOut() { setZoom(Self.zoomSteps.last { $0 < zoom - 0.001 } ?? zoom) }
+    func resetZoom() { setZoom(1.0) }
+
+    private func setZoom(_ z: Double) {
+        zoom = min(max(z, 0.5), 3.0)
+        editor.webView.pageZoom = zoom
+        defaults.set(zoom, forKey: "zoom")
     }
 
     // MARK: - providers
