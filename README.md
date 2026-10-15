@@ -28,6 +28,7 @@ The output isn't a reply. It's the document.
   - all at once.
 - **💬 Refine a single change.** Ask the agent to redo just that hunk ("shorter", "more formal"…) without touching the rest of the document.
 - **Edit inline.** The document is plain editable rich text. Your edits are respected and recorded.
+- **Links.** ⌘K links the selection (or edits the link under the caret), and pasting a URL over selected text links it. Click a link for Open ↗ / Edit / Remove; ⌘-click opens it in your browser.
 - **History.** Every version gets a short slug ("add summary at top"), an author (agent / you / review) and the instruction that produced it. You can preview or restore any version.
 - **Bring your own subscription.** Margins uses the model access you already pay for. See [Model providers](#model-providers).
 

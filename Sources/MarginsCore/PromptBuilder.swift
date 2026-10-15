@@ -52,6 +52,7 @@ public enum PromptBuilder {
       inserted after blockId; use blockId "^" to insert at the very start. "delete": html is "".
     - html must be complete block elements: h1, h2, h3, p, ul/ol with li, blockquote, pre, table. \
       Inline: strong, em, code, a. No classes, styles, scripts or ids.
+    - Preserve existing links (<a href="…">) exactly. Add a link only when you are confident the URL is real.
     - If the document is empty, write a complete, well-structured first draft (start with an h1) \
       using insertAfter "^" edits.
     - Match the author's voice. Be concrete. Do not pad.

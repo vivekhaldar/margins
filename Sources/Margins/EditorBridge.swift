@@ -50,6 +50,12 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+        if type == "openURL" {
+            if let s = body["url"] as? String, let url = URL(string: s), Self.openableSchemes.contains(url.scheme?.lowercased() ?? "") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
         if type == "ready" {
             isReady = true
             readyWaiters.forEach { $0.resume() }
@@ -129,11 +135,13 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     func preview(_ html: String) async { _ = try? await call("window.margins.preview(html)", ["html": html]) }
     func endPreview() async { _ = try? await call("window.margins.endPreview()") }
 
+    static let openableSchemes: Set<String> = ["http", "https", "mailto"]
+
     // Keep links from navigating the editor away.
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         if navigationAction.navigationType == .linkActivated, let url = navigationAction.request.url {
-            NSWorkspace.shared.open(url)
+            if Self.openableSchemes.contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
             decisionHandler(.cancel)
         } else {
             decisionHandler(.allow)

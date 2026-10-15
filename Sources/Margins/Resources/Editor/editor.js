@@ -251,12 +251,13 @@
 
   // ---------- inline edits ----------
   let editSecs = new Set(), editTimer = null;
-  doc.addEventListener('input', () => {
-    const s = getSelection();
-    editSecs.add(sectionOf(s && s.anchorNode));
+  function noteEdit(node) {
+    if (!node) { const s = getSelection(); node = s && s.anchorNode; }
+    editSecs.add(sectionOf(node));
     clearTimeout(editTimer);
     editTimer = setTimeout(flushEdits, 1500);
-  });
+  }
+  doc.addEventListener('input', () => { noteEdit(); syncLinkPop(); });
   function flushEdits() {
     clearTimeout(editTimer);
     if (!editSecs.size) return;
@@ -278,6 +279,12 @@
       return;
     }
     const ch = e.target.closest('.chg');
+    const a = e.target.closest('a[href]');
+    if (a && (e.metaKey || e.ctrlKey || !a.isContentEditable)) {
+      e.preventDefault();
+      openURL(a.getAttribute('href'));
+      return;
+    }
     if (ch && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       e.preventDefault();
       ch.classList.toggle('sel');
@@ -322,6 +329,128 @@
   });
   document.addEventListener('mousedown', (e) => { if (popFor && !pop.contains(e.target) && !e.target.closest('.tools')) closeRefine(); });
 
+  // ---------- links ----------
+  const lpop = $('#lpop'), lview = $('#lview'), ledit = $('#ledit'), lurl = $('#lurl'), lhref = $('#lhref');
+  let linkEl = null, linkRange = null;
+
+  function normalizeURL(s) {
+    s = (s || '').trim();
+    if (!s) return '';
+    if (/^\s*javascript:/i.test(s)) return '';
+    if (/^[a-z][a-z0-9+.-]*:/i.test(s) || s.startsWith('#') || s.startsWith('/')) return s;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return 'mailto:' + s;
+    return 'https://' + s;
+  }
+  const looksLikeURL = (s) => /^(https?:\/\/|mailto:|www\.)\S+$/i.test(s.trim()) || /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(s.trim());
+  function openURL(href) { if (href) post('openURL', { url: normalizeURL(href) }); }
+
+  function linkAtSelection() {
+    const s = getSelection();
+    if (!s || !s.rangeCount) return null;
+    let n = s.anchorNode;
+    if (n && n.nodeType === 3) n = n.parentNode;
+    const a = n && n.closest ? n.closest('a[href]') : null;
+    return a && doc.contains(a) ? a : null;
+  }
+  function placePop(rect) {
+    lpop.style.display = 'block';
+    const top = rect.bottom + 6 + lpop.offsetHeight > window.innerHeight ? rect.top - lpop.offsetHeight - 6 : rect.bottom + 6;
+    lpop.style.top = Math.max(46, top) + 'px';
+    lpop.style.left = Math.max(10, Math.min(window.innerWidth - lpop.offsetWidth - 10, rect.left)) + 'px';
+  }
+  function hideLinkPop() { lpop.style.display = 'none'; lpop.dataset.mode = ''; linkEl = null; }
+  function showLinkView(a) {
+    linkEl = a;
+    lpop.dataset.mode = 'view';
+    const href = a.getAttribute('href');
+    lhref.textContent = href.replace(/^mailto:/, '');
+    lhref.title = href;
+    placePop(a.getBoundingClientRect());
+  }
+  function syncLinkPop() {
+    if (lpop.dataset.mode === 'edit' || doc.classList.contains('ro')) return;
+    const a = linkAtSelection();
+    if (a && a.isContentEditable) showLinkView(a); else if (lpop.dataset.mode === 'view') hideLinkPop();
+  }
+  document.addEventListener('selectionchange', () => { if (document.activeElement !== lurl) syncLinkPop(); });
+
+  function editLink() {
+    if (doc.classList.contains('ro')) return;
+    const s = getSelection();
+    if (!s || !s.rangeCount || !doc.contains(s.anchorNode)) return;
+    const a = linkAtSelection();
+    if (a && !a.isContentEditable) return;
+    linkEl = a;
+    linkRange = s.getRangeAt(0).cloneRange();
+    if (!a && linkRange.collapsed) {
+      // No selection: link the word under the caret, if any.
+      s.modify('move', 'backward', 'word'); s.modify('extend', 'forward', 'word');
+      linkRange = s.getRangeAt(0).cloneRange();
+      if (!linkRange.toString().trim()) return;
+    }
+    if (a && a.closest('del')) return;
+    const r = (a || linkRange).getBoundingClientRect();
+    lpop.dataset.mode = 'edit';
+    lurl.value = a ? a.getAttribute('href') : (looksLikeURL(linkRange.toString()) ? linkRange.toString().trim() : '');
+    placePop(r);
+    lurl.focus(); lurl.select();
+  }
+  function restoreRange() {
+    const s = getSelection();
+    s.removeAllRanges();
+    if (linkRange) s.addRange(linkRange);
+  }
+  function applyLink() {
+    const url = normalizeURL(lurl.value);
+    const a = linkEl;
+    doc.focus();
+    restoreRange();
+    if (!url) { if (a) unlink(a); hideLinkPop(); return; }
+    if (a) { a.setAttribute('href', url); noteEdit(a); }
+    else {
+      document.execCommand('createLink', false, url);
+      const s = getSelection();
+      if (s.rangeCount) s.collapseToEnd();
+    }
+    hideLinkPop();
+    const now = linkAtSelection() || a;
+    if (now) showLinkView(now);
+  }
+  function unlink(a) {
+    const parent = a.parentNode;
+    while (a.firstChild) parent.insertBefore(a.firstChild, a);
+    a.remove();
+    parent.normalize();
+    noteEdit(parent);
+  }
+  $('#lopen').addEventListener('click', () => { if (linkEl) openURL(linkEl.getAttribute('href')); });
+  lhref.addEventListener('click', () => { if (linkEl) openURL(linkEl.getAttribute('href')); });
+  $('#ledbtn').addEventListener('click', () => {
+    const a = linkEl; if (!a) return;
+    const r = document.createRange(); r.selectNodeContents(a);
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    editLink();
+  });
+  $('#lrm').addEventListener('click', () => { if (linkEl) { unlink(linkEl); hideLinkPop(); } });
+  lpop.addEventListener('mousedown', (e) => { if (e.target !== lurl) e.preventDefault(); });
+  lurl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); applyLink(); }
+    else if (e.key === 'Escape') { e.preventDefault(); hideLinkPop(); doc.focus(); restoreRange(); }
+  });
+  document.addEventListener('mousedown', (e) => { if (lpop.dataset.mode === 'edit' && !lpop.contains(e.target)) hideLinkPop(); });
+  doc.addEventListener('scroll', hideLinkPop);
+  $('#scroll').addEventListener('scroll', () => { if (lpop.dataset.mode) { if (linkEl && lpop.dataset.mode === 'view') showLinkView(linkEl); else hideLinkPop(); } });
+
+  // Paste a URL over selected text → link it.
+  doc.addEventListener('paste', (e) => {
+    const text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+    const s = getSelection();
+    if (!looksLikeURL(text) || !s || !s.rangeCount || s.isCollapsed) return;
+    e.preventDefault();
+    document.execCommand('createLink', false, normalizeURL(text));
+    s.collapseToEnd();
+  });
+
   // ---------- keyboard review ----------
   let cur = -1;
   function move(d) {
@@ -332,7 +461,12 @@
     all[cur].scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
   document.addEventListener('keydown', (e) => {
-    if (e.target === popin) return;
+    if (e.target === popin || e.target === lurl) return;
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k' && e.target.isContentEditable) {
+      e.preventDefault();
+      editLink();
+      return;
+    }
     if (e.target.isContentEditable) {
       if (e.key === 'Escape') { doc.blur(); getSelection().removeAllRanges(); flushEdits(); }
       return;
@@ -360,6 +494,7 @@
     doc.classList.add('ro');
     document.body.classList.add('previewing');
     closeRefine();
+    hideLinkPop();
   }
   function endPreview() {
     if (live === null) return;
