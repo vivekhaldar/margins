@@ -94,6 +94,25 @@ test("claude output extraction") {
     check((try? ClaudeCodeProvider.extract(stdout: err, status: 0, stderr: "")) == nil, "auth error throws")
 }
 
+test("markdown export") {
+    let md = MarkdownExporter.markdown(fromHTML: """
+    <h1 data-bid="b1" class="">Design Note: A &amp; B</h1><p data-bid="b2">Use <strong>Redis</strong>, <em>not</em> <code>memcached</code>; see <a href="https://x.dev">docs</a>. snake_case 2*3</p>\
+    <ul data-bid="b3"><li>one</li><li>two<ul><li>nested</li></ul></li></ul><ol><li>first</li><li>second</li></ol>\
+    <div class="chg" data-cid="c1" data-kind="replace"><del contenteditable="false"><p>Old accepted text.</p></del><ins><p>Proposed text.</p></ins><span class="tools" contenteditable="false"><button>✓</button></span></div>\
+    <div class="chg" data-kind="insert"><del contenteditable="false"></del><ins><p>Pending insertion.</p></ins></div>\
+    <pre><code>let x = 1</code></pre><blockquote><p>Quoted</p></blockquote><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table><p>line<br>break</p>
+    """)
+    check(md.hasPrefix("# Design Note: A & B\n\n"), "heading + entity")
+    check(md.contains("Use **Redis**, *not* `memcached`; see [docs](https://x.dev). snake_case 2\\*3"), "inline formatting")
+    check(md.contains("- one\n- two\n  - nested"), "nested list")
+    check(md.contains("1. first\n2. second"), "ordered list")
+    check(md.contains("Old accepted text.") && !md.contains("Proposed text.") && !md.contains("Pending insertion."), "pending changes export accepted text")
+    check(!md.contains("✓"), "change chrome stripped")
+    check(md.contains("```\nlet x = 1\n```") && md.contains("> Quoted"), "code block + quote")
+    check(md.contains("| A | B |\n| --- | --- |\n| 1 | 2 |"), "table")
+    check(md.contains("line  \nbreak"), "line break")
+}
+
 test("binary locator") {
     check(BinaryLocator.locate("sh") != nil, "finds sh")
     check(BinaryLocator.locate("definitely-not-a-binary-xyz") == nil, "missing")

@@ -318,6 +318,7 @@ final class AppState: ObservableObject {
             defaults.set(url, forKey: "lastDocument")
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             Task { await editor.load(d.html) }
+            if !d.versions.isEmpty { writeMarkdown() }
         } catch {
             lastError = "Couldn't open \(url.lastPathComponent): \(error.localizedDescription)"
         }
@@ -339,7 +340,10 @@ final class AppState: ObservableObject {
             let old = fileURL
             fileURL = url
             saveNow()
-            if old != url, isUntitled(old) { try? FileManager.default.removeItem(at: old) }
+            if old != url, isUntitled(old) {
+                try? FileManager.default.removeItem(at: old)
+                try? FileManager.default.removeItem(at: old.deletingPathExtension().appendingPathExtension("md"))
+            }
         }
     }
 
@@ -380,6 +384,7 @@ final class AppState: ObservableObject {
             let safe = doc.title.replacingOccurrences(of: "[/:\\\\]", with: "-", options: .regularExpression).prefix(80)
             let newURL = Self.uniqueURL(named: String(safe))
             if FileManager.default.fileExists(atPath: fileURL.path) { try? FileManager.default.moveItem(at: fileURL, to: newURL) }
+            try? FileManager.default.removeItem(at: markdownURL)
             fileURL = newURL
         }
         do {
@@ -387,6 +392,27 @@ final class AppState: ObservableObject {
             defaults.set(fileURL, forKey: "lastDocument")
         } catch {
             lastError = "Couldn't save: \(error.localizedDescription)"
+            return
         }
+        writeMarkdown()
+    }
+
+    /// Plain-Markdown mirror of the current accepted text, kept next to the `.margins` file.
+    var markdownURL: URL { fileURL.deletingPathExtension().appendingPathExtension("md") }
+
+    private func writeMarkdown() {
+        let md = MarkdownExporter.markdown(fromHTML: doc.html)
+        let url = markdownURL
+        if let existing = try? String(contentsOf: url, encoding: .utf8), existing == md { return }
+        do {
+            try md.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            lastError = "Couldn't write Markdown: \(error.localizedDescription)"
+        }
+    }
+
+    func revealMarkdown() {
+        saveNow()
+        NSWorkspace.shared.activateFileViewerSelecting([markdownURL])
     }
 }

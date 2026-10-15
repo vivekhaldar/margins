@@ -23,6 +23,7 @@ struct MarginsApp: App {
                 Button("Save As…") { state.showSavePanel() }.keyboardShortcut("s", modifiers: [.command, .shift])
                 Button("Export HTML…") { state.exportHTML() }.keyboardShortcut("e", modifiers: [.command, .shift])
                 Button("Show in Finder") { state.revealInFinder() }
+                Button("Show Markdown in Finder") { state.revealMarkdown() }
             }
             CommandGroup(before: .toolbar) {
                 Button("Zoom In") { state.zoomIn() }.keyboardShortcut("+")
