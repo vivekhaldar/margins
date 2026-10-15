@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mock A · Tracked Changes</title>
+<style>
+  :root{--bg:#f6f5f2;--panel:#fff;--ink:#1d1d1f;--mute:#6b6b70;--line:#e4e2dc;--ins:#dcf5e3;--insb:#2f9e55;--del:#fde4e4;--delb:#c94a4a;--acc:#4f46e5}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;color:var(--ink);background:var(--bg);height:100vh;display:grid;grid-template-columns:340px 1fr;overflow:hidden}
+  aside{border-right:1px solid var(--line);display:flex;flex-direction:column;background:#fbfaf8;min-height:0}
+  .head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .head b{font-size:13px;letter-spacing:.02em;text-transform:uppercase;color:var(--mute)}
+  .tag{font-size:11px;padding:2px 7px;border-radius:99px;background:#eeedfb;color:var(--acc);font-weight:600}
+  #log{flex:1;overflow:auto;padding:12px 12px 4px}
+  .intent{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+  .intent .t{font-weight:500}
+  .intent .meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{font-size:11px;padding:2px 8px;border-radius:99px;background:#f0efea;color:var(--mute)}
+  .chip.add{background:var(--ins);color:#1f6e3b}.chip.edit{background:#fff2d6;color:#8a5a00}
+  .note{margin-top:8px;font-size:12px;color:var(--mute);border-left:2px solid #d8d6ff;padding-left:8px}
+  .working{color:var(--mute);font-size:12px;margin-top:6px;display:flex;gap:6px;align-items:center}
+  .spin{width:10px;height:10px;border:2px solid #ccc;border-top-color:var(--acc);border-radius:50%;animation:s .7s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .compose{padding:12px;border-top:1px solid var(--line);background:#fbfaf8}
+  textarea{width:100%;resize:none;height:76px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;background:#fff;outline:none}
+  textarea:focus{border-color:#b9b5ff;box-shadow:0 0 0 3px #eceaff}
+  .hint{font-size:11px;color:var(--mute);margin-top:6px;display:flex;justify-content:space-between}
+  .sugg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .sugg button{font:inherit;font-size:12px;border:1px dashed #cfccc4;background:transparent;border-radius:99px;padding:3px 9px;color:var(--mute);cursor:pointer}
+  .sugg button:hover{border-color:var(--acc);color:var(--acc)}
+  main{display:flex;flex-direction:column;min-height:0}
+  .bar{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .vers{display:flex;gap:4px;align-items:center}
+  .vers span{font-size:12px;color:var(--mute);margin-right:4px}
+  .v{font:inherit;font-size:12px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 8px;cursor:pointer}
+  .v.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .sp{flex:1}
+  .btn{font:inherit;font-size:12px;border:1px solid var(--line);background:#fff;border-radius:7px;padding:5px 10px;cursor:pointer}
+  .btn.p{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .btn:disabled{opacity:.4;cursor:default}
+  #pending{font-size:12px;color:var(--mute)}
+  .scroll{flex:1;overflow:auto;padding:36px 20px 80px}
+  .banner{max-width:720px;margin:0 auto 16px;background:#fff7e0;border:1px solid #f0dca4;border-radius:8px;padding:8px 12px;font-size:13px;display:none}
+  .banner a{color:var(--acc);cursor:pointer;text-decoration:underline}
+  article{max-width:720px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:44px 56px;box-shadow:0 1px 0 rgba(0,0,0,.02)}
+  article h1{font-size:28px;margin:0 0 4px;letter-spacing:-.01em}
+  article .dm{color:var(--mute);font-size:13px;margin-bottom:24px}
+  article h2{font-size:17px;margin:28px 0 8px}
+  article p,article li{font-size:15px}
+  ins{background:var(--ins);text-decoration:none;border-bottom:2px solid var(--insb)}
+  del{background:var(--del);color:#8f2d2d;text-decoration:line-through;text-decoration-color:var(--delb)}
+  div.chg>ins,div.chg>del{display:block;border-bottom:none;border-left:3px solid var(--insb);padding:2px 0 2px 12px;margin-left:-15px}
+  .chg{position:relative}
+  .tools{display:inline-flex;gap:2px;margin-left:4px;vertical-align:middle;opacity:.35;transition:opacity .15s}
+  .chg:hover .tools{opacity:1}
+  .tools button{font-size:11px;line-height:1;border:1px solid var(--line);background:#fff;border-radius:5px;padding:3px 5px;cursor:pointer}
+  .tools button:hover{border-color:var(--ink)}
+  div.chg>.tools{position:absolute;right:-44px;top:4px;flex-direction:column}
+  .flash{animation:f 1.2s ease}
+  @keyframes f{from{box-shadow:0 0 0 4px #c9c5ff}to{box-shadow:0 0 0 0 transparent}}
+  .ro .tools{display:none}
+  .tools{opacity:.6}
+  #doc:not(.ro) .chg{cursor:pointer}
+  .chg.sel{outline:2px solid var(--acc);outline-offset:2px;border-radius:3px;background:#f3f2ff}
+  .chg.cur{box-shadow:0 0 0 3px #f5c542;border-radius:3px}
+  .chg.peek{background:#eeedfb;outline:1px dashed var(--acc);outline-offset:2px}
+  .selbar{display:none;align-items:center;gap:6px;font-size:12px;background:#eeedfb;color:var(--acc);border-radius:8px;padding:3px 4px 3px 10px;font-weight:600}
+  .selbar button{font:inherit;font-size:12px;font-weight:500;border:1px solid #d6d3ff;background:#fff;border-radius:6px;padding:3px 8px;cursor:pointer;color:var(--ink)}
+  .kb{font-size:11px;color:var(--mute);max-width:720px;margin:0 auto 10px;text-align:right}
+  .kb kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:#fff}
+  .rv{display:flex;gap:6px;margin-top:8px;align-items:center;font-size:12px;color:var(--mute)}
+  .rv button{font:inherit;font-size:12px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 8px;cursor:pointer}
+  .rv button:hover{border-color:var(--ink)}
+  .intent[data-step]{cursor:default}
+  .intent[data-step]:hover{border-color:#c9c5ff}
+  .tools .chat{font-size:10px}
+  .rb{font:600 10px ui-monospace,Menlo,monospace;color:var(--acc);background:#eeedfb;border-radius:4px;padding:1px 4px;margin-left:4px;vertical-align:middle}
+  div.chg>.rb{position:absolute;right:-44px;top:-18px;margin:0}
+  .chg.refining>ins{background:linear-gradient(90deg,var(--ins) 0%,#e3e1ff 50%,var(--ins) 100%);background-size:200% 100%;animation:sh 1s linear infinite}
+  @keyframes sh{to{background-position:-200% 0}}
+  .pop{position:fixed;display:none;width:310px;background:#fff;border:1px solid #d6d3ff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:10px;z-index:20}
+  .pop .ph{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--acc);margin-bottom:6px}
+  .pop .qs{display:flex;gap:5px;margin-bottom:7px}
+  .pop .qs button{font:inherit;font-size:11.5px;border:1px dashed #cfccc4;background:#fff;border-radius:99px;padding:2px 8px;cursor:pointer;color:var(--mute)}
+  .pop .qs button:hover{border-color:var(--acc);color:var(--acc)}
+  .pop input{width:100%;font:inherit;border:1px solid var(--line);border-radius:8px;padding:7px 9px;outline:none}
+  .pop input:focus{border-color:#b9b5ff;box-shadow:0 0 0 3px #eceaff}
+  .pop .pf{font-size:11px;color:var(--mute);margin-top:5px}
+  .ref{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;font-size:12.5px}
+  .ref .ar{color:var(--acc);font-weight:600}
+  .ref .rt{font-style:italic}
+  main{position:relative}
+  article[contenteditable=true]{outline:none}
+  article[contenteditable=true]:focus-within{box-shadow:0 0 0 3px #eceaff}
+  .saved{font-size:12px;color:var(--mute)}
+  .saved.busy{color:var(--acc)}
+  .hb{display:inline-flex;gap:6px;align-items:center}
+  .hb span{font-size:11px;background:#f0efea;border-radius:99px;padding:0 6px;color:var(--mute)}
+  .hb.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .drawer{position:absolute;top:47px;right:0;bottom:0;width:360px;background:#fff;border-left:1px solid var(--line);box-shadow:-8px 0 24px rgba(0,0,0,.06);transform:translateX(105%);transition:transform .2s ease;z-index:15;display:flex;flex-direction:column}
+  .drawer.open{transform:none}
+  .dh{display:flex;align-items:baseline;gap:8px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .dh .sub{font-size:12px;color:var(--mute)}
+  .dh .x{border:0;background:none;cursor:pointer;color:var(--mute);font-size:14px}
+  #hlist{flex:1;overflow:auto;padding:10px 12px 20px}
+  .hv{position:relative;padding:8px 10px 8px 26px;border-radius:8px;cursor:pointer;margin-bottom:2px}
+  .hv::before{content:"";position:absolute;left:11px;top:0;bottom:0;width:2px;background:var(--line)}
+  .hv:first-child::before{top:14px}.hv:last-child::before{bottom:calc(100% - 14px)}
+  .hv::after{content:"";position:absolute;left:7px;top:13px;width:10px;height:10px;border-radius:50%;background:#fff;border:2px solid #cfccc4}
+  .hv.agent::after{border-color:var(--acc)}.hv.you::after{border-color:#2f9e55}.hv.review::after{border-color:#c48a00}
+  .hv:hover{background:#f7f6f3}
+  .hv.on{background:#eeedfb}
+  .hv .hl{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--mute)}
+  .hv .vn{font:600 11px ui-monospace,Menlo,monospace;color:var(--ink)}
+  .hv .who{border-radius:99px;padding:0 6px;font-weight:600}
+  .hv.agent .who{background:#eeedfb;color:var(--acc)}.hv.you .who{background:var(--ins);color:#1f6e3b}.hv.review .who{background:#fff2d6;color:#8a5a00}
+  .hv .cur{margin-left:auto;font-weight:600;color:var(--ink)}
+  .hv .slug{font-size:13.5px;font-weight:500;margin-top:2px}
+  .hv .det{font-size:12px;color:var(--mute)}
+  .you-edit{font-size:12px;color:var(--mute);margin:-2px 4px 10px;display:flex;gap:6px;align-items:center}
+  .you-edit b{color:#1f6e3b;font-weight:600}
+</style>
+</head>
+<body>
+<aside>
+  <div class="head"><b>Intent</b><span class="tag">Mock A · Tracked changes</span></div>
+  <div id="log">
+    <div class="intent"><div class="t">Draft a design doc for rate limiting our public API. Token bucket at the gateway.</div>
+      <div class="meta"><span class="chip add">created doc</span><span class="chip">5 sections</span><span class="chip">v0</span></div></div>
+  </div>
+  <div class="compose">
+    <div class="sugg" id="sugg"></div>
+    <textarea id="in" placeholder="Describe a change to the document…"></textarea>
+    <div class="hint"><span>⏎ apply · ⇧⏎ newline</span><span>Changes appear as tracked edits →</span></div>
+  </div>
+</aside>
+<main>
+  <div class="bar">
+    <span id="saved" class="saved">All changes saved</span>
+    <div class="sp"></div>
+    <span class="selbar" id="selbar"><span id="selN"></span><button id="accSel">✓ Accept selected</button><button id="rejSel">✕ Reject selected</button><button id="clrSel" title="Clear selection">Clear</button></span>
+    <span id="pending"></span>
+    <button class="btn" id="rejAll">Reject all</button>
+    <button class="btn p" id="accAll">Accept all</button>
+    <button class="btn hb" id="histBtn">🕘 History <span id="histN"></span></button>
+  </div>
+  <div class="drawer" id="drawer"><div class="dh"><b>History</b><span class="sub">How this doc evolved</span><div class="sp"></div><button class="x" id="closeH">✕</button></div><div id="hlist"></div></div>
+  <div class="scroll">
+    <div class="kb">Click anywhere to edit · <kbd>⌘</kbd>-click a change to select · <kbd>Esc</kbd> then <kbd>J</kbd>/<kbd>K</kbd> next/prev · <kbd>X</kbd> select · <kbd>A</kbd> accept · <kbd>R</kbd> reject · <kbd>C</kbd> refine</div>
+    <div class="banner" id="banner">Viewing <b id="bv"></b> — <span id="bs"></span> (read-only). <a id="back">Return to latest</a> · <a id="restore">Restore this version</a></div>
+    <article id="doc" contenteditable="true" spellcheck="false">
+      <h1>Rate Limiting for the Public API</h1>
+      <div class="dm">Design doc · Draft · Platform team</div>
+      <h2>Summary</h2>
+      <p id="summary">We want to add rate limiting to the public API because some customers send too many requests, which sometimes causes problems for other customers and also pages our on-call engineers. This document proposes an approach for doing that.</p>
+      <h2>Goals</h2>
+      <ul id="goals"><li>Protect the API from abusive traffic</li><li>Be fair to customers</li><li>Don't break existing integrations</li></ul>
+      <h2>Proposal</h2>
+      <p>Use a token bucket per API key, enforced at the edge gateway. Limits are configured per plan tier and stored in the config service.</p>
+      <p>Requests over the limit receive HTTP 429 with a <code>Retry-After</code> header.</p>
+      <div id="alts"></div>
+      <h2>Rollout</h2>
+      <ol id="rollout"><li>Ship in shadow mode (log only) for two weeks</li><li id="r2">Enable for free tier</li><li>Enable for all tiers</li></ol>
+    </article>
+  </div>
+</main>
+<script>
+const T='<span class="tools" contenteditable="false"><button title="Accept" data-a="ok">✓</button><button title="Reject" data-a="no">✕</button><button title="Refine this change" data-a="chat" class="chat">💬</button></span>';
+const BT=T;
+const c=(o,n)=>`<span class="chg">${o?`<del contenteditable="false">${o}</del> `:''}${n?`<ins>${n}</ins>`:''}${T}</span>`;
+const $=s=>document.querySelector(s);
+const steps=[
+ {q:'Make the goals measurable',slug:'Made goals measurable',chips:[['edit','3 edits'],['','Goals']],note:'Assumed "baseline" = trailing 30-day median RPS. Edit if wrong.',
+  run(){ $('#goals').innerHTML=
+   `<li>${c('Protect the API from abusive traffic','Keep p99 latency &lt; 300 ms during spikes up to 10× baseline')}</li>`+
+   `<li>${c('Be fair to customers','No single API key consumes &gt; 5% of gateway capacity')}</li>`+
+   `<li>${c("Don't break existing integrations",'&lt; 0.1% of current well-behaved traffic receives a 429')}</li>`; return '#goals'}},
+ {q:'Add a section on alternatives we considered',slug:'Added §Alternatives considered',chips:[['add','+1 section'],['','after Proposal']],
+  run(){ $('#alts').innerHTML=`<div class="chg"><ins><h2>Alternatives considered</h2><p><b>Fixed-window counters.</b> Simpler, but allow 2× bursts at window boundaries.</p><p><b>Per-IP limits.</b> Easy to evade, and penalize customers behind shared NAT.</p><p><b>Per-service limits.</b> More precise, but every team re-implements it.</p></ins>${BT}</div>`; return '#alts'}},
+ {q:'Tighten the summary to two sentences',slug:'Tightened summary to 2 sentences',chips:[['edit','1 rewrite'],['','Summary −38 words']],
+  run(){ const s=$('#summary'); s.innerHTML=c(s.innerHTML,'A few heavy API callers degrade latency for everyone and page on-call. We propose per-key token-bucket limits at the edge gateway, rolled out behind a shadow mode.'); return '#summary'}},
+ {q:'Rollout needs a customer comms step',slug:'Added customer comms to rollout',chips:[['add','+1 step'],['','Rollout']],note:'Placed before enforcement so customers get ≥ 2 weeks notice.',
+  run(){ $('#r2').insertAdjacentHTML('beforebegin',`<li class="chg"><ins>Email affected customers with their observed peak vs. limit; publish docs on 429 handling</ins>${T}</li>`); return '#rollout'}},
+];
+let si=0, versions=[], viewing=null;
+const sugg=$('#sugg');
+function renderSugg(){sugg.innerHTML='';steps.slice(si,si+2).forEach(s=>{const b=document.createElement('button');b.textContent=s.q;b.onclick=()=>submit(s.q);sugg.appendChild(b)})}
+function snap(slug,who='agent',det=''){versions.push({html:$('#doc').innerHTML,slug,who,det,t:Date.now()});renderHist();}
+const ago=t=>{const s=(Date.now()-t)/1000;return s<45?'just now':s<3600?Math.round(s/60)+' min ago':Math.round(s/3600)+' h ago'};
+const WHO={agent:'Agent',you:'You',review:'You · review'};
+function renderHist(){ const L=versions.length-1, on=viewing===null?L:viewing;
+  $('#histN').textContent=versions.length;
+  $('#hlist').innerHTML=versions.map((v,i)=>({v,i})).reverse().map(({v,i})=>`<div class="hv ${v.who}${i===on?' on':''}" data-v="${i}"><div class="hl"><span class="vn">v${i}</span><span class="who">${WHO[v.who]}</span><span>${ago(v.t)}</span>${i===L?'<span class="cur">Current</span>':''}</div><div class="slug"></div>${v.det?`<div class="det"></div>`:''}</div>`).join('');
+  $('#hlist').querySelectorAll('.hv').forEach(el=>{const v=versions[+el.dataset.v];el.querySelector('.slug').textContent=v.slug;if(v.det)el.querySelector('.det').textContent=v.det});}
+$('#hlist').addEventListener('click',e=>{const h=e.target.closest('.hv');if(h)view(+h.dataset.v)});
+$('#histBtn').onclick=()=>{flushEdits();$('#drawer').style.top=$('.bar').offsetHeight+'px';const o=$('#drawer').classList.toggle('open');$('#histBtn').classList.toggle('on',o);renderHist()};
+$('#closeH').onclick=()=>{$('#drawer').classList.remove('open');$('#histBtn').classList.remove('on')};
+setInterval(()=>$('#drawer').classList.contains('open')&&renderHist(),30000);
+function view(v){ flushEdits(); if(v===versions.length-1){return latest()} if(viewing===null) live=$('#doc').innerHTML; viewing=v; $('#doc').innerHTML=versions[v].html; $('#doc').classList.add('ro'); $('#doc').contentEditable='false';
+  $('#bv').textContent='v'+v; $('#bs').textContent='“'+versions[v].slug+'”'; $('#banner').style.display='block'; renderHist()}
+let live='';
+function latest(){ if(viewing!==null){$('#doc').innerHTML=live;viewing=null} $('#doc').classList.remove('ro');$('#doc').contentEditable='true';$('#banner').style.display='none';renderHist()}
+$('#back').onclick=latest;
+$('#restore').onclick=()=>{const v=viewing;if(v===null)return;viewing=null;$('#doc').innerHTML=versions[v].html;latest();snap(`Restored v${v}`,'you',`“${versions[v].slug}”`);count();saved()};
+function sectionOf(node){ const d=$('#doc'); if(node&&node.nodeType===3)node=node.parentNode; if(!node||!d.contains(node)||node===d)return 'Document';
+  let top=node; while(top.parentNode!==d)top=top.parentNode;
+  if(top.tagName==='H2')return top.textContent.trim(); const inner=top.querySelector&&top.querySelector('h2'); if(inner)return inner.textContent.trim();
+  if(top.tagName==='H1'||top.classList.contains('dm'))return 'Title';
+  for(let p=top.previousElementSibling;p;p=p.previousElementSibling){if(p.tagName==='H2')return p.textContent.trim();const h=p.querySelector&&p.querySelector('h2');if(h)return h.textContent.trim()}
+  return 'Document';}
+const list=a=>[...a].map(s=>'§'+s).join(', ');
+function saved(msg){const s=$('#saved');s.classList.toggle('busy',!!msg);s.textContent=msg||`Saved · v${versions.length-1}`}
+// your inline edits → one version per burst of typing
+let editSecs=new Set(), editTimer=null;
+$('#doc').addEventListener('input',()=>{ if(viewing!==null)return; editSecs.add(sectionOf(getSelection().anchorNode)); saved('Editing…'); clearTimeout(editTimer); editTimer=setTimeout(flushEdits,1500)});
+$('#doc').addEventListener('focusout',()=>flushEdits());
+function flushEdits(){ clearTimeout(editTimer); if(!editSecs.size)return; const secs=list(editSecs); editSecs=new Set();
+  snap('Edited '+secs,'you'); saved();
+  const n=document.createElement('div');n.className='you-edit';n.innerHTML=`✎ <b>You</b> edited <span></span><span class="chip">v${versions.length-1}</span>`;n.querySelector('span').textContent=secs;$('#log').appendChild(n);$('#log').scrollTop=1e9;}
+// accept/reject bursts → one review version
+let rev={ok:0,no:0,secs:new Set()}, revTimer=null;
+function noteReview(ch,ok){rev[ok?'ok':'no']++;rev.secs.add(sectionOf(ch));clearTimeout(revTimer);revTimer=setTimeout(flushReview,700)}
+function flushReview(){ if(!rev.ok&&!rev.no)return; const parts=[rev.ok&&`Accepted ${rev.ok}`,rev.no&&`rejected ${rev.no}`].filter(Boolean).join(' · ');
+  snap(parts.replace(/^r/,'R')+` change${rev.ok+rev.no>1?'s':''}`,'review','in '+list(rev.secs)); rev={ok:0,no:0,secs:new Set()}; saved();}
+const chgs=()=>[...document.querySelectorAll('#doc .chg')];
+function count(){const all=chgs(),n=all.length;$('#pending').textContent=n?`${n} pending change${n>1?'s':''}`:'All changes resolved';$('#accAll').disabled=$('#rejAll').disabled=!n;
+  const s=all.filter(c=>c.classList.contains('sel')).length;$('#selbar').style.display=s?'inline-flex':'none';$('#selN').textContent=`${s} selected`;
+  document.querySelectorAll('.intent[data-step]').forEach(el=>{const k=el.dataset.step,left=all.filter(c=>c.dataset.step===k).length,rv=el.querySelector('.rv');if(!rv)return;
+    if(!left) rv.innerHTML='✓ All changes reviewed'; else { if(!rv.querySelector('.n')) rv.innerHTML='<span class="n"></span><span style="flex:1"></span><button data-ia="ok">✓ Accept these</button><button data-ia="no">✕ Reject</button>'; rv.querySelector('.n').textContent=`${left} pending`;}});}
+function resolve(ch,ok){ noteReview(ch,ok); ch.querySelectorAll(':scope>.tools,:scope>.rb').forEach(t=>t.remove());
+  ch.querySelectorAll(':scope>'+(ok?'del':'ins')).forEach(e=>e.remove());
+  ch.querySelectorAll(':scope>'+(ok?'ins':'del')).forEach(e=>e.replaceWith(...e.childNodes));
+  if(ch.tagName==='LI'){ if(!ch.textContent.trim()) ch.remove(); else {ch.classList.remove('chg','sel','cur','peek');delete ch.dataset.step} } else ch.replaceWith(...ch.childNodes);
+  count();}
+function resolveMany(list,ok){list.forEach(c=>resolve(c,ok));cur=-1}
+$('#doc').addEventListener('click',e=>{ if(viewing!==null)return; const b=e.target.closest('[data-a]');
+  if(b) return b.dataset.a==='chat'?openRefine(b.closest('.chg')):resolve(b.closest('.chg'),b.dataset.a==='ok');
+  const c=e.target.closest('.chg'); if(c&&(e.metaKey||e.ctrlKey||e.shiftKey)){e.preventDefault();c.classList.toggle('sel');count()}});
+$('#accAll').onclick=()=>resolveMany(chgs(),true);
+$('#rejAll').onclick=()=>resolveMany(chgs(),false);
+const selected=()=>chgs().filter(c=>c.classList.contains('sel'));
+$('#accSel').onclick=()=>resolveMany(selected(),true);
+$('#rejSel').onclick=()=>resolveMany(selected(),false);
+$('#clrSel').onclick=()=>{selected().forEach(c=>c.classList.remove('sel'));count()};
+const refinements={
+ '1-0':['Keep p99 latency &lt; 250 ms during spikes up to 5× baseline','Keep p99 latency &lt; 250 ms for all tiers, measured at the gateway'],
+ '1-1':['No single <b>organization</b> consumes &gt; 5% of gateway capacity over any 1-minute window'],
+ '1-2':['&lt; 0.1% of requests from keys under their plan limit receive a 429, verified by shadow-mode replay'],
+ '2-0':['<h2>Alternatives considered</h2><p><b>Fixed-window counters.</b> Simpler, but allow 2× bursts at window boundaries.</p><p><b>Per-IP limits.</b> Easy to evade, and penalize customers behind shared NAT.</p><p><b>Per-service limits.</b> More precise, but every team re-implements it.</p><p><b>Adaptive concurrency limits.</b> React to real backend load, but are hard for customers to predict or plan around.</p>'],
+ '3-0':['Heavy API callers degrade latency for everyone and page on-call weekly. We propose per-key token buckets at the edge gateway, starting in shadow mode.'],
+ '4-0':['Email affected customers <b>2 weeks before enforcement</b> with their observed peak vs. limit; link a 429-handling guide'],
+};
+const pop=document.createElement('div');pop.className='pop';pop.innerHTML=`<div class="ph">Refine this change</div><div class="qs"><button>Shorter</button><button>More specific</button><button>Different angle</button></div><input placeholder="e.g. use orgs instead of keys…"><div class="pf">⏎ refine · esc close</div>`;document.body.appendChild(pop);
+let popFor=null;
+function closeRefine(){pop.style.display='none';popFor=null}
+function openRefine(ch){ if(!ch)return; popFor=ch; const r=ch.getBoundingClientRect();
+  pop.style.display='block'; const top=Math.min(r.bottom+8,innerHeight-150); pop.style.top=top+'px'; pop.style.left=Math.max(350,Math.min(r.left,innerWidth-330))+'px';
+  const inp=pop.querySelector('input');inp.value='';inp.focus();}
+pop.querySelectorAll('.qs button').forEach(b=>b.onclick=()=>refine(popFor,b.textContent));
+pop.querySelector('input').addEventListener('keydown',e=>{if(e.key==='Enter')refine(popFor,e.target.value);if(e.key==='Escape')closeRefine()});
+document.addEventListener('mousedown',e=>{if(popFor&&!pop.contains(e.target)&&!e.target.closest('[data-a=chat]'))closeRefine()});
+$('.scroll').addEventListener('scroll',()=>popFor&&closeRefine());
+function refine(ch,text){ text=(text||'').trim(); if(!ch||!text)return; closeRefine();
+  const ins=ch.querySelector(':scope>ins'), q=refinements[ch.dataset.rid]||[];
+  const card=document.querySelector(`.intent[data-step="${ch.dataset.step}"]`);
+  const line=document.createElement('div');line.className='ref';line.innerHTML='<span class="ar">↳</span><span class="rt"></span><span class="spin"></span>';line.querySelector('.rt').textContent=text;
+  card&&card.insertBefore(line,card.querySelector('.rv'));
+  ch.classList.add('refining');
+  setTimeout(()=>{ ch.classList.remove('refining'); const nxt=q.shift(); line.querySelector('.spin').remove();
+    if(!ins||!nxt){line.insertAdjacentHTML('beforeend','<span class="chip">no scripted refinement</span>');return}
+    ins.innerHTML=nxt; const n=(+ch.dataset.ref||0)+1; ch.dataset.ref=n;
+    let badge=ch.querySelector(':scope>.rb'); if(!badge){badge=document.createElement('span');badge.className='rb';ch.querySelector(':scope>.tools').before(badge)} badge.textContent='↻'+n;
+    snap(`Refined §${sectionOf(ch)}`,'agent',`“${text}”`); line.insertAdjacentHTML('beforeend',`<span class="chip edit">refined</span><span class="chip">v${versions.length-1}</span>`);
+    ch.classList.add('flash');setTimeout(()=>ch.classList.remove('flash'),1300); count();
+  },900);
+}
+let cur=-1;
+function move(d){const all=chgs();if(!all.length)return;all.forEach(c=>c.classList.remove('cur'));cur=Math.max(0,Math.min(all.length-1,(cur<0&&d<0?all.length:cur)+d));all[cur].classList.add('cur');all[cur].scrollIntoView({behavior:'smooth',block:'center'})}
+document.addEventListener('keydown',e=>{ if(e.target.isContentEditable){ if(e.key==='Escape'){e.target.closest('[contenteditable=true]')?.blur();getSelection().removeAllRanges()} return }
+  if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||viewing!==null||e.metaKey||e.ctrlKey)return; const k=e.key.toLowerCase(),c=document.querySelector('#doc .chg.cur');
+  if(k==='j')move(1); else if(k==='k')move(-1);
+  else if(k==='x'&&c){c.classList.toggle('sel');count()}
+  else if((k==='a'||k==='r')&&c){const i=cur;resolve(c,k==='a');cur=i-1;move(1)}
+  else if(k==='c'&&c){e.preventDefault();openRefine(c)}
+});
+function submit(text){ text=text.trim(); if(!text)return; flushEdits(); latest(); $('#in').value='';
+  const el=document.createElement('div');el.className='intent';el.innerHTML=`<div class="t"></div><div class="working"><div class="spin"></div><span>Reading doc…</span></div>`;el.querySelector('.t').textContent=text;$('#log').appendChild(el);$('#log').scrollTop=1e9;
+  const w=el.querySelector('.working span');setTimeout(()=>w.textContent='Drafting edits…',450);
+  setTimeout(()=>{ const s=steps[si];
+    if(!s){el.querySelector('.working').outerHTML='<div class="note">Demo script exhausted — in a real build the agent would edit here.</div>';return}
+    si++; const target=s.run(); const k=String(si);
+    document.querySelectorAll('#doc .chg:not([data-step])').forEach((c,j)=>{c.dataset.step=k;c.dataset.rid=k+'-'+j});
+    snap(s.slug,'agent',s.chips.map(x=>x[1]).join(' · ')); saved(); el.dataset.step=k;
+    el.querySelector('.working').outerHTML=`<div class="meta">${s.chips.map(([k,t])=>`<span class="chip ${k}">${t}</span>`).join('')}<span class="chip">v${versions.length-1}</span></div>${s.note?`<div class="note">ⓘ ${s.note}</div>`:''}<div class="rv"><span class="n"></span><span style="flex:1"></span><button data-ia="ok">✓ Accept these</button><button data-ia="no">✕ Reject</button></div>`;
+    const mine=()=>chgs().filter(c=>c.dataset.step===k);
+    el.addEventListener('mouseenter',()=>{latest();mine().forEach(c=>c.classList.add('peek'))});
+    el.addEventListener('mouseleave',()=>document.querySelectorAll('.peek').forEach(c=>c.classList.remove('peek')));
+    el.addEventListener('click',e=>{const b=e.target.closest('[data-ia]');if(b)resolveMany(mine(),b.dataset.ia==='ok')});
+    const t=$(target);t.scrollIntoView({behavior:'smooth',block:'center'});t.classList.add('flash');setTimeout(()=>t.classList.remove('flash'),1300);
+    count();renderSugg();},1100);
+}
+$('#in').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit(e.target.value)}});
+snap('Initial draft','agent','5 sections');saved();count();renderSugg();
+</script>
+</body>
+</html>

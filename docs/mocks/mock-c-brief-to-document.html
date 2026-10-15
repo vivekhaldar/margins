@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mock C · Brief → Document</title>
+<style>
+  :root{--bg:#0f1115;--pan:#171a21;--pan2:#1d212a;--ink:#e8e9ec;--mute:#8b90a0;--line:#2a2f3a;--acc:#7c9cff;--grn:#4ade80;--amb:#fbbf24;--red:#f87171;--paper:#fcfcfa;--pink:#1c1d21}
+  *{box-sizing:border-box}
+  body{margin:0;height:100vh;display:grid;grid-template-columns:360px 1fr;grid-template-rows:1fr 64px;font:13.5px/1.5 -apple-system,BlinkMacSystemFont,"Inter",sans-serif;background:var(--bg);color:var(--ink);overflow:hidden}
+  aside{grid-row:1;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--pan)}
+  .top{padding:14px 16px 12px;border-bottom:1px solid var(--line)}
+  .ttl{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .ttl b{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+  .tag{font-size:11px;padding:2px 7px;border-radius:99px;background:#232a45;color:var(--acc);font-weight:600}
+  #in{width:100%;border:1px solid var(--line);background:var(--pan2);color:var(--ink);border-radius:10px;padding:10px 12px;font:inherit;outline:none}
+  #in:focus{border-color:var(--acc)}
+  .hint{font-size:11px;color:var(--mute);margin-top:6px}
+  .brief{flex:1;overflow:auto;padding:6px 12px 20px}
+  .grp{margin-top:14px}
+  .gh{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);margin:0 4px 6px;display:flex;justify-content:space-between}
+  .item{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border-radius:8px;border:1px solid transparent;background:var(--pan2);margin-bottom:5px;cursor:default;transition:border-color .15s,opacity .2s}
+  .item:hover,.item.hot{border-color:var(--acc)}
+  .item.off{opacity:.4}.item.off .tx{text-decoration:line-through}
+  .item .id{font:600 10px ui-monospace,Menlo,monospace;color:var(--acc);background:#232a45;border-radius:4px;padding:1px 4px;margin-top:2px}
+  .item .tx{flex:1}
+  .item .tg{appearance:none;width:26px;height:15px;border-radius:99px;background:#3a4050;position:relative;cursor:pointer;margin-top:2px;flex:none}
+  .item .tg:checked{background:var(--grn)}
+  .item .tg::after{content:"";position:absolute;width:11px;height:11px;border-radius:50%;background:#fff;top:2px;left:2px;transition:left .15s}
+  .item .tg:checked::after{left:13px}
+  .item.new{animation:nw 1.4s}
+  @keyframes nw{0%{background:#2b3a6b}100%{background:var(--pan2)}}
+  .from{font-size:11px;color:var(--mute);margin-top:2px}
+  .q{background:#2a2412;border:1px solid #4a3d16;border-radius:8px;padding:9px 10px;margin-bottom:6px}
+  .q .acts{display:flex;gap:6px;margin-top:7px}
+  .q button{font:inherit;font-size:12px;background:#3a3218;color:var(--amb);border:1px solid #5a4a1a;border-radius:6px;padding:2px 9px;cursor:pointer}
+  main{grid-row:1;display:flex;flex-direction:column;min-height:0;background:#e9e8e4;color:var(--pink)}
+  .dbar{display:flex;align-items:center;gap:10px;padding:10px 24px;background:#f4f3ef;border-bottom:1px solid #dddbd4;font-size:12.5px;color:#666}
+  .prog{flex:1;height:3px;background:#dddbd4;border-radius:2px;overflow:hidden;max-width:220px;visibility:hidden}
+  .prog i{display:block;height:100%;width:0;background:#4f46e5;transition:width .9s ease}
+  .dscroll{flex:1;overflow:auto;padding:32px 24px 60px}
+  .paper{max-width:760px;margin:0 auto;background:var(--paper);border-radius:6px;box-shadow:0 2px 14px rgba(0,0,0,.08);padding:48px 60px;font:15px/1.65 "Iowan Old Style",Charter,Georgia,serif}
+  .paper h1{font:700 30px/1.2 -apple-system,sans-serif;margin:0 0 4px}
+  .paper .dm{font:13px -apple-system,sans-serif;color:#888;margin-bottom:10px}
+  .sec{position:relative;padding:4px 14px;margin:0 -14px 6px;border-radius:6px;border-left:3px solid transparent;transition:background .3s,border-color .3s,max-height .6s,opacity .4s;overflow:hidden}
+  .sec.hot{background:#eef1ff;border-left-color:#4f46e5}
+  .sec h2{font:600 17px -apple-system,sans-serif;margin:16px 0 4px;display:flex;align-items:center;gap:8px}
+  .src{display:inline-flex;gap:3px}
+  .src span{font:600 9.5px ui-monospace,Menlo,monospace;color:#4f46e5;background:#e7e9ff;border-radius:3px;padding:1px 4px;cursor:default}
+  .sec.regen{background:linear-gradient(90deg,#f3f2ee 0%,#e7e9ff 50%,#f3f2ee 100%);background-size:200% 100%;animation:sh 1s linear infinite}
+  @keyframes sh{to{background-position:-200% 0}}
+  .sec.changed{animation:ch 2.2s}
+  @keyframes ch{0%{background:#dcfce7;border-left-color:#16a34a}100%{background:transparent}}
+  .sec.gone{max-height:0!important;opacity:0;padding:0;margin:0}
+  .ro .src span{opacity:.6}
+  .banner{max-width:760px;margin:0 auto 12px;background:#fff7e0;border:1px solid #f0dca4;border-radius:8px;padding:8px 12px;font:13px -apple-system,sans-serif;display:none}
+  .banner a{color:#4f46e5;cursor:pointer;text-decoration:underline;margin-left:8px}
+  footer{grid-column:1/3;border-top:1px solid var(--line);background:var(--pan);display:flex;align-items:center;gap:0;padding:0 18px;overflow-x:auto}
+  footer .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin-right:14px;flex:none}
+  .ver{flex:none;display:flex;align-items:center}
+  .ver .line{width:28px;height:2px;background:var(--line)}
+  .ver button{font:inherit;font-size:12px;background:var(--pan2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:4px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;white-space:nowrap}
+  .ver button i{font-style:normal;color:var(--mute)}
+  .ver button.on{border-color:var(--acc);box-shadow:0 0 0 2px #2b3a6b}
+</style>
+</head>
+<body>
+<aside>
+  <div class="top">
+    <div class="ttl"><b>Brief</b><span class="tag">Mock C · Brief → Document</span></div>
+    <input id="in" placeholder="Say what you want… it gets distilled into the brief" autocomplete="off">
+    <div class="hint">Your input edits the <i>brief</i>; the document is rebuilt from it. Toggle items to see their effect.</div>
+  </div>
+  <div class="brief" id="brief">
+    <div class="grp" id="g-q"><div class="gh"><span>Agent needs from you</span></div>
+      <div class="q" id="q1">Should limits apply per <b>API key</b> or per <b>organization</b>? Orgs with many keys can currently multiply their quota.
+        <div class="acts"><button data-a="key">Per key</button><button data-a="org">Per org</button></div></div>
+    </div>
+    <div class="grp" id="g-purpose"><div class="gh"><span>Purpose</span></div></div>
+    <div class="grp" id="g-aud"><div class="gh"><span>Audience</span></div></div>
+    <div class="grp" id="g-must"><div class="gh"><span>Must include</span></div></div>
+    <div class="grp" id="g-avoid"><div class="gh"><span>Avoid</span></div></div>
+  </div>
+</aside>
+
+<main>
+  <div class="dbar"><span id="dstat">Up to date with brief</span><div class="prog" id="prog"><i></i></div><div style="flex:1"></div><span>Hover a section to see which brief items produced it</span></div>
+  <div class="dscroll">
+    <div class="banner" id="banner">Viewing an older version. <a id="back">Return to latest</a><a>Fork from here</a></div>
+    <div class="paper" id="paper"></div>
+  </div>
+</main>
+
+<footer id="tl"><span class="lbl">History</span></footer>
+
+<script>
+const $=s=>document.querySelector(s);
+let n=0; const items={};
+function addItem(grp,text,{from,on=true,isNew=false,id}={}){
+  id=id||('B'+(++n)); items[id]={text,on};
+  const d=document.createElement('div');d.className='item'+(isNew?' new':'')+(on?'':' off');d.dataset.id=id;
+  d.innerHTML=`<span class="id">${id}</span><div class="tx"><div></div>${from?'<div class="from"></div>':''}</div><input type="checkbox" class="tg" ${on?'checked':''} title="Include in document">`;
+  d.querySelector('.tx div').textContent=text; if(from) d.querySelector('.from').textContent='from: “'+from+'”';
+  $('#g-'+grp).appendChild(d); return id;}
+addItem('purpose','Get sign-off from platform leads on the rate-limiting approach');
+addItem('aud','Staff engineers; readable in 5 minutes');
+addItem('must','Token bucket enforced at the edge gateway');
+addItem('must','Rollout plan with a shadow-mode phase');
+addItem('must','Rough cost estimate');
+addItem('avoid','Implementation details below the gateway');
+
+const S={
+ summary:{src:['B1','B2'],h:'Summary',b:'<p>A few heavy API callers degrade latency for everyone and page on-call. We propose per-key token-bucket limits at the edge gateway and are asking platform leads to approve the approach.</p>'},
+ proposal:{src:['B3'],h:'Proposal',b:'<p>Use a token bucket per API key, enforced at the edge gateway. Limits are configured per plan tier. Over-limit requests receive HTTP 429 with <code>Retry-After</code>.</p>'},
+ rollout:{src:['B4'],h:'Rollout',b:'<ol><li>Shadow mode (log only), two weeks</li><li>Free tier</li><li>All tiers</li></ol>'},
+ cost:{src:['B5'],h:'Cost',b:'<p>Gateway CPU +3–5% (bucket lookups in local memory, async sync to Redis). One Redis cluster: ~$1.1k/month. ~3 engineer-weeks.</p>'},
+};
+let order=['summary','proposal','rollout','cost'];
+function render(){ const p=$('#paper');
+  p.innerHTML='<h1>Rate Limiting for the Public API</h1><div class="dm">Design doc · generated from brief</div>'+
+  order.filter(k=>S[k]&&S[k].src.some(id=>items[id]?.on)).map(k=>`<div class="sec" data-k="${k}" data-src="${S[k].src.join(' ')}"><h2>${S[k].h}<span class="src">${S[k].src.map(s=>`<span>${s}</span>`).join('')}</span></h2>${S[k].b}</div>`).join('');}
+// cross-highlighting
+document.addEventListener('mouseover',e=>{
+  clear(); const sec=e.target.closest('.sec'), it=e.target.closest('.item');
+  if(sec){sec.classList.add('hot');sec.dataset.src.split(' ').forEach(id=>document.querySelector(`.item[data-id="${id}"]`)?.classList.add('hot'))}
+  if(it){it.classList.add('hot');document.querySelectorAll('.sec').forEach(s=>s.dataset.src.split(' ').includes(it.dataset.id)&&s.classList.add('hot'))}
+});
+function clear(){document.querySelectorAll('.hot').forEach(x=>x.classList.remove('hot'))}
+
+// history
+const hist=[]; let viewing=null;
+function commit(label){ hist.push($('#paper').innerHTML); const i=hist.length-1;
+  const v=document.createElement('div');v.className='ver';v.innerHTML=(i?'<div class="line"></div>':'')+`<button>v${i}<i></i></button>`;
+  v.querySelector('i').textContent=label; v.querySelector('button').onclick=()=>view(i); $('#tl').appendChild(v); mark(i); $('#tl').scrollLeft=1e9;}
+function mark(i){document.querySelectorAll('.ver button').forEach((b,j)=>b.classList.toggle('on',i===j))}
+function view(i){ if(i===hist.length-1) return latest(); viewing=i; $('#paper').innerHTML=hist[i]; $('#paper').classList.add('ro'); $('#banner').style.display='block'; mark(i)}
+function latest(){ if(viewing!==null){$('#paper').innerHTML=hist[hist.length-1];viewing=null} $('#paper').classList.remove('ro');$('#banner').style.display='none';mark(hist.length-1)}
+$('#back').onclick=latest;
+
+// regeneration
+function regen(keys,label,mutate){ latest(); const st=$('#dstat'),pg=$('#prog'),bar=pg.querySelector('i');
+  keys.forEach(k=>document.querySelector(`.sec[data-k="${k}"]`)?.classList.add('regen'));
+  st.textContent=`Rebuilding ${keys.length} of ${document.querySelectorAll('.sec').length||1} section${keys.length>1?'s':''}…`; pg.style.visibility='visible'; bar.style.width='0';
+  requestAnimationFrame(()=>bar.style.width='100%');
+  setTimeout(()=>{ mutate&&mutate(); render(); keys.forEach(k=>{const s=document.querySelector(`.sec[data-k="${k}"]`); if(s){s.classList.add('changed');s.scrollIntoView({behavior:'smooth',block:'center'})}});
+    st.textContent='Up to date with brief'; pg.style.visibility='hidden'; commit(label);},1000);}
+
+// toggles
+$('#brief').addEventListener('change',e=>{ if(!e.target.classList.contains('tg'))return; const it=e.target.closest('.item'),id=it.dataset.id;
+  items[id].on=e.target.checked; it.classList.toggle('off',!items[id].on);
+  const aff=order.filter(k=>S[k]?.src.includes(id));
+  if(!items[id].on){ aff.forEach(k=>{const s=document.querySelector(`.sec[data-k="${k}"]`); if(s){s.style.maxHeight=s.offsetHeight+'px'; requestAnimationFrame(()=>s.classList.add('gone'))}});
+    setTimeout(()=>{render();commit('− '+id)},650);}
+  else regen(aff,'+ '+id);
+});
+
+// agent question
+document.querySelectorAll('#q1 button').forEach(b=>b.onclick=()=>{
+  const org=b.dataset.a==='org'; $('#q1').remove(); if(!$('#g-q .q')) $('#g-q').style.display='none';
+  const id=addItem('must',org?'Limits apply per organization (pooled across keys)':'Limits apply per API key',{from:'answered agent question',isNew:true});
+  regen(['proposal'],id+' per '+(org?'org':'key'),()=>{ S.proposal.src.push(id);
+    S.proposal.b=org?'<p>Use a token bucket per <b>organization</b>, shared across all of its API keys, enforced at the edge gateway. This closes the quota-multiplication loophole. Over-limit requests receive HTTP 429 with <code>Retry-After</code>.</p>'
+                    :'<p>Use a token bucket per API key, enforced at the edge gateway. We accept that orgs can multiply quota with more keys and will monitor it. Over-limit requests receive HTTP 429 with <code>Retry-After</code>.</p>';});
+});
+
+// free text → distilled brief item (scripted)
+const script=[
+ (t,id)=>({keys:['alts'],label:'+ alternatives',m(){S.alts={src:[id],h:'Alternatives considered',b:'<p><b>Fixed-window counters</b> allow 2× bursts at boundaries. <b>Per-IP limits</b> are easy to evade. <b>Per-service limits</b> mean every team re-implements it.</p>'};order.splice(2,0,'alts')}}),
+ (t,id)=>({keys:['summary'],label:'summary tone',m(){S.summary.src.push(id);S.summary.b='<p><b>Ask:</b> approve per-key token-bucket limits at the edge gateway by Oct 30.</p><p>Why: a few heavy callers degrade latency for everyone and page on-call weekly.</p>'}}),
+];
+let si=0;
+function classify(t){ if(/\b(avoid|don'?t|do not|no |without|skip)\b/i.test(t))return 'avoid'; if(/\b(audience|reader|for (the )?(execs?|leads|vp|managers))\b/i.test(t))return 'aud'; return 'must';}
+function distill(t){ return t.replace(/^(please|can you|could you|i want( you)? to|let'?s)\s+/i,'').replace(/^\w/,c=>c.toUpperCase()).replace(/[.?!]+$/,'');}
+$('#in').addEventListener('keydown',e=>{ if(e.key!=='Enter')return; const t=e.target.value.trim(); if(!t)return; e.target.value='';
+  const grp=classify(t), id=addItem(grp,distill(t),{from:t,isNew:true});
+  document.querySelector(`.item[data-id="${id}"]`).scrollIntoView({block:'nearest'});
+  const f=script[si++];
+  if(!f){ regen(['summary'],'+ '+id,()=>S.summary.src.push(id)); return; }
+  const r=f(t,id); regen(r.keys.filter(k=>document.querySelector(`.sec[data-k="${k}"]`)).length?r.keys:['summary'],r.label,()=>{r.m();});
+  if(r.keys[0]==='alts') setTimeout(()=>{const s=document.querySelector('.sec[data-k="alts"]');s&&s.classList.add('changed');s&&s.scrollIntoView({behavior:'smooth',block:'center'})},1050);
+});
+
+render(); commit('initial draft');
+</script>
+</body>
+</html>

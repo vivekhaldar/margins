@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mock B · Margin Directives</title>
+<style>
+  :root{--bg:#fff;--ink:#1c1c1e;--mute:#76767c;--line:#ececec;--acc:#0a7cff;--hl:#fff4c2;--q:#fff8ec;--qb:#f3c46b}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.65 "Iowan Old Style","Charter",Georgia,serif;color:var(--ink);background:var(--bg)}
+  .ui{font-family:-apple-system,BlinkMacSystemFont,"Inter",sans-serif}
+  header{position:sticky;top:0;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);z-index:5}
+  .hrow{max-width:1080px;margin:0 auto;padding:10px 24px;display:flex;align-items:center;gap:10px;font-size:13px}
+  .tag{font-size:11px;padding:2px 7px;border-radius:99px;background:#e8f2ff;color:var(--acc);font-weight:600}
+  .rules{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .rules .lbl{color:var(--mute);font-size:12px}
+  .rule{font-size:12px;background:#f4f4f5;border-radius:99px;padding:2px 4px 2px 10px;display:inline-flex;gap:4px;align-items:center}
+  .rule.new{animation:pop .6s}
+  @keyframes pop{0%{transform:scale(.6);background:#d9ebff}100%{transform:scale(1)}}
+  .rule button{border:0;background:none;color:var(--mute);cursor:pointer;font-size:12px;padding:0 4px}
+  .sp{flex:1}
+  .status{color:var(--mute);font-size:12px}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 24px 160px}
+  .row{display:grid;grid-template-columns:1fr 280px;gap:36px;align-items:start}
+  .blk{padding:6px 12px;margin:0 -12px;border-radius:8px;cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s;position:relative}
+  .blk:hover{background:#fafafa}
+  .blk.sel{border-color:var(--acc);background:#f5f9ff}
+  .blk.sel::before{content:"scoped";position:absolute;left:-58px;top:10px;font:600 10px -apple-system,sans-serif;color:var(--acc);text-transform:uppercase;letter-spacing:.06em}
+  .blk.working{background:linear-gradient(90deg,#f4f4f5 0%,#e9f2ff 50%,#f4f4f5 100%);background-size:200% 100%;animation:sh 1s linear infinite}
+  @keyframes sh{to{background-position:-200% 0}}
+  h1{font-size:34px;line-height:1.2;margin:0 0 6px}
+  .dm{color:var(--mute);font:13px -apple-system,sans-serif;margin-bottom:18px}
+  h2{font:600 18px -apple-system,BlinkMacSystemFont,sans-serif;margin:22px 0 6px}
+  p{margin:0 0 8px}
+  mark{background:var(--hl);padding:0 1px;border-radius:2px;transition:background 3s}
+  mark.fade{background:transparent}
+  .margin{font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:12.5px;padding-top:8px;display:flex;flex-direction:column;gap:8px}
+  .note{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.04);animation:in .3s}
+  @keyframes in{from{opacity:0;transform:translateX(8px)}}
+  .note .who{font-weight:600;font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
+  .note.you .who{color:var(--acc)}
+  .note.q{background:var(--q);border-color:var(--qb)}
+  .note.done{opacity:.55}
+  .note .acts{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+  .note .acts button{font:inherit;font-size:12px;border:1px solid #ddd;background:#fff;border-radius:6px;padding:2px 8px;cursor:pointer}
+  .note .acts button:hover{border-color:var(--ink)}
+  .note .link{color:var(--acc);cursor:pointer;font-size:12px;border:0;background:none;padding:0}
+  .cmd{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);width:min(680px,92vw);background:#fff;border:1px solid #ddd;border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.12);padding:8px;display:flex;gap:8px;align-items:center;font-family:-apple-system,BlinkMacSystemFont,sans-serif;z-index:10}
+  .scope{font-size:12px;white-space:nowrap;padding:4px 10px;border-radius:8px;background:#f4f4f5;color:var(--mute)}
+  .scope.on{background:#e8f2ff;color:var(--acc);font-weight:600;cursor:pointer}
+  .cmd input{flex:1;border:0;outline:none;font:inherit;font-size:14px;padding:8px 4px}
+  .kbd{font-size:11px;color:var(--mute);border:1px solid #ddd;border-radius:5px;padding:1px 5px}
+  .help{position:fixed;left:50%;bottom:86px;transform:translateX(-50%);font:12px -apple-system,sans-serif;color:var(--mute);text-align:center;width:680px}
+</style>
+</head>
+<body>
+<header class="ui"><div class="hrow">
+  <span class="tag">Mock B · Margin directives</span>
+  <div class="rules" id="rules"><span class="lbl">Standing rules:</span>
+    <span class="rule">Audience: staff engineers<button title="Remove">✕</button></span>
+  </div>
+  <div class="sp"></div><span class="status" id="status">Saved · v3</span>
+</div></header>
+
+<div class="wrap" id="wrap">
+  <div class="row"><div><h1>Rate Limiting for the Public API</h1><div class="dm">Design doc · Draft · Platform team</div></div><div></div></div>
+
+  <div class="row" data-k="summary"><div class="blk"><h2>Summary</h2><p>A few heavy API callers degrade latency for everyone and page on-call. We propose per-key token-bucket limits at the edge gateway, rolled out behind a shadow mode.</p></div><div class="margin"></div></div>
+
+  <div class="row" data-k="goals"><div class="blk"><h2>Goals</h2><p>Keep p99 latency under 300 ms during spikes up to 10× baseline. No single API key consumes more than 5% of gateway capacity. Fewer than 0.1% of currently well-behaved requests receive a 429.</p></div><div class="margin"></div></div>
+
+  <div class="row" data-k="prop1"><div class="blk"><h2>Proposal</h2><p>Use a token bucket per API key, enforced at the edge gateway. Limits are configured per plan tier and stored in the config service.</p></div>
+    <div class="margin"><div class="note q"><div class="who">Agent · question</div>Should internal service-to-service traffic be subject to these limits?
+      <div class="acts"><button data-ans="exempt">Exempt it</button><button data-ans="same">Same limits</button><button data-ans="higher">Separate, higher tier</button></div></div></div></div>
+
+  <div class="row" data-k="prop2"><div class="blk"><p>Requests over the limit receive HTTP 429 with a <code>Retry-After</code> header. Responses always include <code>X-RateLimit-Remaining</code> so clients can self-throttle.</p></div><div class="margin"></div></div>
+
+  <div class="row" data-k="rollout"><div class="blk"><h2>Rollout</h2><p>Ship in shadow mode (log only) for two weeks, then enable for the free tier, then all tiers.</p></div><div class="margin"></div></div>
+
+  <div id="tail"></div>
+</div>
+
+<div class="help" id="help">Click a block to scope your instruction · start with “always” or “never” to add a standing rule</div>
+<div class="cmd">
+  <span class="scope" id="scope">Whole doc</span>
+  <input id="in" placeholder="Tell the document what to change…" autocomplete="off">
+  <span class="kbd">⏎</span>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+let sel=null, ver=3;
+const rewrites={
+ summary:{html:'<h2>Summary</h2><p>A few heavy API callers degrade latency for everyone and page on-call. <mark>We propose per-key token buckets at the edge gateway — no service changes required — rolled out behind two weeks of shadow mode.</mark></p>'},
+ goals:{html:'<h2>Goals</h2><ul><li><mark>p99 latency &lt; 300 ms</mark> during spikes up to 10× baseline</li><li><mark>No key &gt; 5%</mark> of gateway capacity</li><li><mark>&lt; 0.1%</mark> of well-behaved requests get a 429</li></ul>'},
+ prop1:{html:'<h2>Proposal</h2><p>Use a token bucket per API key, enforced at the edge gateway. <mark>Bucket size = 2× the per-second limit, which absorbs typical client retry bursts without opening a sustained overload window.</mark> Limits are configured per plan tier and stored in the config service.</p>'},
+ prop2:{html:'<p>Requests over the limit receive HTTP 429 with a <code>Retry-After</code> header. Responses always include <code>X-RateLimit-Remaining</code> <mark>and <code>X-RateLimit-Reset</code></mark> so clients can self-throttle.</p>'},
+ rollout:{html:'<h2>Rollout</h2><ol><li>Shadow mode (log only) for two weeks</li><li><mark>Email customers whose observed peak exceeds their limit</mark></li><li>Enable for free tier</li><li>Enable for all tiers</li></ol>',
+   agent:'I added a comms step before enforcement. Want me to draft that email as an appendix?', agentActs:['Draft it','No']},
+};
+const globals=[
+ {k:'metrics',html:'<h2><mark>Metrics &amp; alerting</mark></h2><p><mark>Dashboard: 429 rate by key and tier, bucket saturation, gateway CPU. Page if 429s exceed 1% of total traffic for 10 minutes.</mark></p>',
+  agent:'New section added at the end. I didn’t pick alert thresholds for enterprise keys — flagging.'},
+];
+let gi=0;
+function rowOf(el){return el.closest('.row')}
+function setScope(row){ document.querySelectorAll('.blk.sel').forEach(b=>b.classList.remove('sel'));
+  sel=row; const sc=$('#scope');
+  if(row){row.querySelector('.blk').classList.add('sel'); sc.textContent='§ '+(row.querySelector('h2')?.textContent||'Proposal ¶2')+'  ✕'; sc.classList.add('on'); $('#in').placeholder='Change this block…'}
+  else{sc.textContent='Whole doc'; sc.classList.remove('on'); $('#in').placeholder='Tell the document what to change…'}
+  $('#in').focus(); }
+$('#wrap').addEventListener('click',e=>{const b=e.target.closest('.blk'); if(!b)return; const r=rowOf(b); setScope(sel===r?null:r)});
+$('#scope').onclick=()=>sel&&setScope(null);
+function note(row,cls,who,text,acts){const n=document.createElement('div');n.className='note '+cls;n.innerHTML=`<div class="who">${who}</div><span class="tx"></span>`;n.querySelector('.tx').textContent=text;
+  if(acts){const a=document.createElement('div');a.className='acts';acts.forEach(([l,fn])=>{const b=document.createElement('button');b.textContent=l;b.onclick=()=>fn(n);a.appendChild(b)});n.appendChild(a)}
+  row.querySelector('.margin').appendChild(n);return n}
+function fadeMarks(){setTimeout(()=>document.querySelectorAll('mark').forEach(m=>m.classList.add('fade')),2500)}
+function bump(){ver++;$('#status').textContent='Saved · v'+ver}
+function work(row,fn){const b=row.querySelector('.blk');b.classList.add('working');$('#status').textContent='Editing…';setTimeout(()=>{b.classList.remove('working');fn(b);bump();fadeMarks()},900)}
+function apply(row,text){
+  const k=row.dataset.k, before=row.querySelector('.blk').innerHTML;
+  const n=note(row,'you','You',text,[['Undo',nn=>{row.querySelector('.blk').innerHTML=before;nn.classList.add('done');nn.querySelector('.acts').innerHTML='<span style="color:#999">undone</span>';bump()}]]);
+  work(row,b=>{ const r=rewrites[k];
+    if(r){b.innerHTML=r.html; delete rewrites[k]; if(r.agent) note(row,'q','Agent',r.agent,r.agentActs.map(l=>[l,nn=>{nn.classList.add('done');nn.querySelector('.acts').innerHTML='✓ '+l}]))}
+    else note(row,'','Agent','(Demo) No scripted edit left for this block.');
+  });
+}
+function addRule(text){const s=document.createElement('span');s.className='rule new';s.innerHTML='<span></span><button>✕</button>';s.firstChild.textContent=text;$('#rules').appendChild(s);
+  $('#status').textContent='Re-checking doc against new rule…';
+  document.querySelectorAll('.blk').forEach(b=>b.classList.add('working'));
+  setTimeout(()=>{document.querySelectorAll('.blk').forEach(b=>b.classList.remove('working'));bump();
+    const r=document.querySelector('.row[data-k="prop2"]');note(r,'','Agent',`Applied rule "${text}" — 1 sentence adjusted here; other sections already complied.`)},1100)}
+$('#rules').addEventListener('click',e=>{if(e.target.tagName==='BUTTON')e.target.parentElement.remove()});
+function submit(){const inp=$('#in'),text=inp.value.trim();if(!text)return;inp.value='';
+  if(/^(always|never)\b/i.test(text)) return addRule(text);
+  if(sel) return apply(sel,text);
+  const g=globals[gi++]; const tail=$('#tail');
+  if(!g){const row=document.querySelector('.row[data-k="summary"]');return note(row,'','Agent','(Demo) Whole-doc script exhausted — try scoping to a block.')}
+  const row=document.createElement('div');row.className='row';row.dataset.k=g.k;row.innerHTML='<div class="blk working"></div><div class="margin"></div>';tail.appendChild(row);
+  note(row,'you','You',text);row.scrollIntoView({behavior:'smooth',block:'center'});
+  setTimeout(()=>{const b=row.querySelector('.blk');b.classList.remove('working');b.innerHTML=g.html;note(row,'','Agent',g.agent);bump();fadeMarks()},1000);
+}
+$('#in').addEventListener('keydown',e=>{if(e.key==='Enter')submit();if(e.key==='Escape')setScope(null)});
+document.querySelectorAll('[data-ans]').forEach(b=>b.onclick=()=>{
+  const n=b.closest('.note'),row=rowOf(n),a=b.dataset.ans;
+  n.classList.add('done');n.querySelector('.acts').innerHTML='✓ '+b.textContent;
+  const add={exempt:'Internal service-to-service traffic (mTLS-authenticated) is exempt.',same:'Internal callers are subject to the same per-key limits as external ones.',higher:'Internal callers use a separate “internal” tier with 10× the enterprise limit.'}[a];
+  work(row,blk=>{blk.querySelector('p').insertAdjacentHTML('beforeend',' <mark>'+add+'</mark>')});
+});
+</script>
+</body>
+</html>

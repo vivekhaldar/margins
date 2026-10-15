@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="editor.css">
+</head>
+<body>
+<div class="bar" id="bar">
+  <span id="pending">No pending changes</span>
+  <span class="selbar" id="selbar"><span id="selcount"></span>
+    <button data-act="acc-sel">Accept selected</button>
+    <button data-act="rej-sel">Reject selected</button>
+    <button data-act="clear-sel">Clear</button>
+  </span>
+  <span class="sp"></span>
+  <span class="kb" id="kb"><kbd>Esc</kbd> then <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>X</kbd> select · <kbd>A</kbd>/<kbd>R</kbd> accept/reject · <kbd>C</kbd> refine · <kbd>⌘</kbd>-click select</span>
+  <button class="btn" id="rejAll" data-act="rej-all" disabled>Reject all</button>
+  <button class="btn p" id="accAll" data-act="acc-all" disabled>Accept all</button>
+</div>
+<div class="scroll" id="scroll">
+  <article id="doc" contenteditable="true" spellcheck="true"
+           data-placeholder="Your document will appear here. Describe what you want to write in the panel on the left — or just start typing."></article>
+</div>
+<div class="pop" id="pop">
+  <div class="ph">Refine this change</div>
+  <div class="qs">
+    <button data-q="Shorter">Shorter</button>
+    <button data-q="More specific">More specific</button>
+    <button data-q="Different angle">Different angle</button>
+    <button data-q="Simpler language">Simpler</button>
+  </div>
+  <input id="popin" placeholder="e.g. mention the 429 retry header">
+  <div class="pf">Only this change is rewritten · Enter to send · Esc to close</div>
+</div>
+<script src="editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+# 2. Design journey
+
+Margins came out of a short brainstorm-and-mock loop. The original HTML mockups are in [`docs/mocks/`](mocks/index.html); open `index.html` in a browser.
+
+## Step 1: three alternative paradigms
+
+All three keep natural-language input and put the output in a document pane. They differ in **how changes are presented and controlled**.
+
+| Mock | Paradigm | Strengths | Weaknesses |
+|---|---|---|---|
+| **A: Tracked changes** ([mock](mocks/mock-a-tracked-changes.html)) | Instructions on the left; the agent's edits show inline as insertions and deletions you accept or reject. | Familiar (Word / Docs suggestions). Every change is legible and reversible. Granular control. | Heavy edits can look noisy. |
+| **B: Margin directives** ([mock](mocks/mock-b-margin-directives.html)) | Pin instructions to specific passages, like comments; the agent resolves each in place. | Very precise scoping. Feels like reviewing a draft. | Poor for whole-document instructions. Lots of clicking. |
+| **C: Brief → document** ([mock](mocks/mock-c-brief-to-document.html)) | You edit a living *brief* (goals, audience, constraints); the document regenerates from it. | Declarative. Easy to make big shifts. | Regeneration churns text you liked. Edits are less legible. |
+
+**Decision: A, tracked changes.** It gives the strongest guarantee that the agent never changes things silently, and it degrades well: a big rewrite is just a lot of tracked changes. Mock B's precise scoping survives as *selection-scoped instructions*: select text, then type an instruction, and the agent is told to focus there.
+
+## Step 2: "How do I select only some changes?"
+
+Accept/reject-all is too coarse, and per-hunk is tedious when one instruction produces ten hunks. Mock A grew three levels of granularity:
+
+- **Per instruction.** Each instruction card has *Accept these / Reject*, which applies to every change from that step. Hovering a card highlights its changes in the document.
+- **Ad-hoc selection.** ⌘-click changes, or press `X` on the focused one, to build a selection. A selection bar appears with *Accept selected / Reject selected*.
+- **Keyboard review.** `J`/`K` move between changes, `A`/`R` accept or reject, `X` toggles selection, `C` refines.
+
+## Step 3: 💬 refine a single change
+
+Accept and reject are binary. Often a change is *almost* right. Each change got a third control, **💬 refine**, which opens a small popover with quick chips ("shorter", "more formal", "add an example") and a text field. The agent rewrites **only that hunk**, given the original text, the current proposal and the surrounding context. The hunk stays pending and gets a `↻N` badge showing how many times it was refined. This is the one place a little "conversation" survives, and it's scoped to a single change, so it can't leak into the rest of the document.
+
+## Step 4: inline editing and history
+
+- **The document is directly editable.** You're a co-author. Your edits are captured, debounced into a "you" version, and sent to the agent as the current document next time. Pending agent changes can be edited before accepting them.
+- **Versions moved into a History drawer.** The first mock had a row of `v1 v2 v3…` chips. Version numbers alone are meaningless, so each version now has:
+  - a **slug** ("add summary at top", "tighten approach section"), written by the agent as part of its edit plan, or generated for your own edits and reviews ("edited §Approach", "accepted 3 changes");
+  - an **author**: agent, you, or review;
+  - the **instruction** that produced it.
+
+  Clicking a version previews it read-only; *Restore* makes it current again, as a new version, so nothing is lost.
+
+## Step 5: from mock to app
+
+The native app keeps Mock A's interaction model almost unchanged. The editor is a ported version of the mock running in a `WKWebView`, because rich text with inline tracked-change markup is much easier in HTML/`contenteditable` than in `NSTextView`. The instruction pane, history drawer, provider picker and settings are native SwiftUI. See [architecture](04-architecture.md).
+
+Things that changed on the way from mock to app:
+
+- **The first draft lands directly.** When the document is empty there's nothing to protect, and a screen full of green insertions is noise.
+- **Agent notes.** The edit plan includes a one-line summary and any *assumptions* the agent made ("assumed a Redis-backed limiter"). These show on the instruction card and replace the chat reply you would otherwise get.
+- **Quick chips** under the composer ("Tighten the prose", "Add a summary at the top"…) for common refinements.
+- **Provider/model picker** in the toolbar, because different instructions deserve different models. See [model providers](03-model-providers.md).

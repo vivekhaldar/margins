@@ -1,0 +1,112 @@
+import Foundation
+@testable import MarginsCore
+
+// Minimal test runner (Command Line Tools lack XCTest and the swift-testing macro plugin).
+// Run: swift run MarginsSelfTest
+
+var failures = 0
+var passes = 0
+
+func check(_ cond: @autoclosure () throws -> Bool, _ msg: String, line: Int = #line) {
+    do {
+        if try cond() { passes += 1 } else { failures += 1; print("✗ line \(line): \(msg)") }
+    } catch {
+        failures += 1; print("✗ line \(line): \(msg) threw \(error)")
+    }
+}
+
+func test(_ name: String, _ body: () throws -> Void) {
+    do { try body() } catch { failures += 1; print("✗ \(name) threw \(error)") }
+}
+
+test("parse bare JSON") {
+    let p = try EditPlanParser.parse(#"{"slug":"tighten intro","summary":"s","notes":[],"edits":[{"op":"replace","blockId":"b1","html":"<p>x</p>"}]}"#)
+    check(p.slug == "tighten intro", "slug")
+    check(p.edits == [EditOp(op: .replace, blockId: "b1", html: "<p>x</p>")], "edits")
+}
+
+test("parse fenced JSON with prose") {
+    let text = "Sure! Here you go:\n```json\n{\"edits\":[{\"op\":\"delete\",\"blockId\":\"b2\"}]}\n```\nLet me know."
+    let p = try EditPlanParser.parse(text)
+    check(p.edits.first?.op == .delete, "delete op")
+    check(p.edits.first?.html == "", "missing html defaults to empty")
+    check(p.notes.isEmpty && p.slug.isEmpty, "optional fields default")
+}
+
+test("parse JSON embedded in prose with braces in strings") {
+    let text = #"Plan: {"slug":"a","summary":"uses {braces}","notes":["q?"],"edits":[{"op":"insertAfter","blockId":"^","html":"<h1>T</h1>"}]} done"#
+    let p = try EditPlanParser.parse(text)
+    check(p.summary == "uses {braces}", "string braces")
+    check(p.edits.first?.blockId == "^", "start anchor")
+}
+
+test("parse rejects non-JSON") {
+    check((try? EditPlanParser.parse("I can't help with that")) == nil, "should throw")
+}
+
+test("schema is valid JSON and strict") {
+    let o = EditPlanSchema.object
+    check(o["additionalProperties"] as? Bool == false, "strict")
+    check((o["required"] as? [String])?.count == 4, "required fields")
+}
+
+test("prompt builder") {
+    let s = PromptBuilder.editPrompt(blocks: [Block(id: "b1", html: "<p>a</p>"), Block(id: "b2", html: "<p>b</p>", pending: true)],
+                                     instruction: "shorter", focus: ["b2"])
+    check(s.contains("[b1] <p>a</p>"), "block 1")
+    check(s.contains("[b2] (pending suggestion)"), "pending marker")
+    check(s.contains("selected blocks [b2]"), "focus")
+    check(PromptBuilder.editPrompt(blocks: [], instruction: "x").contains("(empty)"), "empty doc")
+    let r = PromptBuilder.refinePrompt(blocks: [], blockId: "b9", original: "", proposed: "<p>n</p>", originalInstruction: "add", refinement: "shorter")
+    check(r.contains("blockId \"b9\"") && r.contains("this was an insertion"), "refine prompt")
+}
+
+test("document round trip and title") {
+    var d = MarginsDocument()
+    check(d.title == "Untitled", "untitled")
+    d.snapshot(html: "<h1 data-bid=\"b1\">Rate <em>Limits</em></h1><p>x</p>", slug: "first draft", author: .agent)
+    d.intents.append(Intent(step: 1, text: "write it", status: .pending))
+    check(d.title == "Rate Limits", "title from h1")
+    check(d.versions.count == 1 && d.versions[0].number == 1, "version numbering")
+    d.snapshot(html: d.html + "<p>y</p>", slug: "edited", author: .you)
+    check(d.versions.last?.number == 2, "v2")
+    let back = try MarginsDocument.decode(try d.encoded())
+    check(back.html == d.html && back.versions.map(\.slug) == d.versions.map(\.slug) && back.intents.map(\.id) == d.intents.map(\.id), "round trip")
+}
+
+test("codex JSONL extraction") {
+    let jsonl = """
+    {"type":"thread.started","thread_id":"x"}
+    {"type":"item.completed","item":{"id":"0","type":"reasoning","text":"thinking"}}
+    {"type":"item.completed","item":{"id":"1","type":"agent_message","text":"{\\"edits\\":[]}"}}
+    {"type":"turn.completed","usage":{}}
+    """
+    check(CodexExecProvider.lastAgentMessage(jsonl: jsonl) == #"{"edits":[]}"#, "agent message")
+    check(CodexExecProvider.firstError(jsonl: #"{"type":"error","message":"boom"}"#) == "boom", "error")
+}
+
+test("claude output extraction") {
+    let structured = #"{"type":"result","is_error":false,"result":"","structured_output":{"edits":[]}}"#
+    check(try ClaudeCodeProvider.extract(stdout: structured, status: 0, stderr: "") == #"{"edits":[]}"#, "structured_output")
+    let plain = #"{"type":"result","is_error":false,"result":"{\"edits\":[]}"}"#
+    check(try ClaudeCodeProvider.extract(stdout: plain, status: 0, stderr: "") == #"{"edits":[]}"#, "result string")
+    let err = #"{"type":"result","is_error":true,"result":"Failed to authenticate"}"#
+    check((try? ClaudeCodeProvider.extract(stdout: err, status: 0, stderr: "")) == nil, "auth error throws")
+}
+
+test("binary locator") {
+    check(BinaryLocator.locate("sh") != nil, "finds sh")
+    check(BinaryLocator.locate("definitely-not-a-binary-xyz") == nil, "missing")
+    check(BinaryLocator.locate("x", override: "/bin/sh")?.path == "/bin/sh", "override")
+}
+
+let sem = DispatchSemaphore(value: 0)
+Task {
+    let r = try! await ProcessRunner.run(URL(fileURLWithPath: "/bin/cat"), arguments: [], stdin: "hello")
+    check(r.stdout == "hello" && r.status == 0, "process runner stdin/stdout")
+    sem.signal()
+}
+sem.wait()
+
+print(failures == 0 ? "✓ \(passes) checks passed" : "\(failures) failed, \(passes) passed")
+exit(failures == 0 ? 0 : 1)
