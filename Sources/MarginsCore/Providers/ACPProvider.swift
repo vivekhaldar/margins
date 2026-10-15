@@ -168,7 +168,7 @@ public final class ACPProvider: ModelProvider {
         let r = try await c.request("session/new", ["cwd": ProcessRunner.scratchDirectory().path, "mcpServers": []])
         guard let sid = r["sessionId"] as? String else { throw ProviderError.protocolError("ACP: no sessionId") }
         if let m = r["models"] as? [String: Any], let list = m["availableModels"] as? [[String: Any]] {
-            models = list.compactMap { item in
+            var parsed: [ModelInfo] = list.compactMap { item in
                 guard let id = item["modelId"] as? String else { return nil }
                 var name = item["name"] as? String ?? id
                 if let meta = item["_meta"] as? [String: Any], let usage = meta["copilotUsage"] as? String {
@@ -176,6 +176,12 @@ public final class ACPProvider: ModelProvider {
                 }
                 return ModelInfo(id: id, name: name)
             }
+            // Empty id = whatever the agent picks by default (its `currentModelId` for a fresh session).
+            let current = (m["currentModelId"] as? String).flatMap { cur in
+                list.first { $0["modelId"] as? String == cur }?["name"] as? String ?? cur
+            }
+            parsed.insert(ModelInfo(id: "", name: current.map { "Default (\($0))" } ?? "Default"), at: 0)
+            models = parsed
         }
         return sid
     }

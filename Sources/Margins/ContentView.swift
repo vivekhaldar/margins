@@ -61,19 +61,11 @@ struct ProviderMenu: View {
                 Section(p.name) {
                     let list = state.models[p.id] ?? []
                     if list.isEmpty {
-                        Button(p.id == state.activeProviderID ? "✓ Default model" : "Default model") {
-                            state.activeProviderID = p.id
-                        }
+                        Toggle("Default model", isOn: selection(p, ""))
                         Button("Load models…") { Task { await state.loadModels(for: p) } }
                     } else {
                         ForEach(list) { m in
-                            Button {
-                                state.activeProviderID = p.id
-                                state.setModel(m.id, for: p.id)
-                            } label: {
-                                let on = p.id == state.activeProviderID && p.model == m.id
-                                Text((on ? "✓ " : "") + m.name)
-                            }
+                            Toggle(m.name, isOn: selection(p, m.id))
                         }
                     }
                 }
@@ -90,9 +82,26 @@ struct ProviderMenu: View {
         }
     }
 
+    /// Checkmark binding: on when this provider is active and this model is its selected one.
+    private func selection(_ p: ProviderConfig, _ modelID: String) -> Binding<Bool> {
+        Binding(
+            get: { p.id == state.activeProviderID && p.model == modelID },
+            set: { _ in
+                state.activeProviderID = p.id
+                state.setModel(modelID, for: p.id)
+            }
+        )
+    }
+
     private var currentLabel: String {
         guard let p = state.activeProvider else { return "No provider" }
-        let model = state.models[p.id]?.first { $0.id == p.model }?.name ?? p.model
+        var model = state.models[p.id]?.first { $0.id == p.model }?.name ?? p.model
+        // "Default (Claude Sonnet 5.5)" → show the concrete model in the toolbar.
+        if p.model.isEmpty, let open = model.firstIndex(of: "("), model.hasSuffix(")") {
+            model = String(model[model.index(after: open)..<model.index(before: model.endIndex)])
+        } else if p.model.isEmpty, model == "Default" || model.hasPrefix("Default ") {
+            model = "Default"
+        }
         return model.isEmpty ? p.name : "\(p.name) · \(model)"
     }
 }
