@@ -15,6 +15,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Margins" "$APP/Contents/MacOS/Margins"
 cp -R "$BIN_DIR/Margins_Margins.bundle" "$APP/Contents/Resources/"
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # regenerate: swift scripts/make-icon.swift
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -26,6 +27,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.vivekhaldar.margins</string>
   <key>CFBundleExecutable</key><string>Margins</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -37,6 +39,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <dict>
       <key>CFBundleTypeName</key><string>Margins Document</string>
       <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>CFBundleTypeIconFile</key><string>AppIcon</string>
       <key>LSHandlerRank</key><string>Owner</string>
       <key>LSItemContentTypes</key><array><string>com.vivekhaldar.margins.document</string></array>
     </dict>
