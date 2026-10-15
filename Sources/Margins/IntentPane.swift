@@ -143,6 +143,12 @@ struct IntentCard: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(intent.text).font(.body.weight(.medium)).textSelection(.enabled)
             status
+            if intent.steps != nil || state.liveThought[intent.step] != nil {
+                AgentActivity(intent: intent)
+            }
+            if let ask = state.permissionAsks[intent.step] {
+                PermissionPrompt(ask: ask)
+            }
             if !intent.summary.isEmpty {
                 Text(intent.summary).font(.callout).foregroundStyle(.secondary)
             }
@@ -185,7 +191,7 @@ struct IntentCard: View {
             switch intent.status {
             case .working:
                 ProgressView().controlSize(.mini)
-                Text("Working…")
+                Text(state.permissionAsks[intent.step] != nil ? "Waiting for you…" : "Working…")
             case .pending:
                 chip("\(pendingCount) pending", .orange)
             case .reviewed:
@@ -196,6 +202,12 @@ struct IntentCard: View {
                 chip("failed", .red)
             }
             if !intent.provider.isEmpty { Text(intent.provider).lineLimit(1) }
+            if intent.status == .working {
+                Spacer()
+                Button("Stop") { state.stop(step: intent.step) }
+                    .buttonStyle(.borderless).controlSize(.small)
+                    .help("Stop the agent")
+            }
         }
         .font(.caption).foregroundStyle(.secondary)
         if let e = intent.error {
@@ -208,5 +220,127 @@ struct IntentCard: View {
             .padding(.horizontal, 6).padding(.vertical, 1)
             .background(Capsule().fill(c.opacity(0.15)))
             .foregroundStyle(c)
+    }
+}
+
+/// The agent's tool calls for one instruction: live while working, collapsed afterwards.
+private struct AgentActivity: View {
+    @EnvironmentObject var state: AppState
+    let intent: Intent
+    @StateObject private var expanded = Local(false)
+
+    private var steps: [AgentStep] { intent.steps ?? [] }
+    private var working: Bool { intent.status == .working }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if working {
+                ForEach(steps.suffix(6)) { StepRow(step: $0) }
+                if steps.count > 6 {
+                    Text("+ \(steps.count - 6) earlier").font(.caption2).foregroundStyle(.tertiary)
+                }
+                if let t = state.liveThought[intent.step]?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+                    Text(t).font(.caption).italic().foregroundStyle(.secondary).lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else if !steps.isEmpty {
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { expanded.value.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: expanded.value ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .bold))
+                        Text(summary)
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if expanded.value { ForEach(steps) { StepRow(step: $0) } }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var summary: String {
+        let n = steps.count
+        let denied = steps.filter { $0.status == .denied }.count
+        var s = "Used \(n) tool\(n == 1 ? "" : "s")"
+        let kinds = Set(steps.map(\.kind))
+        var what: [String] = []
+        if kinds.contains(.fetch) || kinds.contains(.search) { what.append("web") }
+        if kinds.contains(.execute) { what.append("shell") }
+        if kinds.contains(.read) || kinds.contains(.edit) { what.append("files") }
+        if !what.isEmpty { s += " · " + what.joined(separator: ", ") }
+        if denied > 0 { s += " · \(denied) denied" }
+        return s
+    }
+}
+
+private struct StepRow: View {
+    let step: AgentStep
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Group {
+                switch step.status {
+                case .running: ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+                case .done: Image(systemName: step.kind.symbol).foregroundStyle(.secondary)
+                case .failed: Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                case .denied: Image(systemName: "hand.raised").foregroundStyle(.red)
+                }
+            }
+            .font(.system(size: 9)).frame(width: 12)
+            Text(label).lineLimit(1).truncationMode(.middle)
+                .foregroundStyle(step.status == .denied ? .tertiary : .secondary)
+                .strikethrough(step.status == .denied)
+        }
+        .font(.caption)
+        .help(step.detail.isEmpty ? step.title : step.detail)
+    }
+
+    private var label: AttributedString {
+        let firstLine = step.detail.split(separator: "\n").first.map(String.init) ?? ""
+        var a = AttributedString(step.title.isEmpty ? step.kind.rawValue.capitalized : step.title)
+        if !firstLine.isEmpty, !step.title.contains(firstLine) {
+            var d = AttributedString("  " + firstLine)
+            d.font = .system(.caption, design: .monospaced)
+            a += d
+        }
+        return a
+    }
+}
+
+/// Inline approval for a side-effecting tool call (Research mode).
+private struct PermissionPrompt: View {
+    @EnvironmentObject var state: AppState
+    let ask: PermissionAsk
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(ask.request.title, systemImage: ask.request.kind.symbol)
+                .font(.caption.weight(.semibold))
+            if !ask.request.detail.isEmpty {
+                ScrollView {
+                    Text(ask.request.detail)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 90)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+            }
+            HStack(spacing: 6) {
+                Button("Allow") { state.answerPermission(step: ask.step, .allowOnce) }
+                Button("Allow all") { state.answerPermission(step: ask.step, .allowAlways) }
+                    .help("Allow this and similar actions for the rest of this instruction")
+                Button("Deny") { state.answerPermission(step: ask.step, .deny) }
+            }
+            .controlSize(.small)
+            Text("The agent works in this document's workspace folder.")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.45)))
     }
 }

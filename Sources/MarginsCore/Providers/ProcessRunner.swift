@@ -72,8 +72,10 @@ public struct ProcessResult: Sendable {
 
 public enum ProcessRunner {
     /// Run a process to completion, feeding `stdin`, collecting stdout/stderr concurrently.
+    /// `onLine` (optional) receives each stdout line as it arrives, for streaming progress.
     public static func run(_ executable: URL, arguments: [String], stdin: String? = nil,
-                           cwd: URL? = nil, environment: [String: String]? = nil) async throws -> ProcessResult {
+                           cwd: URL? = nil, environment: [String: String]? = nil,
+                           onLine: (@Sendable (String) -> Void)? = nil) async throws -> ProcessResult {
         let p = Process()
         p.executableURL = executable
         p.arguments = arguments
@@ -90,7 +92,24 @@ public enum ProcessRunner {
                 let outData = DataBox(), errData = DataBox()
                 group.enter()
                 DispatchQueue.global().async {
-                    outData.data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                    let h = outPipe.fileHandleForReading
+                    if let onLine {
+                        var pending = Data()
+                        while true {
+                            let chunk = h.availableData
+                            if chunk.isEmpty { break }
+                            outData.data.append(chunk)
+                            pending.append(chunk)
+                            while let nl = pending.firstIndex(of: 0x0A) {
+                                let line = String(decoding: pending[pending.startIndex..<nl], as: UTF8.self)
+                                pending.removeSubrange(pending.startIndex...nl)
+                                if !line.isEmpty { onLine(line) }
+                            }
+                        }
+                        if !pending.isEmpty { onLine(String(decoding: pending, as: UTF8.self)) }
+                    } else {
+                        outData.data = h.readDataToEndOfFile()
+                    }
                     group.leave()
                 }
                 group.enter()

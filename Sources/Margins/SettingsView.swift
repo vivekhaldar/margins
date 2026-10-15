@@ -114,10 +114,10 @@ private struct ProviderDetail: View {
 
     private var signInHint: String {
         switch config.kind {
-        case .copilot: return "Sign in once in Terminal with `copilot` → /login. Margins talks to it over ACP and grants it no tools or file access."
-        case .codex: return "Sign in once in Terminal with `codex login` (choose “Sign in with ChatGPT”). Runs read-only and ephemeral."
-        case .claudeCode: return "Sign in once in Terminal with `claude` → /login using your Claude Pro/Max account. Runs with all tools disabled."
-        case .openAICompatible: return ""
+        case .copilot: return "Sign in once in Terminal with `copilot` → /login. Margins talks to it over ACP; every tool call goes through Margins' permission policy (Agent tools in the model menu), and Research mode asks you before commands or file writes."
+        case .codex: return "Sign in once in Terminal with `codex login` (choose “Sign in with ChatGPT”). Runs in Codex's OS sandbox: read-only plus web search in Research mode, workspace-write with network in Full agent mode."
+        case .claudeCode: return "Sign in once in Terminal with `claude` → /login using your Claude Pro/Max account. Research mode pre-approves only web and read tools; Full agent adds Bash, Write and Edit."
+        case .openAICompatible: return ""  // no agent loop: always answers from the document only
         }
     }
 

@@ -25,23 +25,55 @@ public struct GenerationRequest: Sendable {
     public var system: String
     public var prompt: String
     public var model: String?
+    /// When set (and the policy isn't `.off`), the provider runs as a tool-using agent.
+    public var agent: AgentContext?
 
-    public init(system: String, prompt: String, model: String? = nil) {
+    public init(system: String, prompt: String, model: String? = nil, agent: AgentContext? = nil) {
         self.system = system
         self.prompt = prompt
         self.model = model
+        self.agent = agent
     }
+
+    /// The agent context if tools are enabled, else nil.
+    public var tools: AgentContext? { agent?.policy == .off ? nil : agent }
 
     /// For providers without a separate system channel (CLI agents).
     public var combined: String { system + "\n\n---\n\n" + prompt }
 }
 
 public enum PromptBuilder {
-    public static let system = """
+    public static let system = system(tools: nil)
+
+    /// System prompt; `tools` describes what the agent may do before answering.
+    public static func system(tools: AgentContext?) -> String {
+        let intro: String
+        switch tools?.policy {
+        case nil, .off?:
+            intro = """
+            You do not chat. You never reply in prose. \
+            You never use tools, read files, or run commands. You respond with exactly one JSON object \
+            and nothing else, matching this schema:
+            """
+        case let p?:
+            let ws = tools!.workspace.path
+            let can = p == .full
+                ? "fetch web pages, search the web, run shell commands, and read and write files"
+                : "fetch web pages, search the web, and read files (shell commands and file writes need the author's approval and may be denied)"
+            intro = """
+            You are a capable agent: before answering you may use your tools to \(can). \
+            Use them whenever the instruction needs information that is not in the document — \
+            e.g. read a linked page, look up facts, get a video transcript, check data. \
+            Your working directory is \(ws); it belongs to this document and persists between instructions, \
+            so keep downloads and scratch files there and never modify anything outside it. \
+            Do not ask the author questions mid-task; make reasonable assumptions and record them in notes. \
+            Do not narrate. When you are done, your FINAL message must be exactly one JSON object \
+            and nothing else, matching this schema:
+            """
+        }
+        return """
     You are the editing engine inside Margins, an app where an author refines a single document \
-    by giving natural-language instructions. You do not chat. You never reply in prose. \
-    You never use tools, read files, or run commands. You respond with exactly one JSON object \
-    and nothing else, matching this schema:
+    by giving natural-language instructions. \(intro)
 
     \(EditPlanSchema.json)
 
@@ -63,8 +95,13 @@ public enum PromptBuilder {
       using insertAfter "^" edits.
     - Match the author's voice. Be concrete. Do not pad.
     - slug: at most 6 lowercase words naming the change (e.g. "tighten intro, add rollout plan").
-    - summary: one sentence. notes: 0-3 short assumptions you made or questions for the author.
+    - summary: one sentence. notes: 0-3 short assumptions you made or questions for the author.\(tools == nil ? "" : """
+
+    - If you used sources (web pages, transcripts, files), cite them as links in the document where it helps the reader. \
+      Never invent facts you could not verify; say what you could not access in notes.
+    """)
     """
+    }
 
     public static func editPrompt(blocks: [Block], instruction: String, focus: [String] = []) -> String {
         var s = "DOCUMENT\n"

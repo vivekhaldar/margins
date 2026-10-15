@@ -77,16 +77,28 @@ struct ProviderMenu: View {
                 }
             }
             Divider()
+            Section("Agent tools") {
+                ForEach(AgentToolPolicy.allCases) { p in
+                    Toggle(p.title, isOn: Binding(get: { state.toolPolicy == p }, set: { _ in state.toolPolicy = p }))
+                }
+                if state.toolPolicy != .off, state.activeProvider?.kind.supportsTools == false {
+                    Text("This provider has no tools; it answers from the document only.")
+                }
+                Button("Reveal Agent Workspace") { state.revealWorkspace() }
+            }
+            Divider()
             SettingsLink { Text("Providers…") }
         } label: {
-            Label(currentLabel, systemImage: "cpu")
+            Label(currentLabel, systemImage: toolsActive ? "wand.and.stars" : "cpu")
                 .labelStyle(.titleAndIcon)
         }
-        .help("Model provider")
+        .help(toolsActive ? "Model provider · agent tools: \(state.toolPolicy.shortTitle)" : "Model provider")
         .task(id: state.activeProviderID) {
             if let p = state.activeProvider, state.models[p.id] == nil { await state.loadModels(for: p) }
         }
     }
+
+    private var toolsActive: Bool { state.toolPolicy != .off && state.activeProvider?.kind.supportsTools == true }
 
     /// Checkmark binding: on when this provider is active and this model is its selected one.
     private func selection(_ p: ProviderConfig, _ modelID: String) -> Binding<Bool> {

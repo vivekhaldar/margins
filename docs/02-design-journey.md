@@ -46,3 +46,9 @@ Things that changed on the way from mock to app:
 - **Agent notes.** The edit plan includes a one-line summary and any *assumptions* the agent made ("assumed a Redis-backed limiter"). These show on the instruction card and replace the chat reply you would otherwise get.
 - **Quick chips** under the composer ("Tighten the prose", "Add a summary at the top"…) for common refinements.
 - **Provider/model picker** in the toolbar, because different instructions deserve different models. See [model providers](03-model-providers.md).
+
+## Step 6: a real agent behind the page
+
+At first the backend was deliberately one-shot: document in, edit plan out, no tools. The first real use ("populate this doc with a summary of <YouTube link>") showed the problem. The model couldn't open the link, so the card just apologized. The point of Margins is that the *output* isn't chat. The *backend* can be as agentic as the task needs.
+
+So the backend became a full agent that can reason, search, fetch, read and run commands, with three user-chosen tool levels (Off / Research / Full). The paradigm still holds: tool activity streams onto the instruction card as a compact log rather than chat turns, permission asks appear inline on that card, and the agent's final answer is still an edit plan, so whatever it found arrives as tracked changes. Details: [model providers → agent mode](03-model-providers.md#agent-mode-revision).

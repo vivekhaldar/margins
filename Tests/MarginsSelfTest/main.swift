@@ -150,10 +150,85 @@ test("binary locator") {
     check(BinaryLocator.locate("x", override: "/bin/sh")?.path == "/bin/sh", "override")
 }
 
+test("agent policy auto-decisions") {
+    let ws = URL(fileURLWithPath: "/tmp")
+    let research = AgentContext(policy: .research, workspace: ws)
+    check(research.autoDecision(for: .fetch) == .allowOnce, "research allows fetch")
+    check(research.autoDecision(for: .read) == .allowOnce, "research allows read")
+    check(research.autoDecision(for: .execute) == nil, "research asks for execute")
+    check(research.autoDecision(for: .edit) == nil, "research asks for edit")
+    check(AgentContext(policy: .full, workspace: ws).autoDecision(for: .execute) == .allowAlways, "full allows execute")
+    check(AgentContext(policy: .off, workspace: ws).autoDecision(for: .fetch) == .deny, "off denies")
+    check(GenerationRequest(system: "", prompt: "", agent: AgentContext(policy: .off, workspace: ws)).tools == nil, "off → no tools")
+    check(GenerationRequest(system: "", prompt: "", agent: research).tools != nil, "research → tools")
+}
+
+test("tool-aware system prompt") {
+    let ws = URL(fileURLWithPath: "/tmp/ws-xyz")
+    check(PromptBuilder.system.contains("never use tools"), "one-shot forbids tools")
+    let s = PromptBuilder.system(tools: AgentContext(policy: .full, workspace: ws))
+    check(!s.contains("never use tools") && s.contains("/tmp/ws-xyz") && s.contains("run shell commands"), "full prompt")
+    check(s.contains("FINAL message must be exactly one JSON object") && s.contains(EditPlanSchema.json), "schema kept")
+    check(PromptBuilder.system(tools: AgentContext(policy: .research, workspace: ws)).contains("need the author's approval"), "research prompt")
+}
+
+test("ACP permission outcome mapping") {
+    let opts: [[String: Any]] = [["optionId": "a1", "kind": "allow_once"], ["optionId": "a2", "kind": "allow_always"],
+                                 ["optionId": "r1", "kind": "reject_once"]]
+    check(ACPProvider.outcome(.allowOnce, options: opts)["optionId"] as? String == "a1", "allow once")
+    check(ACPProvider.outcome(.allowAlways, options: opts)["optionId"] as? String == "a2", "allow always")
+    check(ACPProvider.outcome(.deny, options: opts)["optionId"] as? String == "r1", "deny")
+    check(ACPProvider.outcome(.deny, options: [])["outcome"] as? String == "cancelled", "no options → cancelled")
+    let step = ACPProvider.step(from: ["toolCallId": "t1", "kind": "fetch", "title": "Fetching x", "status": "pending",
+                                       "rawInput": ["url": "https://x.dev"]], denied: TextCollector())
+    check(step == AgentStep(id: "t1", kind: .fetch, title: "Fetching x", detail: "https://x.dev", status: .running), "acp step")
+}
+
+test("codex exec events") {
+    let started = #"{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo hi > hi.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}"#
+    guard case .step(let s)? = CodexExecProvider.events(started).first else { check(false, "no step"); return }
+    check(s.kind == .execute && s.detail == "echo hi > hi.txt" && s.status == .running, "command started")
+    let failed = #"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls","exit_code":2,"status":"failed"}}"#
+    if case .step(let f)? = CodexExecProvider.events(failed).first { check(f.status == .failed, "command failed") } else { check(false, "no fail step") }
+    let search = #"{"type":"item.completed","item":{"id":"ws_1","type":"web_search","query":"andrew ng"}}"#
+    if case .step(let w)? = CodexExecProvider.events(search).first { check(w.kind == .search && w.detail == "andrew ng" && w.status == .done, "web search") } else { check(false, "no search") }
+    let final = #"{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"{\"edits\":[]}"}}"#
+    check(CodexExecProvider.events(final).isEmpty, "final answer is not a thought")
+    check(CodexExecProvider.policyArguments(.full).contains("workspace-write"), "full sandbox")
+    check(CodexExecProvider.policyArguments(.research).contains("read-only"), "research sandbox")
+}
+
+test("claude stream-json events") {
+    let names = ClaudeCodeProvider.ToolNames()
+    let use = #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"WebFetch","input":{"url":"https://a.b","prompt":"x"}}]}}"#
+    guard case .step(let s)? = ClaudeCodeProvider.events(use, names: names).first else { check(false, "no step"); return }
+    check(s.kind == .fetch && s.detail == "https://a.b" && s.status == .running, "tool_use")
+    let res = #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","is_error":true,"content":"nope"}]}}"#
+    if case .step(let r)? = ClaudeCodeProvider.events(res, names: names).first { check(r.status == .failed && r.kind == .fetch, "tool_result") } else { check(false, "no result") }
+    let so = #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu2","name":"StructuredOutput","input":{}}]}}"#
+    check(ClaudeCodeProvider.events(so, names: names).isEmpty, "StructuredOutput hidden")
+    check(ClaudeCodeProvider.policyArguments(.research).contains("WebFetch,WebSearch,Read,Grep,Glob"), "research tools")
+    check(!ClaudeCodeProvider.policyArguments(.research).joined().contains("Bash"), "research has no Bash")
+}
+
+test("document id round-trips; old docs get one") {
+    var d = MarginsDocument(html: "<h1>x</h1>")
+    d.intents = [Intent(step: 1, text: "t")]
+    d.intents[0].steps = [AgentStep(id: "a", kind: .fetch, title: "Fetch", status: .done)]
+    let back = try MarginsDocument.decode(try d.encoded())
+    check(back.id == d.id, "id persisted")
+    check(back.intents[0].steps?.first?.kind == .fetch, "steps persisted")
+    let legacy = try MarginsDocument.decode(Data(#"{"html":"","intents":[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","kind":"instruction","step":1,"text":"t","createdAt":"2026-01-01T00:00:00Z","status":"done","summary":"","notes":[],"refinements":[],"provider":""}],"versions":[],"nextStep":2}"#.utf8))
+    check(legacy.intents[0].steps == nil, "legacy intent decodes")
+}
+
 let sem = DispatchSemaphore(value: 0)
 Task {
     let r = try! await ProcessRunner.run(URL(fileURLWithPath: "/bin/cat"), arguments: [], stdin: "hello")
     check(r.stdout == "hello" && r.status == 0, "process runner stdin/stdout")
+    let lines = TextCollector()
+    let r2 = try! await ProcessRunner.run(URL(fileURLWithPath: "/bin/cat"), arguments: [], stdin: "a\nb\nc", onLine: { lines.append("[\($0)]") })
+    check(r2.stdout == "a\nb\nc" && lines.text == "[a][b][c]", "process runner streams lines")
     sem.signal()
 }
 sem.wait()

@@ -3,8 +3,9 @@ import Foundation
 /// Minimal Agent Client Protocol (ACP) client: JSON-RPC 2.0, newline-delimited, over stdio.
 /// https://agentclientprotocol.com — spoken by `copilot --acp`, Gemini CLI, and Claude Code / Codex adapters.
 ///
-/// Margins advertises no filesystem or terminal capabilities and cancels every permission
-/// request, so the agent can only *answer*; it cannot touch the user's machine.
+/// Margins advertises no client filesystem or terminal capabilities: the agent uses its own
+/// built-in tools (web fetch, shell, file edits) in the document's workspace, and every
+/// permission request is routed to a per-session handler that applies the user's tool policy.
 public final class ACPClient: @unchecked Sendable {
     public typealias JSON = [String: Any]
 
@@ -16,6 +17,7 @@ public final class ACPClient: @unchecked Sendable {
     private var nextId = 0
     private var pending: [Int: CheckedContinuation<JSON, Error>] = [:]
     private var sinks: [String: (JSON) -> Void] = [:]
+    private var permissionHandlers: [String: @Sendable (JSON) async -> JSON] = [:]
     private var stderrTail = ""
     public private(set) var isRunning = false
 
@@ -64,7 +66,13 @@ public final class ACPClient: @unchecked Sendable {
         queue.sync { sinks[session] = handler }
     }
 
-    public func request(_ method: String, _ params: JSON) async throws -> JSON {
+    /// Register a handler that answers `session/request_permission` for one session.
+    /// It receives the request params and returns the `outcome` object.
+    public func onPermission(session: String, _ handler: (@Sendable (JSON) async -> JSON)?) {
+        queue.sync { permissionHandlers[session] = handler }
+    }
+
+    public func request(_ method: String, _ params: JSON) async throws -> ACPClient.JSON {
         try await withCheckedThrowingContinuation { cont in
             queue.async {
                 guard self.isRunning else {
@@ -106,9 +114,19 @@ public final class ACPClient: @unchecked Sendable {
         let method = msg["method"] as? String
         let id = msg["id"]
         if let method, let id {
-            // Agent → client request. We grant nothing.
+            // Agent → client request.
             if method == "session/request_permission" {
-                send(["jsonrpc": "2.0", "id": id, "result": ["outcome": ["outcome": "cancelled"]]])
+                let params = msg["params"] as? ACPClient.JSON ?? [:]
+                guard let sid = params["sessionId"] as? String, let handler = permissionHandlers[sid] else {
+                    send(["jsonrpc": "2.0", "id": id, "result": ["outcome": ["outcome": "cancelled"]]])
+                    return
+                }
+                let reqID = id as Any
+                let box = UncheckedBox(params)
+                Task {
+                    let outcome = await handler(box.value)
+                    self.queue.async { self.send(["jsonrpc": "2.0", "id": reqID, "result": ["outcome": outcome]]) }
+                }
             } else {
                 send(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Margins does not support \(method)"]])
             }
@@ -164,8 +182,9 @@ public final class ACPProvider: ModelProvider {
         }
     }
 
-    private func newSession(_ c: ACPClient) async throws -> String {
-        let r = try await c.request("session/new", ["cwd": ProcessRunner.scratchDirectory().path, "mcpServers": []])
+    private func newSession(_ c: ACPClient, cwd: URL? = nil) async throws -> String {
+        let dir = cwd ?? ProcessRunner.scratchDirectory()
+        let r = try await c.request("session/new", ["cwd": dir.path, "mcpServers": []])
         guard let sid = r["sessionId"] as? String else { throw ProviderError.protocolError("ACP: no sessionId") }
         if let m = r["models"] as? [String: Any], let list = m["availableModels"] as? [[String: Any]] {
             var parsed: [ModelInfo] = list.compactMap { item in
@@ -196,17 +215,60 @@ public final class ACPProvider: ModelProvider {
 
     public func generate(_ request: GenerationRequest) async throws -> String {
         let c = try await ready()
-        let sid = try await newSession(c)
-        defer { c.onUpdate(session: sid, nil) }
+        let agent = request.agent
+        let tools = request.tools
+        let sid = try await newSession(c, cwd: tools?.workspace)
+        defer {
+            c.onUpdate(session: sid, nil)
+            c.onPermission(session: sid, nil)
+        }
         if let model = request.model, !model.isEmpty {
             _ = try await c.request("session/set_model", ["sessionId": sid, "modelId": model])
         }
         let collector = TextCollector()
+        let emit = agent?.onEvent ?? { _ in }
+        let denied = TextCollector()
         c.onUpdate(session: sid) { update in
-            if update["sessionUpdate"] as? String == "agent_message_chunk",
-               let content = update["content"] as? [String: Any], let t = content["text"] as? String {
-                collector.append(t)
+            switch update["sessionUpdate"] as? String {
+            case "agent_message_chunk":
+                if let content = update["content"] as? [String: Any], let t = content["text"] as? String {
+                    collector.append(t)
+                }
+            case "agent_thought_chunk":
+                if let content = update["content"] as? [String: Any], let t = content["text"] as? String {
+                    emit(.thought(t))
+                }
+            case "tool_call", "tool_call_update":
+                // Narration before a tool call isn't the answer; the final message is.
+                let said = collector.take()
+                if !said.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { emit(.thought(said)) }
+                if let step = Self.step(from: update, denied: denied) { emit(.step(step)) }
+            default: break
             }
+        }
+        c.onPermission(session: sid) { params in
+            let call = params["toolCall"] as? ACPClient.JSON ?? [:]
+            let options = params["options"] as? [ACPClient.JSON] ?? []
+            let kind = ToolKind(loose: call["kind"] as? String)
+            let id = call["toolCallId"] as? String ?? UUID().uuidString
+            let decision: PermissionDecision
+            if let agent, agent.policy != .off {
+                if let auto = agent.autoDecision(for: kind) {
+                    decision = auto
+                } else {
+                    decision = await agent.askPermission(PermissionRequest(
+                        id: id, kind: kind, title: call["title"] as? String ?? kind.rawValue,
+                        detail: ToolInput.detail(call["rawInput"])))
+                }
+            } else {
+                decision = .deny
+            }
+            if decision == .deny {
+                denied.append("\u{1}\(id)\u{1}")
+                emit(.step(AgentStep(id: id, kind: kind, title: call["title"] as? String ?? kind.rawValue,
+                                     detail: ToolInput.detail(call["rawInput"]), status: .denied)))
+            }
+            return Self.outcome(decision, options: options)
         }
         let prompt: [String: Any] = ["type": "text", "text": request.combined]
         let result = try await withTaskCancellationHandler {
@@ -215,16 +277,53 @@ public final class ACPProvider: ModelProvider {
             c.notify("session/cancel", ["sessionId": sid])
         }
         let stop = result["stopReason"] as? String ?? "?"
-        let text = collector.text
-        if text.isEmpty { throw ProviderError.protocolError("Agent returned no text (stopReason: \(stop)).") }
-        return text
+        if stop == "cancelled" || Task.isCancelled { throw CancellationError() }
+        let out = collector.text
+        if out.isEmpty { throw ProviderError.protocolError("Agent returned no text (stopReason: \(stop)).") }
+        return out
     }
+
+    /// Map an ACP permission decision onto one of the offered options.
+    static func outcome(_ d: PermissionDecision, options: [ACPClient.JSON]) -> ACPClient.JSON {
+        let wanted: [String]
+        switch d {
+        case .allowOnce: wanted = ["allow_once", "allow_always"]
+        case .allowAlways: wanted = ["allow_always", "allow_once"]
+        case .deny: wanted = ["reject_once", "reject_always"]
+        }
+        for k in wanted {
+            if let o = options.first(where: { $0["kind"] as? String == k }), let id = o["optionId"] as? String {
+                return ["outcome": "selected", "optionId": id]
+            }
+        }
+        return ["outcome": "cancelled"]
+    }
+
+    /// Turn an ACP `tool_call` / `tool_call_update` into a step for the instruction card.
+    static func step(from u: ACPClient.JSON, denied: TextCollector) -> AgentStep? {
+        guard let id = u["toolCallId"] as? String else { return nil }
+        let status: AgentStep.Status
+        switch u["status"] as? String {
+        case "completed": status = .done
+        case "failed": status = denied.text.contains("\u{1}\(id)\u{1}") ? .denied : .failed
+        default: status = .running
+        }
+        return AgentStep(id: id, kind: ToolKind(loose: u["kind"] as? String),
+                         title: u["title"] as? String ?? "", detail: ToolInput.detail(u["rawInput"]), status: status)
+    }
+}
+
+final class UncheckedBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ v: T) { value = v }
 }
 
 final class TextCollector: @unchecked Sendable {
     private var parts: [String] = []
     private let lock = NSLock()
     func append(_ s: String) { lock.lock(); parts.append(s); lock.unlock() }
+    /// Return everything collected so far and clear it.
+    func take() -> String { lock.lock(); defer { parts.removeAll(); lock.unlock() }; return parts.joined() }
     var text: String { lock.lock(); defer { lock.unlock() }; return parts.joined() }
 }
 

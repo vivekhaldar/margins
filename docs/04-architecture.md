@@ -81,20 +81,42 @@ Two more channels serve images. `webkit.messageHandlers.assets` is a reply handl
 5. A `Version` (author *agent*, slug from the plan) is snapshotted, and the document autosaves.
 6. Review or user edits produce further versions (author *review* / *you*) with generated slugs.
 
+## Agent runs
+
+When the tool policy isn't *Off*, `AppState.submit` attaches an `AgentContext` (in `MarginsCore/Providers/Agent.swift`) to the `GenerationRequest`:
+
+- `policy`: `off | research | full` (`AgentToolPolicy`).
+- `workspace`: the per-document directory, keyed by `MarginsDocument.id`.
+- `onEvent(AgentEvent)`: `.step(AgentStep)` for each tool call or update (kind, title, detail such as the command or URL, and status running/done/failed/denied) and `.thought(String)` for narration.
+- `askPermission(PermissionRequest) async -> PermissionDecision`: called only when `autoDecision(for:)` returns nil, i.e. a non-read-only tool under *Research*. `AppState` stores a `PermissionAsk` for the card, `PermissionPrompt` renders it, and the continuation resumes on Allow / Allow all / Deny.
+
+`PromptBuilder.system(tools:)` adds an agent preamble: which tools are allowed, the workspace path, "cite sources, don't invent facts", and "your final message must be only the edit-plan JSON".
+
+Provider adapters translate their native streams into `AgentEvent`s:
+
+| Provider | Source of events | Permission |
+|---|---|---|
+| Copilot | ACP `session/update` (`tool_call`, `tool_call_update`, `agent_thought_chunk`, narration flushed when a tool call starts) | `session/request_permission` → `ACPProvider.outcome(decision, options)` |
+| Codex | `codex exec --json` lines (`item.started` / `item.completed`) via `CodexProvider.events` | none (sandbox) |
+| Claude | `stream-json` lines (`tool_use`, `tool_result`, `thinking`) via `ClaudeProvider.events` | none (allow-list) |
+
+`ProcessRunner.run(onLine:)` streams subprocess stdout line by line. Each run's `Task` is kept in `AppState.running[step]`, so Stop / ⌘. can cancel it. Steps are saved on the `Intent` (`steps`), so a finished card can still show "Used 6 tools · web, shell". The live thought and pending permission asks are transient.
+
 ## File format
 
 `*.margins` is JSON:
 
 ```json
-{ "format": 1, "html": "…", "nextStep": 4,
+{ "format": 1, "id": "…uuid…", "html": "…", "nextStep": 4,
   "intents":  [{ "id": "…", "step": 1, "kind": "instruction", "text": "…", "status": "done", "summary": "…",
-                 "notes": [], "provider": "GitHub Copilot", "refinements": 0, "createdAt": "…" }],
+                 "notes": [], "provider": "GitHub Copilot", "refinements": 0, "createdAt": "…",
+                 "steps": [{ "id": "…", "kind": "fetch", "title": "Fetching web content", "detail": "https://…", "status": "done" }] }],
   "versions": [{ "id": "…", "number": 1, "slug": "draft rate limiting design note", "author": "agent",
                  "detail": "<instruction>", "html": "…", "createdAt": "…" }],
   "assets":   { "3f9a…": { "mime": "image/svg+xml", "data": "<base64>" } } }
 ```
 
-`assets` is optional, so older files without it still open.
+`assets`, `id` and `steps` are optional, so older files still open. A missing `id` is assigned on open and saved.
 
 Pending changes are saved as part of `html`, so you can quit mid-review and pick it up later.
 

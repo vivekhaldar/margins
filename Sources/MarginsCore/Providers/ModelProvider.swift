@@ -29,7 +29,15 @@ public extension ModelProvider {
             return try EditPlanParser.parse(text)
         } catch {
             var retry = request
-            retry.prompt += "\n\nYour previous output was not a valid edit plan (\(error.localizedDescription)). Return ONLY the JSON object."
+            if request.tools != nil {
+                // Don't redo the research: reformat what the agent already produced, without tools.
+                retry.agent?.policy = .off
+                retry.system = PromptBuilder.system
+                retry.prompt += "\n\nYou already did the work; your final output was not a valid edit plan "
+                    + "(\(error.localizedDescription)):\n\n\(text.suffix(30_000))\n\nReturn ONLY the corrected JSON object."
+            } else {
+                retry.prompt += "\n\nYour previous output was not a valid edit plan (\(error.localizedDescription)). Return ONLY the JSON object."
+            }
             return try EditPlanParser.parse(try await generate(retry))
         }
     }
@@ -60,6 +68,9 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
         case .openAICompatible: return "Pay-per-token API key, or a local server such as Ollama (http://localhost:11434/v1)."
         }
     }
+
+    /// Whether this backend is a real agent that can use tools (web, shell, files).
+    public var supportsTools: Bool { self != .openAICompatible }
 
     public var defaultBinary: String? {
         switch self {

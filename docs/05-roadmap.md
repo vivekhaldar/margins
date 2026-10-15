@@ -16,10 +16,11 @@ Roughly in priority order.
 
 ## Providers
 - **More ACP agents** (Gemini CLI, etc.): the ACP client is generic.
+- **Agent mode polish**: per-document tool policy, MCP servers in agent sessions, showing sources/citations as links on the card, and sandboxing Copilot/Claude commands (e.g. `sandbox-exec`) the way Codex already is.
 - **Per-instruction model choice** remembered per document.
 - Surface **premium-request cost** (Copilot `copilotUsage` multipliers) in the model picker.
 
 ## Platform
-- App icon, an Xcode project, notarized builds.
+- An Xcode project, notarized builds.
 - Real XCTest / swift-testing suite once built with full Xcode (currently `MarginsSelfTest`).
 - Optional sandboxed build that only supports HTTP providers.

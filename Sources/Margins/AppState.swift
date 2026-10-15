@@ -4,6 +4,14 @@ import MarginsCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// A tool call waiting for the author's go-ahead, shown on its instruction card.
+struct PermissionAsk: Identifiable {
+    let request: PermissionRequest
+    let step: Int
+    let resume: (PermissionDecision) -> Void
+    var id: String { request.id }
+}
+
 struct PendingInfo: Equatable {
     var total = 0
     var byStep: [Int: Int] = [:]
@@ -28,6 +36,17 @@ final class AppState: ObservableObject {
         }
     }
     @Published var hoveredStep: Int?
+    /// What the backend agent may do (web, commands, files). Persisted.
+    @Published var toolPolicy: AgentToolPolicy = .research {
+        didSet { defaults.set(toolPolicy.rawValue, forKey: "toolPolicy") }
+    }
+    /// Latest reasoning/narration per working instruction (not persisted).
+    @Published var liveThought: [Int: String] = [:]
+    /// Tool calls awaiting approval, per instruction step.
+    @Published var permissionAsks: [Int: PermissionAsk] = [:]
+    private var running: [Int: Task<Void, Never>] = [:]
+    /// Steps whose next thought starts a fresh paragraph (a tool call happened since the last one).
+    private var thoughtBreak: Set<Int> = []
     @Published var lastError: String?
 
     @Published var providers: [ProviderConfig] { didSet { persistProviders() } }
@@ -56,6 +75,7 @@ final class AppState: ObservableObject {
         editor.assetLookup = { [weak self] id in self?.doc.assets[id] }
         editor.onAddAsset = { [weak self] data, mime in self?.doc.addAsset(data, mime: mime) }
         if ud.object(forKey: "showOutline") != nil { showOutline = ud.bool(forKey: "showOutline") }
+        if let p = ud.string(forKey: "toolPolicy").flatMap(AgentToolPolicy.init(rawValue:)) { toolPolicy = p }
         let savedZoom = ud.double(forKey: "zoom")
         setZoom(savedZoom > 0 ? savedZoom : 1.0)
 
@@ -137,15 +157,16 @@ final class AppState: ObservableObject {
         doc.nextStep += 1
         doc.intents.append(Intent(step: step, text: text, provider: label(config)))
         inFlight += 1
-        Task {
-            defer { inFlight -= 1 }
+        running[step] = Task {
+            defer { finish(step) }
             do {
                 let provider = try provider(for: config)
                 let snapshot = try await editor.blocks()
+                let agent = agentContext(step: step, kind: config.kind)
                 let request = GenerationRequest(
-                    system: PromptBuilder.system,
+                    system: PromptBuilder.system(tools: agent),
                     prompt: PromptBuilder.editPrompt(blocks: forPrompt(snapshot.blocks), instruction: text, focus: snapshot.focus),
-                    model: config.model.isEmpty ? nil : config.model)
+                    model: config.model.isEmpty ? nil : config.model, agent: agent)
                 let plan = try await provider.editPlan(request)
                 let direct = snapshot.blocks.isEmpty
                 let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
@@ -162,42 +183,134 @@ final class AppState: ObservableObject {
                 let slug = plan.slug.isEmpty ? String(text.prefix(48)) : plan.slug
                 doc.snapshot(html: result.html, slug: slug, author: .agent, detail: text)
                 scheduleSave()
+            } catch is CancellationError {
+                updateIntent(step) { $0.status = .failed; $0.error = "Stopped." }
+                scheduleSave()
             } catch {
-                updateIntent(step) { $0.status = .failed; $0.error = error.localizedDescription }
+                updateIntent(step) { $0.status = .failed; $0.error = Task.isCancelled ? "Stopped." : error.localizedDescription }
                 scheduleSave()
             }
         }
     }
 
+    // MARK: - agent
+
+    /// Agent context for one instruction: tool policy, the document's workspace, and callbacks
+    /// that stream tool calls onto the instruction card. Nil when tools are off or unsupported.
+    private func agentContext(step: Int, kind: ProviderKind) -> AgentContext? {
+        guard toolPolicy != .off, kind.supportsTools else { return nil }
+        updateIntent(step) { if $0.steps == nil { $0.steps = [] } }
+        return AgentContext(
+            policy: toolPolicy,
+            workspace: AgentContext.workspace(for: doc.id),
+            onEvent: { [weak self] event in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(event, step: step) } }
+            },
+            askPermission: { [weak self] request in
+                await withCheckedContinuation { cont in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let self, self.running[step] != nil else { cont.resume(returning: .deny); return }
+                            self.permissionAsks[step] = PermissionAsk(request: request, step: step) { d in cont.resume(returning: d) }
+                        }
+                    }
+                }
+            })
+    }
+
+    private func apply(_ event: AgentEvent, step: Int) {
+        switch event {
+        case .thought(let chunk):
+            // Thoughts stream in chunks; show what the agent has said since its last tool call.
+            let prior = thoughtBreak.remove(step) == nil ? (liveThought[step] ?? "") : ""
+            let text = prior + chunk
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { liveThought[step] = String(text.suffix(600)) }
+        case .step(var s):
+            updateIntent(step) { intent in
+                var steps = intent.steps ?? []
+                if let i = steps.firstIndex(where: { $0.id == s.id }) {
+                    // Updates often omit fields the start event had.
+                    if s.title.isEmpty { s.title = steps[i].title }
+                    if s.detail.isEmpty { s.detail = steps[i].detail }
+                    if s.kind == .other { s.kind = steps[i].kind }
+                    if steps[i].status == .denied { s.status = .denied }
+                    steps[i] = s
+                } else if !s.title.isEmpty || !s.detail.isEmpty {
+                    steps.append(s)
+                    thoughtBreak.insert(step)
+                }
+                intent.steps = steps
+            }
+        }
+    }
+
+    func answerPermission(step: Int, _ decision: PermissionDecision) {
+        guard let ask = permissionAsks.removeValue(forKey: step) else { return }
+        ask.resume(decision)
+    }
+
+    /// Stop the agent working on an instruction.
+    func stop(step: Int) {
+        answerPermission(step: step, .deny)
+        running[step]?.cancel()
+    }
+
+    func stopAll() { running.keys.forEach(stop(step:)) }
+
+    private func finish(_ step: Int) {
+        answerPermission(step: step, .deny)
+        running[step] = nil
+        liveThought[step] = nil
+        thoughtBreak.remove(step)
+        updateIntent(step) { intent in
+            // Anything still "running" when the agent finished didn't report completion.
+            intent.steps = intent.steps?.map { var s = $0; if s.status == .running { s.status = .done }; return s }
+        }
+        inFlight -= 1
+    }
+
+    var workspaceURL: URL { AgentContext.workspace(for: doc.id) }
+
+    func revealWorkspace() { NSWorkspace.shared.activateFileViewerSelecting([workspaceURL]) }
+
     private func refine(cid: String, instruction: String) {
         guard let config = activeProvider else { return }
-        inFlight += 1
         Task {
-            defer { inFlight -= 1 }
             guard let ctx = await editor.refineContext(cid: cid) else { return }
-            let original = doc.intents.first { $0.step == ctx.step }
-            updateIntent(ctx.step) { $0.refinements.append(.init(text: instruction)) }
-            do {
-                let provider = try provider(for: config)
-                let blocks = forPrompt(try await editor.blocks().blocks)
-                let plan = try await provider.editPlan(GenerationRequest(
-                    system: PromptBuilder.system,
-                    prompt: PromptBuilder.refinePrompt(blocks: blocks, blockId: ctx.blockId, original: ctx.original,
-                                                       proposed: ctx.proposed, originalInstruction: original?.text ?? "",
-                                                       refinement: instruction),
-                    model: config.model.isEmpty ? nil : config.model))
-                guard let edit = plan.edits.first(where: { $0.blockId == ctx.blockId }) ?? plan.edits.first else {
-                    throw ProviderError.protocolError("The model returned no refinement.")
+            // One agent run per instruction card at a time.
+            guard running[ctx.step] == nil else { await editor.refineFailed(cid: cid); return }
+            inFlight += 1
+            let prior = doc.intents.first { $0.step == ctx.step }
+            updateIntent(ctx.step) { $0.refinements.append(.init(text: instruction)); $0.status = .working; $0.error = nil }
+            running[ctx.step] = Task {
+                defer {
+                    finish(ctx.step)
+                    updateIntent(ctx.step) { if $0.status == .working { $0.status = prior?.status ?? .pending } }
                 }
-                let count = doc.intents.first { $0.step == ctx.step }?.refinements.count ?? 1
-                if let html = await editor.applyRefinement(cid: cid, html: doc.internalizeImages(edit.html), count: count) {
-                    doc.snapshot(html: html, slug: "refined: \(instruction.lowercased().prefix(40))", author: .agent,
-                                 detail: original.map { "Change from “\($0.text)”" } ?? "")
-                    scheduleSave()
+                do {
+                    let provider = try provider(for: config)
+                    let blocks = forPrompt(try await editor.blocks().blocks)
+                    let agent = agentContext(step: ctx.step, kind: config.kind)
+                    let plan = try await provider.editPlan(GenerationRequest(
+                        system: PromptBuilder.system(tools: agent),
+                        prompt: PromptBuilder.refinePrompt(blocks: blocks, blockId: ctx.blockId, original: ctx.original,
+                                                           proposed: ctx.proposed, originalInstruction: prior?.text ?? "",
+                                                           refinement: instruction),
+                        model: config.model.isEmpty ? nil : config.model, agent: agent))
+                    guard let edit = plan.edits.first(where: { $0.blockId == ctx.blockId }) ?? plan.edits.first else {
+                        throw ProviderError.protocolError("The model returned no refinement.")
+                    }
+                    let count = doc.intents.first { $0.step == ctx.step }?.refinements.count ?? 1
+                    if let html = await editor.applyRefinement(cid: cid, html: doc.internalizeImages(edit.html), count: count) {
+                        doc.snapshot(html: html, slug: "refined: \(instruction.lowercased().prefix(40))", author: .agent,
+                                     detail: prior.map { "Change from “\($0.text)”" } ?? "")
+                        scheduleSave()
+                    }
+                } catch {
+                    await editor.refineFailed(cid: cid)
+                    let msg = (error is CancellationError || Task.isCancelled) ? "Stopped." : error.localizedDescription
+                    updateIntent(ctx.step) { $0.notes.append("Refine failed: \(msg)") }
                 }
-            } catch {
-                await editor.refineFailed(cid: cid)
-                updateIntent(ctx.step) { $0.notes.append("Refine failed: \(error.localizedDescription)") }
             }
         }
     }
@@ -332,7 +445,9 @@ final class AppState: ObservableObject {
 
     func open(_ url: URL) {
         do {
-            var d = try MarginsDocument.decode(Data(contentsOf: url))
+            let data = try Data(contentsOf: url)
+            var d = try MarginsDocument.decode(data)
+            let hadID = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] != nil
             d.pruneAssets()
             saveNow()
             doc = d
@@ -342,6 +457,7 @@ final class AppState: ObservableObject {
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             Task { await editor.load(d.html) }
             if !d.versions.isEmpty { writeMarkdown() }
+            if !hadID { scheduleSave() }
         } catch {
             lastError = "Couldn't open \(url.lastPathComponent): \(error.localizedDescription)"
         }

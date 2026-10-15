@@ -46,6 +46,17 @@ struct MarginsApp: App {
                 Divider()
                 Button(state.showHistory ? "Hide History" : "Show History") { state.showHistory.toggle() }
             }
+            CommandMenu("Agent") {
+                Picker("Tools", selection: $state.toolPolicy) {
+                    ForEach(AgentToolPolicy.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.inline)
+                Divider()
+                Button("Stop All") { state.stopAll() }
+                    .keyboardShortcut(".", modifiers: .command)
+                    .disabled(!state.busy)
+                Button("Reveal Agent Workspace") { state.revealWorkspace() }
+            }
         }
 
         Settings {

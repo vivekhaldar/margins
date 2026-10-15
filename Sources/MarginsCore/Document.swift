@@ -7,6 +7,8 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
     public static let currentFormat = 1
 
     public var format: Int = MarginsDocument.currentFormat
+    /// Stable identity; keys the agent's per-document workspace folder.
+    public var id = UUID()
     public var html: String
     public var intents: [Intent]
     public var versions: [Version]
@@ -21,11 +23,12 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
         self.nextStep = nextStep
     }
 
-    enum CodingKeys: String, CodingKey { case format, html, intents, versions, nextStep, assets }
+    enum CodingKeys: String, CodingKey { case format, id, html, intents, versions, nextStep, assets }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         format = try c.decodeIfPresent(Int.self, forKey: .format) ?? MarginsDocument.currentFormat
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         html = try c.decode(String.self, forKey: .html)
         intents = try c.decode([Intent].self, forKey: .intents)
         versions = try c.decode([Version].self, forKey: .versions)
@@ -88,6 +91,8 @@ public struct Intent: Codable, Equatable, Identifiable, Sendable {
     public var refinements: [Refinement]
     public var provider: String
     public var error: String?
+    /// Tool calls the agent made while working on this instruction (nil for one-shot runs).
+    public var steps: [AgentStep]?
 
     public init(id: UUID = UUID(), kind: Kind = .instruction, step: Int, text: String, createdAt: Date = Date(),
                 status: Status = .working, summary: String = "", notes: [String] = [],
