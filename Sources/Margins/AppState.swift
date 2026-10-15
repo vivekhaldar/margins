@@ -20,6 +20,13 @@ final class AppState: ObservableObject {
     @Published var inFlight = 0
     @Published var previewing: Version?
     @Published var showHistory = false
+    @Published var showOutline = true {
+        didSet {
+            defaults.set(showOutline, forKey: "showOutline")
+            let on = showOutline
+            Task { await editor.setOutline(on) }
+        }
+    }
     @Published var hoveredStep: Int?
     @Published var lastError: String?
 
@@ -48,6 +55,7 @@ final class AppState: ObservableObject {
         editor.onMessage = { [weak self] type, body in self?.handle(type, body) }
         editor.assetLookup = { [weak self] id in self?.doc.assets[id] }
         editor.onAddAsset = { [weak self] data, mime in self?.doc.addAsset(data, mime: mime) }
+        if ud.object(forKey: "showOutline") != nil { showOutline = ud.bool(forKey: "showOutline") }
         let savedZoom = ud.double(forKey: "zoom")
         setZoom(savedZoom > 0 ? savedZoom : 1.0)
 
@@ -223,7 +231,12 @@ final class AppState: ObservableObject {
     private func handle(_ type: String, _ body: [String: Any]) {
         switch type {
         case "ready":
-            Task { await editor.load(doc.html) }
+            Task {
+                await editor.setOutline(showOutline)
+                await editor.load(doc.html)
+            }
+        case "outline":
+            if (body["visible"] as? Bool) == false, showOutline { showOutline = false }
         case "pending":
             var info = PendingInfo()
             info.total = (body["total"] as? NSNumber)?.intValue ?? 0

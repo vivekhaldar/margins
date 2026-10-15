@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Margins — outline / TOC mocks</title>
+<style>
+:root{--bg:#f6f5f2;--panel:#fff;--ink:#1d1d1f;--mute:#6b6b70;--line:#e4e2dc;--ins:#dcf5e3;--insb:#2f9e55;--del:#fde4e4;--delb:#c94a4a;--acc:#4f46e5;--accbg:#eeedfb;--accline:#d6d3ff}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:var(--ink);background:#d9d8e3;padding:18px}
+.picker{display:flex;gap:8px;align-items:center;margin:0 auto 12px;max-width:1240px}
+.picker b{font-size:13px;margin-right:6px}
+.picker button{font:inherit;font-size:13px;border:1px solid #bdbad0;background:#fff;border-radius:99px;padding:4px 14px;cursor:pointer}
+.picker button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.picker .desc{margin-left:10px;color:#4a4860;font-size:12.5px}
+
+.win{max-width:1240px;height:760px;margin:0 auto;background:var(--bg);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.25);display:flex;flex-direction:column;overflow:hidden}
+.tb{height:46px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line);background:#efeee9}
+.dots{display:flex;gap:7px;margin-right:8px}.dots i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+.tb .title{font-weight:600}
+.tb .sp{flex:1}
+.tb .btn{font-size:12px;border:1px solid var(--line);background:#fff;border-radius:7px;padding:3px 9px;color:var(--ink);display:flex;gap:5px;align-items:center;cursor:pointer}
+.tb .btn.on{background:var(--accbg);border-color:var(--accline);color:var(--acc)}
+.body{flex:1;display:flex;min-height:0}
+
+/* left: instructions */
+.side{width:290px;border-right:1px solid var(--line);background:#fbfaf8;display:flex;flex-direction:column}
+.seg{display:none;margin:10px 12px 0;background:#ecebe6;border-radius:8px;padding:2px}
+.seg button{flex:1;font:inherit;font-size:12px;border:0;background:none;border-radius:6px;padding:3px 0;cursor:pointer;color:var(--mute)}
+.seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.cards{flex:1;overflow:auto;padding:12px}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:9px}
+.card .n{display:inline-block;width:18px;height:18px;border-radius:50%;background:var(--accbg);color:var(--acc);font-size:11px;text-align:center;line-height:18px;font-weight:700;margin-right:6px}
+.card .s{font-size:11.5px;color:var(--mute);margin-top:3px}
+.card .pend{color:#b07d0d}
+.composer{margin:10px 12px 12px;border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px;color:var(--mute);font-size:13px}
+
+/* document pane */
+.docpane{flex:1;position:relative;display:flex;min-width:0}
+.scroll{flex:1;overflow:auto;padding:28px 24px;scroll-behavior:smooth}
+article{max-width:680px;margin:0 auto;background:#fff;border:1px solid var(--line);border-radius:12px;padding:40px 56px}
+article h1{font-size:26px;margin:0 0 14px;line-height:1.2}
+article h2{font-size:18px;margin:28px 0 8px}
+article h3{font-size:15px;margin:18px 0 6px}
+article p{margin:0 0 10px;font-size:14.5px}
+.chg{border-left:3px solid var(--insb);padding-left:10px;margin:0 0 10px -13px}
+.chg del{background:var(--del);color:#8f2d2d;text-decoration-color:var(--delb)}
+.chg ins{background:var(--ins);color:#1f6e3b;text-decoration:none}
+h2.flash,h3.flash{animation:fl 1.2s}
+@keyframes fl{0%{background:var(--accbg)}100%{background:transparent}}
+
+/* shared TOC item styles */
+.toc a{display:flex;align-items:center;gap:6px;text-decoration:none;color:var(--mute);border-radius:6px;padding:3px 8px;font-size:12.5px;line-height:1.35;cursor:pointer}
+.toc a:hover{background:#efeee9;color:var(--ink)}
+.toc a.l1{color:var(--ink);font-weight:600}
+.toc a.l3{padding-left:22px;font-size:12px}
+.toc a.cur{color:var(--acc);background:var(--accbg)}
+.toc a .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toc .pd{width:7px;height:7px;border-radius:50%;background:var(--insb);flex:none}
+.toc .pd.del{background:var(--delb)}
+.toc .wc{font-size:10.5px;color:#a3a2aa;font-variant-numeric:tabular-nums}
+
+/* ---------- A: floating outline rail inside document pane ---------- */
+.railA{display:none;width:210px;flex:none;padding:28px 0 0 14px;border-right:1px solid transparent}
+.railA .hd{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);font-weight:700;padding:0 8px 6px;display:flex;justify-content:space-between}
+.railA .hd span{cursor:pointer;font-weight:400;letter-spacing:0;text-transform:none}
+.railA .toc{position:sticky;top:0;border-left:2px solid var(--line);padding-left:4px}
+.railA .toc a.cur{box-shadow:-6px 0 0 -4px var(--acc)}
+body.A .railA{display:block}
+body.A #tbOutline{display:flex}
+
+/* ---------- B: minimap ticks on the right edge ---------- */
+.railB{display:none;position:absolute;right:0;top:0;bottom:0;width:44px;z-index:5}
+.railB .ticks{position:absolute;right:10px;top:40px;display:flex;flex-direction:column;gap:7px;align-items:flex-end}
+.railB .tick{height:3px;border-radius:2px;background:#cfcdd8;cursor:pointer;transition:background .15s}
+.railB .tick.l1{width:22px;background:#9e9cae}.railB .tick.l2{width:16px}.railB .tick.l3{width:9px}
+.railB .tick.cur{background:var(--acc)}
+.railB .tick.pend{background:var(--insb)}
+.railB .tick.pend.cur{box-shadow:0 0 0 2px var(--accline)}
+.railB .panel{position:absolute;right:8px;top:28px;width:250px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.16);padding:8px;opacity:0;transform:translateX(8px);pointer-events:none;transition:.15s}
+.railB:hover .panel{opacity:1;transform:none;pointer-events:auto}
+.railB:hover{width:280px}
+body.B .railB{display:block}
+
+/* ---------- C: Outline tab in the sidebar ---------- */
+.outlineC{display:none;flex:1;overflow:auto;padding:10px 8px}
+.outlineC .toc a{padding:5px 8px;font-size:13px}
+.outlineC .toc a.l3{padding-left:24px;font-size:12.5px}
+.outlineC .grip{color:#c5c3cc;cursor:grab;font-size:11px;visibility:hidden}
+.outlineC .toc a:hover .grip{visibility:visible}
+.outlineC .foot{font-size:11.5px;color:var(--mute);padding:10px 8px 0;border-top:1px solid var(--line);margin-top:10px}
+body.C .seg{display:flex}
+body.C.tabOutline .cards{display:none}
+body.C.tabOutline .outlineC{display:block}
+
+/* notes under mock */
+.notes{max-width:1240px;margin:14px auto 0;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.notes div{background:#fff;border-radius:10px;padding:12px 14px;font-size:12.5px;color:#3c3b48;opacity:.55}
+.notes div.on{opacity:1;outline:2px solid var(--acc)}
+.notes h4{margin:0 0 4px;font-size:13px}
+.notes ul{margin:4px 0 0;padding-left:18px}
+#tbOutline{display:none}
+</style>
+</head>
+<body class="A">
+<div class="picker">
+  <b>Outline mock:</b>
+  <button data-v="A" class="on">A · Outline rail</button>
+  <button data-v="B">B · Minimap ticks</button>
+  <button data-v="C">C · Sidebar tab</button>
+  <span class="desc" id="desc"></span>
+</div>
+
+<div class="win">
+  <div class="tb">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <span class="title">Rate Limiting Design Note</span>
+    <span class="sp"></span>
+    <span class="btn on" id="tbOutline" title="Toggle outline (⌃⌘O)">☰ Outline</span>
+    <span class="btn">GitHub Copilot · Claude Sonnet 5.5 ▾</span>
+    <span class="btn">🕘 History</span>
+  </div>
+  <div class="body">
+    <div class="side">
+      <div class="seg"><button data-t="cards" class="on">Instructions</button><button data-t="outline">Outline</button></div>
+      <div class="cards">
+        <div class="card"><span class="n">1</span>Draft a design note on API rate limiting<div class="s">applied · Copilot</div></div>
+        <div class="card"><span class="n">2</span>Add a summary at the top<div class="s">applied · Copilot</div></div>
+        <div class="card"><span class="n">3</span>Make the alternatives section more concrete<div class="s pend">2 pending</div></div>
+        <div class="card"><span class="n">4</span>Tighten the rollout plan<div class="s pend">1 pending</div></div>
+      </div>
+      <div class="outlineC"><div class="toc" id="tocC"></div>
+        <div class="foot">Drag ⋮⋮ to move a section · ⌥-click to fold · dots = pending changes</div></div>
+      <div class="composer">Tell the agent what to change…</div>
+    </div>
+    <div class="docpane">
+      <div class="railA">
+        <div class="hd">Outline <span title="Hide (⌃⌘O)">✕</span></div>
+        <div class="toc" id="tocA"></div>
+      </div>
+      <div class="scroll" id="scroll">
+        <article id="doc">
+          <h1>Rate Limiting Design Note</h1>
+          <h2>Summary</h2>
+          <p>We propose per-key token-bucket limits on the public REST API, enforced at the gateway, with clear headers so clients can back off gracefully.</p>
+          <h2>Problem</h2>
+          <p>Our public REST API has no request limits. A handful of integrations account for most load spikes, and a single misbehaving client degraded p99 latency for everyone twice last quarter.</p>
+          <h3>Who is affected</h3>
+          <p>Every API customer during a spike; on-call engineers, who currently mitigate by hand-editing firewall rules.</p>
+          <h3>What we've tried</h3>
+          <p>Manual IP blocks and asking customers to slow down. Neither scales, and blocks catch shared NAT addresses.</p>
+          <h2>Goals</h2>
+          <p>Protect shared capacity, give clients predictable limits, and make limit changes a config edit rather than a deploy.</p>
+          <h2>Design</h2>
+          <h3>Token buckets per API key</h3>
+          <p>Each key gets a bucket with a refill rate and burst size taken from its plan. Buckets live in Redis with a Lua script for atomic take-and-refill.</p>
+          <h3>Response headers</h3>
+          <p>Every response carries <code>RateLimit-Limit</code>, <code>RateLimit-Remaining</code> and <code>RateLimit-Reset</code>; throttled requests return 429 with <code>Retry-After</code>.</p>
+          <h3>Failure modes</h3>
+          <p>If Redis is unreachable the gateway fails open with a local in-memory bucket, so an outage in the limiter never becomes an API outage.</p>
+          <h2>Alternatives considered</h2>
+          <div class="chg" data-pend="ins"><p><del>Fixed windows are simpler.</del> <ins>Fixed one-minute windows are simpler to explain but allow 2× bursts at window edges; we measured this pattern in 3 of our top 10 integrations.</ins></p></div>
+          <h3>Sliding window log</h3>
+          <div class="chg" data-pend="ins"><p><ins>Exact, but stores one entry per request — roughly 40 GB of Redis at current peak. Rejected on cost.</ins></p></div>
+          <h3>Leaky bucket</h3>
+          <p>Smooths traffic well but adds queueing latency, which our synchronous clients handle poorly.</p>
+          <h2>Rollout</h2>
+          <div class="chg" data-pend="del"><p><del>We will roll out in three phases over six weeks, starting with internal keys, then a shadow mode that only logs, and finally enforcement for all keys.</del> <ins>Internal keys → shadow mode (log only) → enforce, over six weeks.</ins></p></div>
+          <h3>Communication</h3>
+          <p>Email to all key owners two weeks before enforcement, plus a changelog entry and docs for the new headers.</p>
+          <h2>Open questions</h2>
+          <p>Should burst size scale with plan tier, or stay flat? Do we need per-endpoint limits for the search API?</p>
+          <p style="height:220px"></p>
+        </article>
+      </div>
+      <div class="railB"><div class="panel"><div class="toc" id="tocB"></div></div><div class="ticks" id="ticks"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <div id="nA"><h4>A · Outline rail</h4>A narrow column to the left of the page, inside the document pane. ☰ Outline in the toolbar (⌃⌘O) toggles it.
+    <ul><li>Always visible, so you never lose your place</li><li>Green and red dots mark sections with pending changes</li><li>Collapses by itself when the window is narrow</li></ul></div>
+  <div id="nB"><h4>B · Minimap ticks</h4>A thin strip of ticks on the right edge, one per heading. Longer ticks are bigger headings and green ticks have pending changes. Hover to see the full outline.
+    <ul><li>Takes almost no space</li><li>Shows at a glance where the agent changed things</li><li>You have to hover to read the headings</li></ul></div>
+  <div id="nC"><h4>C · Sidebar tab</h4>A segmented control in the left pane switches between Instructions and Outline.
+    <ul><li>The document keeps its full width</li><li>Room for extras: word counts, and dragging to reorder sections later</li><li>You can't see the outline and your instructions at the same time</li></ul></div>
+</div>
+
+<script>
+const doc = document.getElementById('doc'), scroll = document.getElementById('scroll');
+const heads = [...doc.querySelectorAll('h1,h2,h3')];
+function pendingOf(h) {
+  let kinds = new Set(), n = h.nextElementSibling;
+  const lvl = +h.tagName[1];
+  while (n && !(/^H[1-3]$/.test(n.tagName) && +n.tagName[1] <= lvl)) {
+    if (n.dataset && n.dataset.pend) kinds.add(n.dataset.pend);
+    n = n.nextElementSibling;
+  }
+  return kinds;
+}
+function words(h) {
+  let w = 0, n = h.nextElementSibling;
+  while (n && !/^H[1-3]$/.test(n.tagName)) { w += (n.textContent.trim().split(/\s+/).length); n = n.nextElementSibling; }
+  return w;
+}
+function build(el, opts = {}) {
+  el.innerHTML = '';
+  heads.forEach((h, i) => {
+    const a = document.createElement('a');
+    a.className = 'l' + h.tagName[1];
+    a.dataset.i = i;
+    const p = pendingOf(h);
+    a.innerHTML = (opts.grip ? '<span class="grip">⋮⋮</span>' : '') + `<span class="t">${h.textContent}</span>` +
+      (opts.wc && h.tagName !== 'H1' && words(h) ? `<span class="wc">${words(h)}w</span>` : '') +
+      (p.size && h.tagName !== 'H1' ? `<span class="pd ${p.has('ins') ? '' : 'del'}" title="pending changes"></span>` : '');
+    a.onclick = () => go(i);
+    el.appendChild(a);
+  });
+}
+function go(i) {
+  const h = heads[i];
+  scroll.scrollTop = h.offsetTop - 30;
+  h.classList.remove('flash'); void h.offsetWidth; h.classList.add('flash');
+}
+build(document.getElementById('tocA'));
+build(document.getElementById('tocB'));
+build(document.getElementById('tocC'), { grip: true, wc: true });
+const ticks = document.getElementById('ticks');
+heads.forEach((h, i) => {
+  const t = document.createElement('div');
+  t.className = 'tick l' + h.tagName[1] + (pendingOf(h).size && h.tagName !== 'H1' ? ' pend' : '');
+  t.dataset.i = i; t.title = h.textContent; t.onclick = () => go(i);
+  ticks.appendChild(t);
+});
+function spy() {
+  let cur = 0;
+  heads.forEach((h, i) => { if (h.offsetTop - 60 <= scroll.scrollTop) cur = i; });
+  document.querySelectorAll('[data-i]').forEach((e) => e.classList.toggle('cur', +e.dataset.i === cur));
+}
+scroll.addEventListener('scroll', spy); spy();
+
+const desc = { A: 'Outline rail beside the page', B: 'Minimap ticks, hover to expand', C: 'Outline as a tab in the left pane' };
+function pick(v) {
+  document.body.className = v + (v === 'C' ? ' tabOutline' : '');
+  document.querySelectorAll('.picker button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+  document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.t === 'outline'));
+  ['A', 'B', 'C'].forEach((k) => document.getElementById('n' + k).classList.toggle('on', k === v));
+  document.getElementById('desc').textContent = desc[v];
+}
+document.querySelectorAll('.picker button').forEach((b) => b.onclick = () => pick(b.dataset.v));
+document.querySelectorAll('.seg button').forEach((b) => b.onclick = () => {
+  document.body.classList.toggle('tabOutline', b.dataset.t === 'outline');
+  document.querySelectorAll('.seg button').forEach((x) => x.classList.toggle('on', x === b));
+});
+pick('A');
+</script>
+</body>
+</html>

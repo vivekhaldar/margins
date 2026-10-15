@@ -42,6 +42,12 @@ struct ContentView: View {
             if state.busy { ProgressView().controlSize(.small) }
             ProviderMenu()
             Button {
+                state.showOutline.toggle()
+            } label: {
+                Label("Outline", systemImage: state.showOutline ? "list.bullet.indent" : "list.bullet")
+            }
+            .help(state.showOutline ? "Hide outline (⌃⌘O)" : "Show outline (⌃⌘O)")
+            Button {
                 state.showHistory.toggle()
             } label: {
                 Label("History", systemImage: "clock.arrow.circlepath")

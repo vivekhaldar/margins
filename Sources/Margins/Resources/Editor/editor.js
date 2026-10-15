@@ -250,6 +250,7 @@
     $('#selbar').classList.toggle('on', selected > 0);
     $('#selcount').textContent = `${selected} selected`;
     post('pending', { total: all.length, byStep, selected });
+    scheduleOutline();
   }
 
   // ---------- inline edits ----------
@@ -260,7 +261,7 @@
     clearTimeout(editTimer);
     editTimer = setTimeout(flushEdits, 1500);
   }
-  doc.addEventListener('input', () => { noteEdit(); syncLinkPop(); });
+  doc.addEventListener('input', () => { noteEdit(); syncLinkPop(); scheduleOutline(); });
   function flushEdits() {
     clearTimeout(editTimer);
     if (!editSecs.size) return;
@@ -516,6 +517,77 @@
     insertFiles(files);
   });
 
+  // ---------- outline ----------
+  // A rail beside the page when there's room, otherwise a strip of ticks on the right edge that expands on hover.
+  const outline = $('#outline'), otoc = $('#otoc'), oticks = $('#oticks'), scroller = $('#scroll');
+  let outlineOn = true, outlineTimer = null, heads = [];
+  const RAIL_MIN_WIDTH = 940;
+  function scheduleOutline() { clearTimeout(outlineTimer); outlineTimer = setTimeout(buildOutline, 120); }
+  function outlineHeads() {
+    // Live headings plus headings the agent is proposing (inside <ins>); deleted ones are skipped.
+    const out = [];
+    let cur = null;
+    tops().forEach((el) => {
+      const hs = /^H[1-3]$/.test(el.tagName) ? [el] : isChg(el) ? [...(insOf(el) || el).querySelectorAll('h1,h2,h3')] : [];
+      hs.forEach((h) => { cur = { el: h, level: +h.tagName[1], text: h.textContent.trim(), proposed: isChg(el), ins: false, del: false }; out.push(cur); });
+      if (isChg(el) && cur) { if (el.dataset.kind === 'delete') cur.del = true; else cur.ins = true; }
+    });
+    return out.filter((h) => h.text);
+  }
+  function buildOutline() {
+    heads = outlineHeads();
+    const show = outlineOn && heads.length >= 2;
+    document.body.classList.toggle('has-outline', show);
+    if (!show) return;
+    const minLevel = Math.min(...heads.map((h) => h.level));
+    otoc.innerHTML = ''; oticks.innerHTML = '';
+    heads.forEach((h, i) => {
+      const depth = h.level - minLevel;
+      const a = document.createElement('a');
+      a.className = 'd' + depth + (h.proposed ? ' prop' : '');
+      a.dataset.i = i;
+      a.title = h.text;
+      const t = document.createElement('span'); t.className = 't'; t.textContent = h.text; a.appendChild(t);
+      if (h.ins || h.del) { const d = document.createElement('span'); d.className = 'pd' + (h.ins ? '' : ' del'); d.title = 'Pending changes'; a.appendChild(d); }
+      a.addEventListener('mousedown', (e) => e.preventDefault());
+      a.addEventListener('click', () => goHead(i));
+      otoc.appendChild(a);
+      const k = document.createElement('i');
+      k.className = 'd' + Math.min(depth, 2) + (h.ins ? ' ins' : h.del ? ' del' : '');
+      k.dataset.i = i;
+      oticks.appendChild(k);
+    });
+    layoutOutline();
+    spyOutline();
+  }
+  function layoutOutline() {
+    document.body.classList.toggle('outline-rail', innerWidth >= RAIL_MIN_WIDTH);
+    outline.style.top = ($('#bar').offsetHeight + 1) + 'px';
+  }
+  function goHead(i) {
+    const h = heads[i]; if (!h) return;
+    const top = h.el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 24;
+    scroller.scrollTo({ top, behavior: 'smooth' });
+    flash(h.el);
+  }
+  function spyOutline() {
+    if (!document.body.classList.contains('has-outline')) return;
+    const edge = scroller.getBoundingClientRect().top + 80;
+    let cur = 0;
+    heads.forEach((h, i) => { if (h.el.isConnected && h.el.getBoundingClientRect().top <= edge) cur = i; });
+    outline.querySelectorAll('[data-i]').forEach((e) => e.classList.toggle('cur', +e.dataset.i === cur));
+    const a = otoc.querySelector('a.cur');
+    if (a && document.body.classList.contains('outline-rail')) {
+      const r = a.getBoundingClientRect(), o = otoc.getBoundingClientRect();
+      if (r.top < o.top || r.bottom > o.bottom) a.scrollIntoView({ block: 'nearest' });
+    }
+  }
+  oticks.addEventListener('click', (e) => { const i = e.target.dataset && e.target.dataset.i; if (i != null) goHead(+i); });
+  $('#ohide').addEventListener('click', () => { setOutline(false); post('outline', { visible: false }); });
+  scroller.addEventListener('scroll', spyOutline, { passive: true });
+  addEventListener('resize', () => { if (document.body.classList.contains('has-outline')) layoutOutline(); });
+  function setOutline(on) { outlineOn = !!on; buildOutline(); }
+
   // ---------- keyboard review ----------
   let cur = -1;
   function move(d) {
@@ -560,6 +632,7 @@
     document.body.classList.add('previewing');
     closeRefine();
     hideLinkPop();
+    buildOutline();
   }
   function endPreview() {
     if (live === null) return;
@@ -623,6 +696,7 @@
       return currentHTML();
     },
     insertImage: (src, alt) => insertImage(src, alt),
+    setOutline: (on) => setOutline(on),
     editLink: () => editLink(),
     refineFailed(cid) { const ch = byCid(cid); if (ch) ch.classList.remove('refining'); },
     highlightStep(step) {

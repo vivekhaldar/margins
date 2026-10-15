@@ -34,6 +34,9 @@ struct MarginsApp: App {
                 Button("Zoom Out") { state.zoomOut() }.keyboardShortcut("-")
                 Button("Actual Size") { state.resetZoom() }.keyboardShortcut("0")
                 Divider()
+                Button(state.showOutline ? "Hide Outline" : "Show Outline") { state.showOutline.toggle() }
+                    .keyboardShortcut("o", modifiers: [.command, .control])
+                Divider()
             }
             CommandMenu("Review") {
                 Button("Accept All Changes") { state.reviewAll(accept: true) }

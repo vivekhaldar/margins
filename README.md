@@ -32,6 +32,7 @@ The output isn't a reply. It's the document.
 - **Edit inline.** The document is plain editable rich text. Your edits are respected and recorded.
 - **Images and diagrams.** Ask for one ("add a diagram of the request flow"), and the agent draws it as SVG; it can revise it later like any other text. Paste or drag in images, or use Insert → Image… (⇧⌘I). Images are stored inside the `.margins` file, once each, no matter how many versions reference them.
 - **Links.** ⌘K links the selection (or edits the link under the caret), and pasting a URL over selected text links it. Click a link for Open ↗ / Edit / Remove; ⌘-click opens it in your browser.
+- **Outline.** A map of the headings sits beside the page. Click a heading to jump to it; the current section is highlighted, and dots mark sections with pending changes. When the window is narrow it shrinks to a strip of ticks on the right edge that expands on hover. Toggle it with ⌃⌘O or the toolbar button ([mock](docs/mocks/outline.html)).
 - **History.** Every version gets a short slug ("add summary at top"), an author (agent / you / review) and the instruction that produced it. You can preview or restore any version.
 - **Bring your own subscription.** Margins uses the model access you already pay for. See [Model providers](#model-providers).
 

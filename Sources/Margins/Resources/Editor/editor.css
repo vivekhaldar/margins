@@ -97,3 +97,44 @@ article img:hover{outline:2px solid var(--accline);outline-offset:2px}
 @media (prefers-color-scheme:dark){
   article img[src$=".svg"]{background:#fff;padding:10px;border-radius:8px}
 }
+
+/* outline: rail beside the page, or ticks on the right edge when narrow */
+.outline{display:none;position:fixed;z-index:6}
+body.has-outline .outline{display:block}
+.outline .otoc a{display:flex;align-items:center;gap:6px;color:var(--mute);border-radius:6px;padding:3px 8px;font-size:12.5px;line-height:1.35;cursor:pointer;text-decoration:none}
+.outline .otoc a:hover{background:var(--line);color:var(--ink)}
+.outline .otoc a.d0{color:var(--ink);font-weight:600}
+.outline .otoc a.d1{padding-left:20px;font-size:12px}
+.outline .otoc a.d2,.outline .otoc a.d3{padding-left:32px;font-size:12px}
+.outline .otoc a.prop .t{font-style:italic;color:var(--insink)}
+.outline .otoc a.cur{color:var(--acc);background:var(--accbg)}
+.outline .otoc .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.outline .pd{width:7px;height:7px;border-radius:50%;background:var(--insb);flex:none}
+.outline .pd.del{background:var(--delb)}
+.outline .ohd{display:flex;justify-content:space-between;align-items:center;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);padding:0 6px 6px 10px}
+.outline .ohd button{border:0;background:none;color:var(--mute);cursor:pointer;font-size:11px;border-radius:4px;padding:1px 4px}
+.outline .ohd button:hover{background:var(--line);color:var(--ink)}
+
+/* rail */
+body.has-outline.outline-rail .scroll{padding-left:252px}
+body.outline-rail .outline{left:16px;width:216px;bottom:0;padding:30px 0 16px}
+body.outline-rail .otoc{max-height:calc(100% - 26px);overflow:auto;border-left:2px solid var(--line);padding-left:4px}
+body.outline-rail .otoc a.cur{box-shadow:-6px 0 0 -4px var(--acc)}
+body.outline-rail .oticks{display:none}
+
+/* ticks */
+body.has-outline:not(.outline-rail) .scroll{padding-right:48px}
+body:not(.outline-rail) .outline{right:0;width:40px;bottom:0}
+body:not(.outline-rail) .oticks{position:absolute;right:12px;top:30px;display:flex;flex-direction:column;align-items:flex-end;gap:7px}
+.oticks i{display:block;height:3px;border-radius:2px;background:var(--line);cursor:pointer;width:9px}
+.oticks i.d0{width:22px;background:var(--mute);opacity:.6}
+.oticks i.d1{width:15px;background:var(--mute);opacity:.35}
+.oticks i.ins{background:var(--insb);opacity:1}
+.oticks i.del{background:var(--delb);opacity:1}
+.oticks i.cur{background:var(--acc);opacity:1}
+body:not(.outline-rail) .ohd,body:not(.outline-rail) .otoc{position:absolute;right:8px;width:250px;opacity:0;pointer-events:none;transform:translateX(8px);transition:opacity .15s,transform .15s}
+body:not(.outline-rail) .ohd{top:16px;height:30px;padding:10px 6px 0 14px;background:var(--panel);border:1px solid var(--line);border-bottom:0;border-radius:12px 12px 0 0;z-index:1}
+body:not(.outline-rail) .otoc{top:46px;max-height:calc(100% - 64px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-top:0;border-radius:0 0 12px 12px;padding:0 6px 8px;box-shadow:0 14px 30px rgba(0,0,0,.16)}
+body:not(.outline-rail) .outline:hover{width:280px}
+body:not(.outline-rail) .outline:hover .ohd,body:not(.outline-rail) .outline:hover .otoc{opacity:1;pointer-events:auto;transform:none}
+body:not(.outline-rail) .outline:hover .oticks{opacity:0}
