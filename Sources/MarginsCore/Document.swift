@@ -15,6 +15,8 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
     public var nextStep: Int
     /// Images referenced from `html` / version snapshots, keyed by content hash.
     public var assets: [String: Asset] = [:]
+    /// The author's project (e.g. a code repo) the agent works in. Nil = a private per-document workspace.
+    public var projectFolder: String?
 
     public init(html: String = "", intents: [Intent] = [], versions: [Version] = [], nextStep: Int = 1) {
         self.html = html
@@ -23,7 +25,7 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
         self.nextStep = nextStep
     }
 
-    enum CodingKeys: String, CodingKey { case format, id, html, intents, versions, nextStep, assets }
+    enum CodingKeys: String, CodingKey { case format, id, html, intents, versions, nextStep, assets, projectFolder }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -34,6 +36,7 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
         versions = try c.decode([Version].self, forKey: .versions)
         nextStep = try c.decode(Int.self, forKey: .nextStep)
         assets = try c.decodeIfPresent([String: Asset].self, forKey: .assets) ?? [:]
+        projectFolder = try c.decodeIfPresent(String.self, forKey: .projectFolder)
     }
 
     /// Title = text of the first <h1>, else "Untitled".
@@ -101,6 +104,8 @@ public struct Intent: Codable, Equatable, Identifiable, Sendable {
     public var focus: [String]?
     /// The agent's answer in an inline discussion.
     public var reply: String?
+    /// Project files the agent created, changed or deleted while working on this (relative paths).
+    public var files: [String]?
 
     public init(id: UUID = UUID(), kind: Kind = .instruction, step: Int, text: String, createdAt: Date = Date(),
                 status: Status = .working, summary: String = "", notes: [String] = [],

@@ -6,6 +6,7 @@ import MarginsCore
 //   margins-cli models <copilot|codex|claude|openai> [--base-url URL]
 //   margins-cli edit   <provider> [--model M] [--blocks blocks.json] [--tools off|research|full] "instruction"
 //   margins-cli edit   <provider> --blocks blocks.json --quote "selected text" "message"   (inline discussion)
+//   margins-cli edit   <provider> --tools full --project DIR "implement X"   (agent works in the author's project)
 //
 // With --tools, the agent's tool calls stream to stderr; permission asks (research mode) are approved
 // if --yes is given, else denied.
@@ -15,7 +16,7 @@ import MarginsCore
 func usage() -> Never {
     FileHandle.standardError.write(Data("""
     usage: margins-cli models <copilot|codex|claude|openai> [--base-url URL]
-           margins-cli edit <provider> [--model M] [--blocks FILE] [--base-url URL] [--tools off|research|full] [--yes] [--quote TEXT] "instruction"
+           margins-cli edit <provider> [--model M] [--blocks FILE] [--base-url URL] [--tools off|research|full] [--yes] [--quote TEXT] [--project DIR] "instruction"
 
     """.utf8))
     exit(2)
@@ -36,6 +37,7 @@ let model = option("--model")
 let blocksPath = option("--blocks")
 let baseURL = option("--base-url")
 let quote = option("--quote")
+let projectDir = option("--project").map { URL(fileURLWithPath: $0).standardizedFileURL }
 let policy = option("--tools").flatMap(AgentToolPolicy.init(rawValue:)) ?? .off
 let autoYes = args.contains("--yes")
 args.removeAll { $0 == "--yes" }
@@ -66,9 +68,9 @@ do {
         }
         let start = Date()
         func err(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
-        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("margins-cli-workspace")
+        let workspace = projectDir ?? FileManager.default.temporaryDirectory.appendingPathComponent("margins-cli-workspace")
         try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-        let agent = AgentContext(policy: policy, workspace: workspace, onEvent: { e in
+        let agent = AgentContext(policy: policy, workspace: workspace, project: projectDir != nil, onEvent: { e in
             switch e {
             case .step(let s): err("  [\(s.status.rawValue)] \(s.kind.rawValue): \(s.title) \(s.detail.prefix(120))")
             case .thought(let t): err("  … \(t.replacingOccurrences(of: "\n", with: " ").prefix(160))")
@@ -87,6 +89,7 @@ do {
                 err("  [failed] fetch: YouTube \(id) — \(error.localizedDescription)")
             }
         }
+        let before = projectDir.flatMap(ProjectChanges.snapshot)
         let plan = try await provider.editPlan(GenerationRequest(
             system: PromptBuilder.system(tools: policy == .off || !kind.supportsTools ? nil : agent),
             prompt: quote.map { q in
@@ -98,6 +101,9 @@ do {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
         print(String(decoding: try enc.encode(plan), as: UTF8.self))
+        if let projectDir, let before, let after = ProjectChanges.snapshot(projectDir) {
+            err("changed files: \(ProjectChanges.changed(from: before, to: after))")
+        }
         FileHandle.standardError.write(Data(String(format: "(%.1fs via %@)\n", Date().timeIntervalSince(start), provider.displayName).utf8))
     default:
         usage()

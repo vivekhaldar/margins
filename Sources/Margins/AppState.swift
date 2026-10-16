@@ -172,18 +172,25 @@ final class AppState: ObservableObject {
                     prompt: PromptBuilder.editPrompt(blocks: forPrompt(snapshot.blocks), instruction: text,
                                                      focus: snapshot.focus, sources: sources),
                     model: config.model.isEmpty ? nil : config.model, agent: agent)
-                let plan = try await provider.editPlan(request)
+                let before = await projectSnapshot(agent)
+                let plan: EditPlan
+                do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step); throw error }
+                await recordProjectChanges(before, step: step)
                 let direct = snapshot.blocks.isEmpty
                 let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
                 let result = try await editor.apply(step: step, edits: edits, direct: direct)
                 updateIntent(step) {
                     $0.summary = plan.summary
+                    let reply = plan.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !reply.isEmpty { $0.reply = reply }
                     $0.notes = plan.notes
                     if !result.missing.isEmpty {
                         $0.notes.append("Ignored edits to unknown blocks: \(result.missing.joined(separator: ", "))")
                     }
                     $0.status = (direct || result.changes == 0) ? .done : .pending
-                    if plan.edits.isEmpty && $0.notes.isEmpty { $0.notes = ["No changes were needed."] }
+                    if plan.edits.isEmpty && $0.notes.isEmpty && ($0.reply ?? "").isEmpty && ($0.files ?? []).isEmpty {
+                        $0.notes = ["No changes were needed."]
+                    }
                 }
                 let slug = plan.slug.isEmpty ? String(text.prefix(48)) : plan.slug
                 doc.snapshot(html: result.html, slug: slug, author: .agent, detail: text)
@@ -239,7 +246,10 @@ final class AppState: ObservableObject {
                     prompt: PromptBuilder.discussPrompt(blocks: forPrompt(snapshot.blocks), focus: live.isEmpty ? focus : live,
                                                         quote: quote, history: history, message: text, sources: sources),
                     model: config.model.isEmpty ? nil : config.model, agent: agent)
-                let plan = try await provider.editPlan(request)
+                let before = await projectSnapshot(agent)
+                let plan: EditPlan
+                do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step); throw error }
+                await recordProjectChanges(before, step: step)
                 var result: EditorBridge.ApplyResult?
                 if !plan.edits.isEmpty {
                     let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
@@ -325,6 +335,7 @@ final class AppState: ObservableObject {
                         "reply": m.reply ?? "",
                         "summary": m.summary,
                         "notes": m.notes,
+                        "files": m.files ?? [],
                         "changes": pending.byStep[m.step] ?? 0,
                         "error": m.error ?? "",
                         "waiting": permissionAsks[m.step] != nil,
@@ -376,9 +387,11 @@ final class AppState: ObservableObject {
     private func agentContext(step: Int, kind: ProviderKind) -> AgentContext? {
         guard toolPolicy != .off, kind.supportsTools else { return nil }
         updateIntent(step) { if $0.steps == nil { $0.steps = [] } }
+        let project = projectURL
         return AgentContext(
             policy: toolPolicy,
-            workspace: AgentContext.workspace(for: doc.id),
+            workspace: project ?? AgentContext.workspace(for: doc.id),
+            project: project != nil,
             onEvent: { [weak self] event in
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(event, step: step) } }
             },
@@ -445,9 +458,79 @@ final class AppState: ObservableObject {
         inFlight -= 1
     }
 
-    var workspaceURL: URL { AgentContext.workspace(for: doc.id) }
+    var workspaceURL: URL { projectURL ?? AgentContext.workspace(for: doc.id) }
 
     func revealWorkspace() { NSWorkspace.shared.activateFileViewerSelecting([workspaceURL]) }
+
+    // MARK: - project folder
+
+    /// The document's project folder, if set and still present.
+    var projectURL: URL? {
+        guard let p = doc.projectFolder else { return nil }
+        var dir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: p, isDirectory: &dir), dir.boolValue else { return nil }
+        return URL(fileURLWithPath: p, isDirectory: true)
+    }
+
+    var projectName: String? { doc.projectFolder.map { URL(fileURLWithPath: $0).lastPathComponent } }
+
+    func chooseProjectFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Use as Project"
+        panel.message = "The agent will work in this folder: it can read it and, with Full agent tools, change files and run commands there."
+        if let p = doc.projectFolder { panel.directoryURL = URL(fileURLWithPath: p) }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        setProjectFolder(url)
+        if toolPolicy != .full { offerFullAgent(for: url) }
+    }
+
+    func setProjectFolder(_ url: URL?) {
+        doc.projectFolder = url?.standardizedFileURL.path
+        scheduleSave()
+    }
+
+    /// Changing files needs Full agent: Codex and Claude can't ask mid-run, so Research is read-only for them.
+    private func offerFullAgent(for url: URL) {
+        let alert = NSAlert()
+        alert.messageText = "Let the agent change files in “\(url.lastPathComponent)”?"
+        alert.informativeText = """
+            Agent tools are set to \(toolPolicy.shortTitle). To write code, edit files and run builds or tests in this \
+            project, switch to Full agent. With Research, Copilot asks before each change; Codex and Claude can only read.
+            """
+        alert.addButton(withTitle: "Use Full Agent")
+        alert.addButton(withTitle: "Keep \(toolPolicy.shortTitle)")
+        if alert.runModal() == .alertFirstButtonReturn { toolPolicy = .full }
+    }
+
+    func openProjectInTerminal() {
+        guard let url = projectURL else { return }
+        let term = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+        NSWorkspace.shared.open([url], withApplicationAt: term, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    func openProjectFile(_ path: String) {
+        guard let root = projectURL else { return }
+        let url = root.appendingPathComponent(path)
+        if FileManager.default.fileExists(atPath: url.path) { NSWorkspace.shared.open(url) }
+        else { NSWorkspace.shared.activateFileViewerSelecting([url.deletingLastPathComponent()]) }
+    }
+
+    /// Snapshot of the project's working tree before an agent run (nil if no project, no tools, or not git).
+    private func projectSnapshot(_ agent: AgentContext?) async -> (URL, ProjectChanges.Snapshot)? {
+        guard let agent, agent.project else { return nil }
+        let dir = agent.workspace
+        return await Task.detached { ProjectChanges.snapshot(dir).map { (dir, $0) } }.value
+    }
+
+    /// Records which project files the run touched on the intent.
+    private func recordProjectChanges(_ before: (URL, ProjectChanges.Snapshot)?, step: Int) async {
+        guard let (dir, snap) = before else { return }
+        let files = await Task.detached { ProjectChanges.snapshot(dir).map { ProjectChanges.changed(from: snap, to: $0) } }.value ?? []
+        if !files.isEmpty { updateIntent(step) { $0.files = files } }
+    }
 
     private func refine(cid: String, instruction: String) {
         guard let config = activeProvider else { return }

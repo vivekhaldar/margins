@@ -40,6 +40,7 @@ struct ContentView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             if state.busy { ProgressView().controlSize(.small) }
+            ProjectMenu()
             ProviderMenu()
             Button {
                 state.showOutline.toggle()
@@ -54,6 +55,42 @@ struct ContentView: View {
             }
             .help("Version history (⌥⌘H)")
             .keyboardShortcut("h", modifiers: [.command, .option])
+        }
+    }
+}
+
+/// Where the agent works: the author's project folder (so it can write code), or the document's scratch workspace.
+struct ProjectMenu: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        Menu {
+            if let url = state.projectURL {
+                Section(url.path) {
+                    Button("Show in Finder") { state.revealWorkspace() }
+                    Button("Open in Terminal") { state.openProjectInTerminal() }
+                }
+                Button("Change Project Folder…") { state.chooseProjectFolder() }
+                Button("Stop Using Project Folder") { state.setProjectFolder(nil) }
+            } else {
+                if let name = state.projectName { Text("“\(name)” is missing") }
+                Button("Choose Project Folder…") { state.chooseProjectFolder() }
+                Text("Pick a folder (e.g. a code repo) and the agent can write code, run builds and edit files there.")
+            }
+            Divider()
+            Text(hint)
+        } label: {
+            Label(state.projectName ?? "No project", systemImage: state.projectURL != nil ? "folder.fill" : "folder")
+                .labelStyle(.titleAndIcon)
+        }
+        .help(state.projectURL.map { "Agent works in \($0.path)" } ?? "Choose a project folder for the agent to work in")
+    }
+
+    private var hint: String {
+        switch state.toolPolicy {
+        case .full: return "Agent tools: Full — can change files and run commands."
+        case .research: return "Agent tools: Research — read-only (Copilot asks before changes)."
+        case .off: return "Agent tools: Off — the agent only edits the document."
         }
     }
 }
@@ -84,7 +121,7 @@ struct ProviderMenu: View {
                 if state.toolPolicy != .off, state.activeProvider?.kind.supportsTools == false {
                     Text("This provider has no tools; it answers from the document only.")
                 }
-                Button("Reveal Agent Workspace") { state.revealWorkspace() }
+                Button(state.projectURL == nil ? "Reveal Agent Workspace" : "Show Project in Finder") { state.revealWorkspace() }
             }
             Divider()
             SettingsLink { Text("Providers…") }

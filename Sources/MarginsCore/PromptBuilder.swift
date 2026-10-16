@@ -60,13 +60,31 @@ public enum PromptBuilder {
             let can = p == .full
                 ? "fetch web pages, search the web, run shell commands, and read and write files"
                 : "fetch web pages, search the web, and read files (shell commands and file writes need the author's approval and may be denied)"
+            let place: String
+            if tools!.project {
+                place = """
+                Your working directory is the author's project at \(ws). Besides editing the document, you may \
+                do real work in this project when asked: implement features, fix bugs, write or change code, docs \
+                and config, and run its build and tests to check your work. Make focused changes, follow the \
+                project's conventions, and never touch anything outside \(ws). Do not commit or push unless asked. \
+                If you cannot change files (a write or command was refused, or your sandbox is read-only), \
+                say so plainly and tell the author to switch Agent tools to "Full agent". \
+
+                """
+            } else {
+                place = """
+                Your working directory is \(ws); it belongs to this document and persists between instructions, \
+                so keep downloads and scratch files there and never modify anything outside it. \
+                If the author asks you to change code or files in one of their projects, explain that no project \
+                folder is set and tell them to choose one with Agent → Project Folder…. \
+
+                """
+            }
             intro = """
             You are a capable agent: before answering you may use your tools to \(can). \
             Use them whenever the instruction needs information that is not in the document — \
             e.g. read a linked page, look up facts, get a video transcript, check data. \
-            Your working directory is \(ws); it belongs to this document and persists between instructions, \
-            so keep downloads and scratch files there and never modify anything outside it. \
-            Do not ask the author questions mid-task; make reasonable assumptions and record them in notes. \
+            \(place)Do not ask the author questions mid-task; make reasonable assumptions and record them in notes. \
             Do not narrate. When you are done, your FINAL message must be exactly one JSON object \
             and nothing else, matching this schema:
             """
@@ -96,10 +114,14 @@ public enum PromptBuilder {
     - Match the author's voice. Be concrete. Do not pad.
     - slug: at most 6 lowercase words naming the change (e.g. "tighten intro, add rollout plan").
     - summary: one sentence. notes: 0-3 short assumptions you made or questions for the author.
-    - reply: "" unless the author is discussing a selected passage with you (the prompt will say so).\(tools == nil ? "" : """
+    - reply: "" unless the author is discussing a selected passage with you (the prompt will say so), \
+      or you did work outside the document.\(tools == nil ? "" : """
 
     - If you used sources (web pages, transcripts, files), cite them as links in the document where it helps the reader. \
       Never invent facts you could not verify; say what you could not access in notes.
+    - If you changed files or ran commands in the project, use reply for 1-3 sentences on what you did and how you \
+      verified it (name the key files). Edit the document only as the instruction asks — e.g. to mark an item done \
+      or describe what was built — and return no edits if it doesn't.
     """)
     """
     }
@@ -179,6 +201,9 @@ public enum PromptBuilder {
         concise and specific to the passage, usually under 120 words.
         - If the message asks you to change the text, make the edits, restricted to the selected blocks \
         unless the request clearly needs more, and use "reply" for one short sentence about what you changed.
+        - If the message asks for work outside the document (implement, build, fix or run something in the \
+        author's project — the passage may describe it), do that work with your tools, then use "reply" to say \
+        what you changed and how you checked it. Edit the document only if asked to.
         - slug and summary describe the edits (or the question, if there are none).
 
         Return the JSON edit plan now.

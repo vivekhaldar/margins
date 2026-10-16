@@ -773,7 +773,14 @@
           c.addEventListener('click', () => { window.margins.revealStep(m.step); });
         } else { c.className = 'chgs done'; c.textContent = 'Changes reviewed'; }
         a.appendChild(c);
-      } else if (!m.reply) a.textContent = m.summary || 'No changes needed.';
+      } else if (!m.reply && !(m.files || []).length) a.textContent = m.summary || 'No changes needed.';
+      if ((m.files || []).length) {
+        const f = document.createElement('span');
+        f.className = 'files';
+        f.textContent = `Changed ${m.files.length} file${m.files.length > 1 ? 's' : ''}: ${m.files.slice(0, 4).join(', ')}${m.files.length > 4 ? ', …' : ''}`;
+        f.title = m.files.join('\n');
+        a.appendChild(f);
+      }
       (m.notes || []).forEach((n) => { const s = document.createElement('span'); s.className = 'sum'; s.textContent = n; a.appendChild(s); });
     }
     tin.disabled = working;

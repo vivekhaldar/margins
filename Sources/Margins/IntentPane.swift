@@ -169,6 +169,9 @@ struct IntentCard: View {
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
             }
+            if let files = intent.files, !files.isEmpty {
+                ChangedFiles(files: files)
+            }
             if !intent.summary.isEmpty {
                 Text(intent.summary).font(.callout).foregroundStyle(.secondary)
             }
@@ -362,5 +365,37 @@ private struct PermissionPrompt: View {
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.08)))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.45)))
+    }
+}
+
+/// Project files an agent run touched; click one to open it.
+private struct ChangedFiles: View {
+    @EnvironmentObject var state: AppState
+    let files: [String]
+    @StateObject private var open = Local(false)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button { open.value.toggle() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: open.value ? "chevron.down" : "chevron.right").font(.caption2)
+                    Image(systemName: "doc.badge.gearshape")
+                    Text("Changed \(files.count) file\(files.count == 1 ? "" : "s") in \(state.projectName ?? "project")")
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if open.value {
+                ForEach(files, id: \.self) { f in
+                    Button { state.openProjectFile(f) } label: {
+                        Text(f).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                    }
+                    .buttonStyle(.link)
+                    .padding(.leading, 18)
+                    .help("Open \(f)")
+                }
+            }
+        }
+        .font(.caption).foregroundStyle(.secondary)
     }
 }

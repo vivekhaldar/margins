@@ -61,3 +61,11 @@ Not every input is an instruction to change the document. Often you want to *ask
 
 So Margins borrows the comment thread from document editors. Select a passage and click **Ask** (or press ⌘J), and a small thread opens beside it. The agent answers there, attached to the text. If you ask for a change instead, the edit still arrives as tracked changes in the document. The thread holds just a one-line note about it, so the document stays the output, and the thread is only for conversation *about* it. Threads collapse into 💬 markers in the margin, and each message is also recorded as a card in the instruction panel, so nothing lives only in a popover.
 
+## Step 8: the document drives real work
+
+The first real use exposed a gap. The author kept a planning doc for Margins itself, selected a TODO and asked "implement this". The agent answered that it only had read-only access to a scratch folder. That was true, and it was useless. The document was a plan for work on a codebase, and the agent couldn't touch the codebase.
+
+So a document can now have a **project folder**: the repo or directory it's about. The agent runs there, and with Full agent tools it can change code, run the build and tests, and report back. The paradigm stays the same. You still direct work from the document, the agent's report lands in the thread or on the card ("Changed 2 files", each clickable), and the document is edited only when you ask ("mark this done", "describe what you built"). The doc is the plan and the record; the project is where the work happens.
+
+Two choices matter here. Picking a folder offers to switch to Full agent, because with Codex and Claude, Research is read-only and can't prompt mid-run; a "yes" up front beats a silent refusal later. And changed files are detected by Margins itself (a `git status` snapshot plus modification times, before and after each run) rather than trusted from the model's report.
+

@@ -98,7 +98,8 @@ Selecting text in the editor shows an **Ask** chip (⌘J does the same). It open
 When the tool policy isn't *Off*, `AppState.submit` attaches an `AgentContext` (in `MarginsCore/Providers/Agent.swift`) to the `GenerationRequest`:
 
 - `policy`: `off | research | full` (`AgentToolPolicy`).
-- `workspace`: the per-document directory, keyed by `MarginsDocument.id`.
+- `workspace`: the document's `projectFolder` if set (and it exists), otherwise the per-document directory, keyed by `MarginsDocument.id`.
+- `project`: true when `workspace` is the author's project. `PromptBuilder.system` then says the agent may implement, fix, build and test there (not commit or push unless asked) and report what it did in `reply`. `discussPrompt` adds the same "work outside the document" case.
 - `onEvent(AgentEvent)`: `.step(AgentStep)` for each tool call or update (kind, title, detail such as the command or URL, and status running/done/failed/denied) and `.thought(String)` for narration.
 - `askPermission(PermissionRequest) async -> PermissionDecision`: called only when `autoDecision(for:)` returns nil, i.e. a non-read-only tool under *Research*. `AppState` stores a `PermissionAsk` for the card, `PermissionPrompt` renders it, and the continuation resumes on Allow / Allow all / Deny.
 
@@ -112,6 +113,8 @@ Provider adapters translate their native streams into `AgentEvent`s:
 | Codex | `codex exec --json` lines (`item.started` / `item.completed`) via `CodexProvider.events` | none (sandbox) |
 | Claude | `stream-json` lines (`tool_use`, `tool_result`, `thinking`) via `ClaudeProvider.events` | none (allow-list) |
 
+**Changed files.** When `project` is set, `AppState` takes a `ProjectChanges.snapshot` (`git status --porcelain -z -uall` plus each listed path's modification time) off the main thread before and after the run, and stores the difference on the intent as `files`. So pre-existing uncommitted changes aren't attributed to the agent unless it touched them again. Non-git folders give no list. `IntentCard` shows "Changed N files" (click to open), and the thread payload carries `files` for the bubble.
+
 `ProcessRunner.run(onLine:)` streams subprocess stdout line by line. Each run's `Task` is kept in `AppState.running[step]`, so Stop / ⌘. can cancel it. Steps are saved on the `Intent` (`steps`), so a finished card can still show "Used 6 tools · web, shell". The live thought and pending permission asks are transient.
 
 ## File format
@@ -123,13 +126,14 @@ Provider adapters translate their native streams into `AgentEvent`s:
   "intents":  [{ "id": "…", "step": 1, "kind": "instruction", "text": "…", "status": "done", "summary": "…",
                  "notes": [], "provider": "GitHub Copilot", "refinements": 0, "createdAt": "…",
                  "steps": [{ "id": "…", "kind": "fetch", "title": "Fetching web content", "detail": "https://…", "status": "done" }],
-                 "thread": "…uuid…", "quote": "selected text", "focus": ["b4"], "anchor": "b4", "reply": "…" }],
+                 "thread": "…uuid…", "quote": "selected text", "focus": ["b4"], "anchor": "b4", "reply": "…", "files": ["src/app.swift"] }],
   "versions": [{ "id": "…", "number": 1, "slug": "draft rate limiting design note", "author": "agent",
                  "detail": "<instruction>", "html": "…", "createdAt": "…" }],
-  "assets":   { "3f9a…": { "mime": "image/svg+xml", "data": "<base64>" } } }
+  "assets":   { "3f9a…": { "mime": "image/svg+xml", "data": "<base64>" } },
+  "projectFolder": "/Users/me/src/app" }
 ```
 
-`assets`, `id`, `steps` and the thread fields (`thread`, `quote`, `focus`, `anchor`, `reply`, present only on inline-discussion messages) are optional, so older files still open. A missing `id` is assigned on open and saved.
+`assets`, `id`, `steps`, `projectFolder`, `files` and the thread fields (`thread`, `quote`, `focus`, `anchor`, `reply`, present only on inline-discussion messages) are optional, so older files still open. A missing `id` is assigned on open and saved.
 
 Pending changes are saved as part of `html`, so you can quit mid-review and pick it up later.
 

@@ -261,6 +261,54 @@ let isoDec = JSONDecoder(); isoDec.dateDecodingStrategy = .iso8601
 let li = try! isoDec.decode(Intent.self, from: Data(legacyIntent.utf8))
 check(li.thread == nil && li.reply == nil && li.focus == nil, "legacy intent decodes without thread fields")
 
+// --- project folder ---
+do {
+    var d = MarginsDocument(html: "<p>x</p>")
+    d.projectFolder = "/tmp/proj"
+    let back = try JSONDecoder().decode(MarginsDocument.self, from: JSONEncoder().encode(d))
+    check(back.projectFolder == "/tmp/proj", "projectFolder round-trips")
+    var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(MarginsDocument(html: "<p>x</p>"))) as! [String: Any]
+    legacy.removeValue(forKey: "projectFolder")
+    let old = try JSONDecoder().decode(MarginsDocument.self, from: JSONSerialization.data(withJSONObject: legacy))
+    check(old.projectFolder == nil, "legacy doc decodes without projectFolder")
+    var it = Intent(step: 1, text: "t", provider: "p"); it.files = ["a.swift"]
+    let itBack = try JSONDecoder().decode(Intent.self, from: JSONEncoder().encode(it))
+    check(itBack.files == ["a.swift"], "Intent.files round-trips")
+
+    let ws = URL(fileURLWithPath: "/tmp/proj")
+    let proj = PromptBuilder.system(tools: AgentContext(policy: .full, workspace: ws, project: true, onEvent: { _ in }, askPermission: { _ in .deny }))
+    check(proj.contains("author's project at /tmp/proj") && proj.contains("implement features"), "system prompt: project wording")
+    check(proj.contains("Full agent"), "system prompt: tells author to switch to Full agent when blocked")
+    let scratch = PromptBuilder.system(tools: AgentContext(policy: .research, workspace: ws, onEvent: { _ in }, askPermission: { _ in .deny }))
+    check(scratch.contains("belongs to this document") && scratch.contains("Project Folder"), "system prompt: scratch workspace wording")
+    let dp = PromptBuilder.discussPrompt(blocks: [Block(id: "b1", html: "<p>todo</p>")], focus: ["b1"], quote: "todo",
+                                         history: [], message: "implement this", sources: [])
+    check(dp.contains("work outside the document"), "discussPrompt: outside-work bullet")
+
+    check(ProjectChanges.paths(porcelainZ: " M a.txt\0?? new/b.txt\0R  c2.txt\0c.txt\0D  gone.txt\0") == ["a.txt", "new/b.txt", "c2.txt", "gone.txt"],
+          "porcelain -z parsing incl. renames")
+
+    let repo = FileManager.default.temporaryDirectory.appendingPathComponent("margins-pc-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: repo) }
+    func sh(_ a: [String]) { let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/env"); p.arguments = ["git", "-C", repo.path] + a
+        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice; try? p.run(); p.waitUntilExit() }
+    sh(["init", "-q"])
+    try "one".write(to: repo.appendingPathComponent("keep.txt"), atomically: true, encoding: .utf8)
+    try "dirty".write(to: repo.appendingPathComponent("dirty.txt"), atomically: true, encoding: .utf8)
+    sh(["add", "."]); sh(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"])
+    try "dirty2".write(to: repo.appendingPathComponent("dirty.txt"), atomically: true, encoding: .utf8)
+    let before = ProjectChanges.snapshot(repo)
+    check(before?.keys.sorted() == ["dirty.txt"], "snapshot lists pre-existing dirty file")
+    Thread.sleep(forTimeInterval: 0.02)
+    try "two".write(to: repo.appendingPathComponent("keep.txt"), atomically: true, encoding: .utf8)
+    try FileManager.default.createDirectory(at: repo.appendingPathComponent("src"), withIntermediateDirectories: true)
+    try "new".write(to: repo.appendingPathComponent("src/new.swift"), atomically: true, encoding: .utf8)
+    let after = ProjectChanges.snapshot(repo)
+    check(after.map { ProjectChanges.changed(from: before!, to: $0) } == ["keep.txt", "src/new.swift"], "changed files exclude untouched dirty file")
+    check(ProjectChanges.snapshot(FileManager.default.temporaryDirectory.appendingPathComponent("no-such-\(UUID())")) == nil, "non-repo → nil")
+} catch { check(false, "project folder tests threw \(error)") }
+
 let sem = DispatchSemaphore(value: 0)
 Task {
     let r = try! await ProcessRunner.run(URL(fileURLWithPath: "/bin/cat"), arguments: [], stdin: "hello")

@@ -16,7 +16,7 @@ public enum AgentToolPolicy: String, Codable, CaseIterable, Identifiable, Sendab
         switch self {
         case .off: return "Off — answer from the document only"
         case .research: return "Research — web and reading; ask before commands"
-        case .full: return "Full agent — commands and files in the workspace"
+        case .full: return "Full agent — commands and file changes"
         }
     }
 
@@ -99,15 +99,18 @@ public struct AgentContext: Sendable {
     public var policy: AgentToolPolicy
     /// Working directory for the agent: one per document, persists across instructions.
     public var workspace: URL
+    /// True when `workspace` is the author's own project folder (code, docs) rather than a scratch folder.
+    public var project: Bool
     public var onEvent: @Sendable (AgentEvent) -> Void
     /// Asked for side-effecting tool calls in `.research` mode (where the backend supports it).
     public var askPermission: @Sendable (PermissionRequest) async -> PermissionDecision
 
-    public init(policy: AgentToolPolicy, workspace: URL,
+    public init(policy: AgentToolPolicy, workspace: URL, project: Bool = false,
                 onEvent: @escaping @Sendable (AgentEvent) -> Void = { _ in },
                 askPermission: @escaping @Sendable (PermissionRequest) async -> PermissionDecision = { _ in .deny }) {
         self.policy = policy
         self.workspace = workspace
+        self.project = project
         self.onEvent = onEvent
         self.askPermission = askPermission
     }
