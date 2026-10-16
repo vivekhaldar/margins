@@ -148,6 +148,10 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("window.margins.insertImage(src, alt)", ["src": src, "alt": alt])
     }
     func setOutline(_ on: Bool) async { _ = try? await call("window.margins.setOutline(on)", ["on": on]) }
+    func setThreads(_ list: [[String: Any]]) async { _ = try? await call("window.margins.setThreads(list)", ["list": list]) }
+    func openThread(_ id: UUID) async {
+        _ = try? await call("window.margins.openThread(id)", ["id": id.uuidString.lowercased()])
+    }
     func editLink() async { _ = try? await call("window.margins.editLink()") }
 
     fileprivate func addAsset(_ body: Any) -> String? {

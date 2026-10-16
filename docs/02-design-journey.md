@@ -54,3 +54,10 @@ At first the backend was deliberately one-shot: document in, edit plan out, no t
 So the backend became a full agent that can reason, search, fetch, read and run commands, with three user-chosen tool levels (Off / Research / Full). The paradigm still holds: tool activity streams onto the instruction card as a compact log rather than chat turns, permission asks appear inline on that card, and the agent's final answer is still an edit plan, so whatever it found arrives as tracked changes. Details: [model providers → agent mode](03-model-providers.md#agent-mode-revision).
 
 A second lesson came quickly: tools alone weren't enough. Asked to "make a doc from <YouTube link>", the agent searched, couldn't reach the captions, and reported that honestly. The fix was for Margins to fetch the transcript itself and hand it over. When a source is predictable and hard to reach, the app should fetch it rather than hoping the agent finds a way.
+
+## Step 7: talking about a passage
+
+Not every input is an instruction to change the document. Often you want to *ask* about a passage: "is this accurate?", "why this number?", "explain this". In a chat UI that means copying the text into a message, and the answer scrolls away from the thing it was about.
+
+So Margins borrows the comment thread from document editors. Select a passage and click **Ask** (or press ⌘J), and a small thread opens beside it. The agent answers there, attached to the text. If you ask for a change instead, the edit still arrives as tracked changes in the document. The thread holds just a one-line note about it, so the document stays the output, and the thread is only for conversation *about* it. Threads collapse into 💬 markers in the margin, and each message is also recorded as a card in the instruction panel, so nothing lives only in a popover.
+

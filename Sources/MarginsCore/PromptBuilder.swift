@@ -95,7 +95,8 @@ public enum PromptBuilder {
       using insertAfter "^" edits.
     - Match the author's voice. Be concrete. Do not pad.
     - slug: at most 6 lowercase words naming the change (e.g. "tighten intro, add rollout plan").
-    - summary: one sentence. notes: 0-3 short assumptions you made or questions for the author.\(tools == nil ? "" : """
+    - summary: one sentence. notes: 0-3 short assumptions you made or questions for the author.
+    - reply: "" unless the author is discussing a selected passage with you (the prompt will say so).\(tools == nil ? "" : """
 
     - If you used sources (web pages, transcripts, files), cite them as links in the document where it helps the reader. \
       Never invent facts you could not verify; say what you could not access in notes.
@@ -132,6 +133,56 @@ public enum PromptBuilder {
             s += "\n=== [S\(i + 1)] \(src.title)\(src.byline.isEmpty ? "" : " — \(src.byline)")\n"
             s += "URL: \(src.url)\nKind: \(src.kind)\(src.truncated ? " (truncated)" : "")\n<<<\n\(src.text)\n>>>\n"
         }
+        return s
+    }
+
+    /// One earlier turn of an inline discussion.
+    public struct ThreadTurn: Sendable, Equatable {
+        public var message: String
+        public var reply: String
+        public var changed: String
+        public init(message: String, reply: String, changed: String = "") {
+            self.message = message
+            self.reply = reply
+            self.changed = changed
+        }
+    }
+
+    /// The author selected a passage and is talking about it in a thread beside the text. The model
+    /// decides: answer questions in `reply`, or make edits (scoped to the selection) when asked to change it.
+    public static func discussPrompt(blocks: [Block], focus: [String], quote: String, history: [ThreadTurn],
+                                     message: String, sources: [SourceMaterial] = []) -> String {
+        var s = "DOCUMENT\n"
+        if blocks.isEmpty { s += "(empty)\n" }
+        for b in blocks { s += "[\(b.id)]\(b.pending ? " (pending suggestion)" : "") \(b.html)\n" }
+        let location = focus.isEmpty ? "" : " (in \(focus.map { "[\($0)]" }.joined(separator: ", ")))"
+        s += "\nSELECTED PASSAGE\(location)\n«\(quote.trimmingCharacters(in: .whitespacesAndNewlines))»\n"
+        if !sources.isEmpty { s += "\n" + sourceSection(sources) }
+        if !history.isEmpty {
+            s += "\nEARLIER IN THIS THREAD\n"
+            for t in history {
+                s += "Author: \(t.message)\n"
+                if !t.reply.isEmpty { s += "You: \(t.reply)\n" }
+                if !t.changed.isEmpty { s += "(You edited the document: \(t.changed))\n" }
+            }
+        }
+        s += """
+
+        The author is discussing the selected passage with you in a comment thread beside the text.
+
+        AUTHOR'S MESSAGE
+        \(message)
+
+        How to respond:
+        - If the message is a question, or asks for an explanation, opinion, critique, fact-check or ideas, \
+        answer it in "reply" and return no edits. Write the reply as plain text (no markdown headings), \
+        concise and specific to the passage, usually under 120 words.
+        - If the message asks you to change the text, make the edits, restricted to the selected blocks \
+        unless the request clearly needs more, and use "reply" for one short sentence about what you changed.
+        - slug and summary describe the edits (or the question, if there are none).
+
+        Return the JSON edit plan now.
+        """
         return s
     }
 

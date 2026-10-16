@@ -47,7 +47,7 @@ test("parse rejects non-JSON") {
 test("schema is valid JSON and strict") {
     let o = EditPlanSchema.object
     check(o["additionalProperties"] as? Bool == false, "strict")
-    check((o["required"] as? [String])?.count == 4, "required fields")
+    check((o["required"] as? [String])?.count == 5, "required fields")
 }
 
 test("prompt builder") {
@@ -236,6 +236,30 @@ check(YouTube.pick(Array(ytTracks.prefix(2)), languages: ["fr", "en"])?.url == "
 let srcPrompt = PromptBuilder.editPrompt(blocks: [], instruction: "summarize", sources: [SourceMaterial(url: "https://www.youtube.com/watch?v=x", title: "Talk", byline: "Chan · 9:54", kind: "YouTube transcript (en)", text: "hello world")])
 check(srcPrompt.contains("SOURCE MATERIAL") && srcPrompt.contains("[S1] Talk — Chan · 9:54") && srcPrompt.contains("<<<\nhello world\n>>>"), "prompt includes fetched sources")
 check(srcPrompt.range(of: "SOURCE MATERIAL")!.lowerBound < srcPrompt.range(of: "INSTRUCTION")!.lowerBound, "sources precede instruction")
+
+// inline discussion
+let withReply = try! EditPlanParser.parse(#"{"slug":"q","summary":"s","notes":[],"edits":[],"reply":"It means X."}"#)
+check(withReply.reply == "It means X." && withReply.edits.isEmpty, "plan: reply decoded")
+check(try! EditPlanParser.parse(#"{"slug":"q","summary":"s","notes":[],"edits":[]}"#).reply == "", "plan: missing reply defaults to empty")
+let dp = PromptBuilder.discussPrompt(blocks: [Block(id: "b1", html: "<p>Alpha beta.</p>"), Block(id: "b2", html: "<p>Gamma.</p>")],
+                                     focus: ["b2"], quote: "  Gamma. ",
+                                     history: [.init(message: "Explain", reply: "It is a letter.", changed: ""),
+                                               .init(message: "Shorter", reply: "Done.", changed: "Trimmed b2")],
+                                     message: "Is it accurate?")
+check(dp.contains("SELECTED PASSAGE (in [b2])\n«Gamma.»"), "discuss: quote and location")
+check(dp.contains("Author: Explain\nYou: It is a letter.") && dp.contains("(You edited the document: Trimmed b2)"), "discuss: thread history")
+check(dp.range(of: "EARLIER IN THIS THREAD")!.lowerBound < dp.range(of: "AUTHOR'S MESSAGE\nIs it accurate?")!.lowerBound, "discuss: history precedes message")
+check(!PromptBuilder.discussPrompt(blocks: [], focus: [], quote: "x", history: [], message: "m").contains("EARLIER IN THIS THREAD"), "discuss: no history section when empty")
+var threaded = Intent(step: 3, text: "Explain")
+threaded.thread = UUID(); threaded.quote = "Gamma."; threaded.anchor = "b2"; threaded.focus = ["b2"]; threaded.reply = "A letter."
+var tdoc = MarginsDocument(); tdoc.intents = [threaded]
+let tback = try! MarginsDocument.decode(try! tdoc.encoded())
+let ti = tback.intents.first!
+check(ti.thread == threaded.thread && ti.quote == "Gamma." && ti.anchor == "b2" && ti.focus == ["b2"] && ti.reply == "A letter.", "intent thread fields round-trip")
+let legacyIntent = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","kind":"instruction","step":1,"text":"t","createdAt":"2024-01-01T00:00:00Z","status":"done","summary":"","notes":[],"refinements":[],"provider":""}"#
+let isoDec = JSONDecoder(); isoDec.dateDecodingStrategy = .iso8601
+let li = try! isoDec.decode(Intent.self, from: Data(legacyIntent.utf8))
+check(li.thread == nil && li.reply == nil && li.focus == nil, "legacy intent decodes without thread fields")
 
 let sem = DispatchSemaphore(value: 0)
 Task {

@@ -8,12 +8,15 @@ public struct EditPlan: Codable, Equatable, Sendable {
     public var summary: String
     public var notes: [String]
     public var edits: [EditOp]
+    /// An answer for the author, used only in inline discussions of a selection. Usually empty.
+    public var reply: String
 
-    public init(slug: String = "", summary: String = "", notes: [String] = [], edits: [EditOp]) {
+    public init(slug: String = "", summary: String = "", notes: [String] = [], edits: [EditOp], reply: String = "") {
         self.slug = slug
         self.summary = summary
         self.notes = notes
         self.edits = edits
+        self.reply = reply
     }
 
     public init(from decoder: Decoder) throws {
@@ -22,6 +25,7 @@ public struct EditPlan: Codable, Equatable, Sendable {
         summary = (try? c.decode(String.self, forKey: .summary)) ?? ""
         notes = (try? c.decode([String].self, forKey: .notes)) ?? []
         edits = try c.decode([EditOp].self, forKey: .edits)
+        reply = (try? c.decode(String.self, forKey: .reply)) ?? ""
     }
 }
 
@@ -52,7 +56,7 @@ public enum EditPlanSchema {
     /// Strict JSON Schema (all properties required, no extras) — accepted by
     /// OpenAI structured outputs, `codex exec --output-schema` and `claude --json-schema`.
     public static let json: String = """
-    {"type":"object","additionalProperties":false,"required":["slug","summary","notes","edits"],
+    {"type":"object","additionalProperties":false,"required":["slug","summary","notes","edits","reply"],
      "properties":{
       "slug":{"type":"string","description":"<=6 word lowercase label for this change, used in version history"},
       "summary":{"type":"string","description":"One sentence describing what changed"},
@@ -61,7 +65,8 @@ public enum EditPlanSchema {
         "properties":{
           "op":{"type":"string","enum":["replace","insertAfter","delete"]},
           "blockId":{"type":"string"},
-          "html":{"type":"string"}}}}}}
+          "html":{"type":"string"}}}},
+      "reply":{"type":"string","description":"Answer to the author when they are discussing a selection with you; otherwise empty"}}}
     """
 
     public static var object: [String: Any] {

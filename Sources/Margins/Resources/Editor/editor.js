@@ -251,6 +251,7 @@
     $('#selcount').textContent = `${selected} selected`;
     post('pending', { total: all.length, byStep, selected });
     scheduleOutline();
+    scheduleMarks();
   }
 
   // ---------- inline edits ----------
@@ -588,6 +589,267 @@
   addEventListener('resize', () => { if (document.body.classList.contains('has-outline')) layoutOutline(); });
   function setOutline(on) { outlineOn = !!on; buildOutline(); }
 
+  // ---------- inline discussion threads ----------
+  // Select text → "Ask" chip (or ⌘J) → a popover thread anchored to that passage. The agent answers
+  // in the thread; any edits it makes land as ordinary tracked changes. Threads persist as 💬 markers.
+  const chip = $('#askchip'), tpop = $('#tpop'), tquote = $('#tquote'), tmsgs = $('#tmsgs'), tchips = $('#tchips'),
+    tin = $('#tin'), tmarks = $('#tmarks');
+  let threads = [], openT = null, chipFor = null, chipTimer = null, marksTimer = null;
+  const hasHL = !!(window.CSS && CSS.highlights && window.Highlight);
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
+  const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+  const plain = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const threadOpen = () => tpop.style.display === 'flex';
+
+  function setHL(range) {
+    if (!hasHL) return;
+    if (range && !range.collapsed) CSS.highlights.set('thread', new Highlight(range)); else CSS.highlights.delete('thread');
+  }
+
+  function selInfo() {
+    if (doc.classList.contains('ro')) return null;
+    const s = getSelection();
+    if (!s || !s.rangeCount || s.isCollapsed) return null;
+    const r = s.getRangeAt(0);
+    if (!doc.contains(r.commonAncestorContainer)) return null;
+    const quote = plain(s.toString());
+    if (quote.length < 2) return null;
+    const focus = tops().filter((el) => el.dataset.bid && r.intersectsNode(el)).map((el) => el.dataset.bid);
+    if (!focus.length) return null;
+    return { range: r.cloneRange(), quote: quote.slice(0, 2000), focus, anchor: focus[0] };
+  }
+
+  // Re-find a thread's quote in its blocks (the original Range dies when blocks are rewritten).
+  function findQuote(t) {
+    const want = plain(t.quote);
+    if (!want) return null;
+    for (const id of [...new Set([t.anchor, ...(t.focus || [])])]) {
+      const el = id && byBid(id);
+      if (!el) continue;
+      const map = [];
+      let norm = '', prevSpace = true;
+      const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let n; (n = w.nextNode());) {
+        if (n.parentNode.closest && n.parentNode.closest('.tools,.rb')) continue;
+        const v = n.nodeValue;
+        for (let i = 0; i < v.length; i++) {
+          const sp = /\s/.test(v[i]);
+          if (sp && prevSpace) continue;
+          norm += sp ? ' ' : v[i];
+          map.push([n, i]);
+          prevSpace = sp;
+        }
+      }
+      for (const q of [want, want.slice(0, 80).trim(), want.slice(0, 32).trim()]) {
+        if (q.length < 2) continue;
+        const k = norm.indexOf(q);
+        if (k < 0) continue;
+        const a = map[k], b = map[k + q.length - 1], r = document.createRange();
+        r.setStart(a[0], a[1]);
+        r.setEnd(b[0], b[1] + 1);
+        return r;
+      }
+    }
+    return null;
+  }
+  const rangeLive = (r) => r && !r.collapsed && doc.contains(r.startContainer) && doc.contains(r.endContainer);
+
+  // ----- the "Ask" chip on selections -----
+  function hideChip() { chip.style.display = 'none'; chipFor = null; }
+  function syncChip() {
+    clearTimeout(chipTimer);
+    chipTimer = setTimeout(() => {
+      const i = threadOpen() ? null : selInfo();
+      if (!i) { hideChip(); return; }
+      chipFor = i;
+      const rects = i.range.getClientRects();
+      const first = rects[0] || i.range.getBoundingClientRect();
+      chip.style.display = 'flex';
+      const above = first.top - chip.offsetHeight - 8;
+      chip.style.top = (above > 46 ? above : first.bottom + 8) + 'px';
+      chip.style.left = Math.max(10, Math.min(window.innerWidth - chip.offsetWidth - 10, first.left)) + 'px';
+    }, 160);
+  }
+  document.addEventListener('selectionchange', () => { if (document.activeElement !== tin) syncChip(); });
+  chip.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); const i = chipFor || selInfo(); if (i) startThread(i); });
+
+  // ----- the popover -----
+  function startThread(i) {
+    hideChip();
+    hideLinkPop();
+    closeRefine();
+    openT = { id: uuid(), quote: i.quote, focus: i.focus, anchor: i.anchor, range: i.range };
+    getSelection().removeAllRanges();
+    showThread();
+  }
+  function openThreadId(id) {
+    const th = threads.find((x) => x.id === id);
+    if (!th || doc.classList.contains('ro')) return;
+    hideChip();
+    openT = { id: th.id, quote: th.quote, focus: th.focus || [], anchor: th.anchor, range: null };
+    openT.range = findQuote(openT);
+    const el = (openT.range && openT.range.startContainer.parentElement) || byBid(th.anchor);
+    if (el) el.scrollIntoView({ block: 'center' });
+    showThread();
+  }
+  function showThread() {
+    tquote.textContent = '“' + trunc(openT.quote, 220) + '”';
+    tquote.title = openT.quote;
+    tin.value = '';
+    renderThread();
+    placeThread();
+    setHL(openT.range);
+    drawMarks();
+    tin.focus();
+  }
+  function closeThread() {
+    if (!openT) return;
+    openT = null;
+    tpop.style.display = 'none';
+    setHL(null);
+    drawMarks();
+  }
+  function placeThread() {
+    if (!openT) return;
+    tpop.style.display = 'flex';
+    let rect = rangeLive(openT.range) ? openT.range.getBoundingClientRect() : null;
+    if (!rect || (!rect.width && !rect.height)) { const b = byBid(openT.anchor); rect = b ? b.getBoundingClientRect() : null; }
+    if (!rect) rect = { top: 80, bottom: 80, left: 80, right: 80 };
+    const W = tpop.offsetWidth, H = tpop.offsetHeight, art = doc.getBoundingClientRect();
+    let left, top;
+    if (window.innerWidth - art.right >= W + 20) { left = art.right + 12; top = rect.top - 10; }
+    else {
+      // Below (or above) the whole passage block so its tracked changes stay visible; else hug the quote.
+      const blk = byBid(openT.anchor), br = blk ? blk.getBoundingClientRect() : rect;
+      left = Math.max(10, Math.min(window.innerWidth - W - 10, rect.left));
+      if (br.bottom + 8 + H <= window.innerHeight - 10) top = br.bottom + 8;
+      else if (br.top - H - 8 >= 46) top = br.top - H - 8;
+      else {
+        top = rect.bottom + 8;
+        if (top + H > window.innerHeight - 10 && rect.top - H - 8 > 46) top = rect.top - H - 8;
+      }
+    }
+    tpop.style.left = left + 'px';
+    tpop.style.top = Math.max(46, Math.min(window.innerHeight - H - 10, top)) + 'px';
+  }
+  function bubble(cls, text) {
+    const d = document.createElement('div');
+    d.className = 'tm ' + cls;
+    if (text) d.textContent = text;
+    tmsgs.appendChild(d);
+    return d;
+  }
+  function renderThread() {
+    if (!openT) return;
+    const th = threads.find((x) => x.id === openT.id);
+    const msgs = th ? th.messages : [];
+    tmsgs.innerHTML = '';
+    tchips.style.display = msgs.length ? 'none' : 'flex';
+    let working = false;
+    for (const m of msgs) {
+      bubble('me', m.text);
+      if (m.status === 'working') {
+        working = true;
+        const a = bubble('ai working');
+        a.innerHTML = '<span class="spin"></span><span class="act"></span>';
+        a.querySelector('.act').textContent = m.waiting ? 'Waiting for your permission — see the panel on the left' : (m.activity || 'Thinking…');
+        if (m.step) {
+          const b = document.createElement('button');
+          b.className = 'stop'; b.textContent = 'Stop';
+          b.addEventListener('click', () => post('stop', { step: m.step }));
+          a.appendChild(b);
+        }
+        continue;
+      }
+      if (m.status === 'failed') { bubble('ai err', m.error || 'Something went wrong.'); continue; }
+      const a = bubble('ai', m.reply || '');
+      if (m.status === 'pending' || m.status === 'reviewed') {
+        if (m.summary && !m.reply) { const s = document.createElement('span'); s.className = 'sum'; s.textContent = m.summary; a.appendChild(s); }
+        const c = document.createElement('span');
+        if (m.changes > 0) {
+          c.className = 'chgs';
+          c.textContent = `Proposed ${m.changes} change${m.changes > 1 ? 's' : ''} · Review ↓`;
+          c.addEventListener('click', () => { window.margins.revealStep(m.step); });
+        } else { c.className = 'chgs done'; c.textContent = 'Changes reviewed'; }
+        a.appendChild(c);
+      } else if (!m.reply) a.textContent = m.summary || 'No changes needed.';
+      (m.notes || []).forEach((n) => { const s = document.createElement('span'); s.className = 'sum'; s.textContent = n; a.appendChild(s); });
+    }
+    tin.disabled = working;
+    tin.placeholder = working ? 'Working…' : (msgs.length ? 'Reply…' : 'Ask about this, or say how to change it…');
+    tmsgs.scrollTop = tmsgs.scrollHeight;
+  }
+  function sendThread(text) {
+    text = (text || '').trim();
+    if (!openT || !text || tin.disabled) return;
+    const t = openT;
+    post('ask', { thread: t.id, quote: t.quote, focus: t.focus, anchor: t.anchor, message: text });
+    let th = threads.find((x) => x.id === t.id);
+    if (!th) { th = { id: t.id, anchor: t.anchor, focus: t.focus, quote: t.quote, messages: [] }; threads.push(th); }
+    th.messages.push({ text, status: 'working', activity: 'Starting…' });
+    tin.value = '';
+    autosize();
+    renderThread();
+    placeThread();
+    drawMarks();
+  }
+  function autosize() { tin.style.height = 'auto'; tin.style.height = Math.min(120, tin.scrollHeight + 2) + 'px'; }
+  tin.addEventListener('input', autosize);
+  tin.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendThread(tin.value); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeThread(); }
+  });
+  tchips.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => sendThread(b.dataset.q)));
+  $('#tclose').addEventListener('click', closeThread);
+  document.addEventListener('mousedown', (e) => {
+    if (openT && !tpop.contains(e.target) && !e.target.closest('.tmark') && !e.target.closest('.tools')) closeThread();
+  });
+
+  // ----- margin markers -----
+  function scheduleMarks() { clearTimeout(marksTimer); marksTimer = setTimeout(drawMarks, 80); }
+  function drawMarks() {
+    tmarks.innerHTML = '';
+    if (doc.classList.contains('ro')) return;
+    const sr = scroller.getBoundingClientRect(), ar = doc.getBoundingClientRect();
+    const stack = new Map();
+    for (const t of threads) {
+      const el = [t.anchor, ...(t.focus || [])].map((id) => id && byBid(id)).find(Boolean);
+      if (!el) continue;
+      const n = stack.get(el) || 0;
+      stack.set(el, n + 1);
+      const r = el.getBoundingClientRect();
+      const m = document.createElement('button');
+      const busy = t.messages.some((x) => x.status === 'working');
+      m.className = 'tmark' + (openT && openT.id === t.id ? ' on' : '') + (busy ? ' busy' : '');
+      m.innerHTML = '<span class="bub"></span>' + (t.messages.length > 1 ? t.messages.length : '');
+      m.title = `“${trunc(t.quote, 120)}” — ${t.messages.length} message${t.messages.length === 1 ? '' : 's'}`;
+      m.style.top = (r.top - sr.top + scroller.scrollTop + 2 + n * 24) + 'px';
+      m.style.left = (ar.left - sr.left + scroller.scrollLeft + 10) + 'px';
+      m.addEventListener('mousedown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (openT && openT.id === t.id) closeThread(); else openThreadId(t.id);
+      });
+      tmarks.appendChild(m);
+    }
+  }
+  new ResizeObserver(scheduleMarks).observe(doc);
+  window.addEventListener('resize', () => { scheduleMarks(); placeThread(); hideChip(); });
+  scroller.addEventListener('scroll', () => { if (openT) placeThread(); if (chipFor) syncChip(); }, { passive: true });
+  doc.addEventListener('input', scheduleMarks);
+
+  function setThreads(list) {
+    threads = Array.isArray(list) ? list : [];
+    if (openT) {
+      const th = threads.find((x) => x.id === openT.id);
+      if (th && th.focus && th.focus.length) openT.focus = th.focus;
+      if (!rangeLive(openT.range)) { openT.range = findQuote(openT); setHL(openT.range); }
+      renderThread();
+      placeThread();
+    }
+    drawMarks();
+  }
+
   // ---------- keyboard review ----------
   let cur = -1;
   function move(d) {
@@ -598,14 +860,19 @@
     all[cur].scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
   document.addEventListener('keydown', (e) => {
-    if (e.target === popin || e.target === lurl) return;
+    if (e.target === popin || e.target === lurl || e.target === tin) return;
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'j') {
+      const i = selInfo();
+      if (i) { e.preventDefault(); startThread(i); }
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k' && e.target.isContentEditable) {
       e.preventDefault();
       editLink();
       return;
     }
     if (e.target.isContentEditable) {
-      if (e.key === 'Escape') { doc.blur(); getSelection().removeAllRanges(); flushEdits(); }
+      if (e.key === 'Escape') { if (openT) { closeThread(); return; } doc.blur(); getSelection().removeAllRanges(); flushEdits(); }
       return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey || doc.classList.contains('ro')) return;
@@ -618,7 +885,7 @@
       resolve(c, k === 'a'); normalize(); emitPending();
       const rest = chgs(); if (rest.length) { cur = Math.min(cur, rest.length - 1) - 1; move(1); } else cur = -1;
     } else if (k === 'c' && c) { e.preventDefault(); openRefine(c); }
-    else if (k === 'escape') { closeRefine(); chgs().forEach((x) => x.classList.remove('cur', 'sel')); cur = -1; emitPending(); }
+    else if (k === 'escape') { closeThread(); closeRefine(); chgs().forEach((x) => x.classList.remove('cur', 'sel')); cur = -1; emitPending(); }
   });
 
   // ---------- preview of historical versions ----------
@@ -631,8 +898,11 @@
     doc.classList.add('ro');
     document.body.classList.add('previewing');
     closeRefine();
+    closeThread();
+    hideChip();
     hideLinkPop();
     buildOutline();
+    drawMarks();
   }
   function endPreview() {
     if (live === null) return;
@@ -649,6 +919,7 @@
   window.margins = {
     load(html) {
       live = null;
+      closeThread();
       doc.innerHTML = html || '';
       doc.contentEditable = 'true';
       doc.classList.remove('ro');
@@ -705,6 +976,8 @@
     revealStep(step) { const c = select({ step })[0]; if (c) { c.scrollIntoView({ block: 'center', behavior: 'smooth' }); flash(c); } },
     preview,
     endPreview,
+    setThreads: (list) => setThreads(list),
+    openThread: (id) => openThreadId(id),
   };
 
   normalize();

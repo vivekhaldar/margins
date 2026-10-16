@@ -69,6 +69,7 @@ A pending change is a wrapper element:
 | `refineContext(cid)`, `applyRefinement(cid, html, n)` | `reviewed {accepted, rejected, sections, html}` |
 | `highlightStep`, `revealStep`, `preview`, `endPreview` | `refine {cid, step, instruction}` |
 | `insertImage(src, alt)`, `editLink()` | `openURL {url}` |
+| `setThreads(list)`, `openThread(id)` | `ask {thread, quote, focus, anchor, message}`, `stop {step}` |
 
 Two more channels serve images. `webkit.messageHandlers.assets` is a reply handler: pasted or dropped image bytes go in as `{mime, data}` and the stored asset's URL comes back. A `WKURLSchemeHandler` for `margins-asset://` serves those assets back to the page.
 
@@ -81,6 +82,16 @@ Two more channels serve images. `webkit.messageHandlers.assets` is a reply handl
 4. `editor.applyEdits(step, edits, direct: isEmptyDoc)` renders the changes; the intent gets its summary/notes and status *N pending* or *applied*.
 5. A `Version` (author *agent*, slug from the plan) is snapshotted, and the document autosaves.
 6. Review or user edits produce further versions (author *review* / *you*) with generated slugs.
+
+## Inline discussion threads
+
+Selecting text in the editor shows an **Ask** chip (⌘J does the same). It opens a thread popover anchored to the selection; the quoted range is highlighted with the CSS Custom Highlight API, so the DOM isn't touched.
+
+1. Sending a message posts `ask {thread, quote, focus, anchor, message}`. `thread` is a UUID made in JS, `focus` lists the blocks the selection touched, and `anchor` is the first of them.
+2. `AppState.discuss` appends an ordinary instruction `Intent` carrying `thread`, `quote`, `focus` and `anchor`, so it gets a step number, a card, agent tools, Stop and permission prompts like any instruction. Later messages in the thread reuse the first message's quote and focus.
+3. `PromptBuilder.discussPrompt` sends the document, the `SELECTED PASSAGE` and its blocks, earlier turns of this thread (message, reply, what was edited) and the new message. The edit plan has a `reply` field. A question gets a reply and no edits. A change request gets edits, limited to the selected blocks unless clearly needed, plus a one-sentence reply.
+4. Edits apply as tracked changes for that message's step, so review, refine and history work unchanged. The intent stores `reply` and ends as *N pending* if anything changed, otherwise *answered* (`done`).
+5. `AppState` pushes the threads (grouped from intents, with live status, current activity, pending counts and permission waits) to `setThreads`. Pushes are coalesced and skipped when nothing changed. The editor redraws the open thread and the 💬 margin markers. A marker sits beside the thread's anchor block and reopens the thread; the quote is found again by whitespace-insensitive text search, because the original `Range` doesn't survive the block being rewritten.
 
 ## Agent runs
 
@@ -111,13 +122,14 @@ Provider adapters translate their native streams into `AgentEvent`s:
 { "format": 1, "id": "…uuid…", "html": "…", "nextStep": 4,
   "intents":  [{ "id": "…", "step": 1, "kind": "instruction", "text": "…", "status": "done", "summary": "…",
                  "notes": [], "provider": "GitHub Copilot", "refinements": 0, "createdAt": "…",
-                 "steps": [{ "id": "…", "kind": "fetch", "title": "Fetching web content", "detail": "https://…", "status": "done" }] }],
+                 "steps": [{ "id": "…", "kind": "fetch", "title": "Fetching web content", "detail": "https://…", "status": "done" }],
+                 "thread": "…uuid…", "quote": "selected text", "focus": ["b4"], "anchor": "b4", "reply": "…" }],
   "versions": [{ "id": "…", "number": 1, "slug": "draft rate limiting design note", "author": "agent",
                  "detail": "<instruction>", "html": "…", "createdAt": "…" }],
   "assets":   { "3f9a…": { "mime": "image/svg+xml", "data": "<base64>" } } }
 ```
 
-`assets`, `id` and `steps` are optional, so older files still open. A missing `id` is assigned on open and saved.
+`assets`, `id`, `steps` and the thread fields (`thread`, `quote`, `focus`, `anchor`, `reply`, present only on inline-discussion messages) are optional, so older files still open. A missing `id` is assigned on open and saved.
 
 Pending changes are saved as part of `html`, so you can quit mid-review and pick it up later.
 

@@ -14,13 +14,14 @@
     <button data-act="clear-sel">Clear</button>
   </span>
   <span class="sp"></span>
-  <span class="kb" id="kb"><kbd>Esc</kbd> then <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>X</kbd> select · <kbd>A</kbd>/<kbd>R</kbd> accept/reject · <kbd>C</kbd> refine · <kbd>⌘</kbd>-click select · <kbd>⌘K</kbd> link</span>
+  <span class="kb" id="kb"><kbd>Esc</kbd> then <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>X</kbd> select · <kbd>A</kbd>/<kbd>R</kbd> accept/reject · <kbd>C</kbd> refine · <kbd>⌘J</kbd> discuss selection · <kbd>⌘</kbd>-click select · <kbd>⌘K</kbd> link</span>
   <button class="btn" id="rejAll" data-act="rej-all" disabled>Reject all</button>
   <button class="btn p" id="accAll" data-act="acc-all" disabled>Accept all</button>
 </div>
 <div class="scroll" id="scroll">
   <article id="doc" contenteditable="true" spellcheck="true"
            data-placeholder="Your document will appear here. Describe what you want to write in the panel on the left — or just start typing."></article>
+  <div id="tmarks"></div>
 </div>
 <nav class="outline" id="outline" aria-label="Outline">
   <div class="ohd">Outline <button id="ohide" title="Hide outline (⌃⌘O)">✕</button></div>
@@ -49,6 +50,19 @@
     <input id="lurl" placeholder="Paste or type a link, then ↩" spellcheck="false" autocomplete="off">
     <div class="pf">↩ apply · Esc cancel · empty removes the link</div>
   </div>
+</div>
+<button class="askchip" id="askchip" title="Discuss this passage with the agent (⌘J)"><span class="bub"></span>Ask</button>
+<div class="tpop" id="tpop">
+  <div class="thd"><span class="tq" id="tquote"></span><button id="tclose" title="Close (Esc)">✕</button></div>
+  <div class="tmsgs" id="tmsgs"></div>
+  <div class="qs" id="tchips">
+    <button data-q="Explain this.">Explain</button>
+    <button data-q="Is this accurate? Check it and tell me what's wrong, if anything.">Is this accurate?</button>
+    <button data-q="Tighten this.">Tighten</button>
+    <button data-q="Rewrite this in simpler language.">Simpler</button>
+  </div>
+  <textarea id="tin" rows="1" placeholder="Ask about this, or say how to change it…"></textarea>
+  <div class="pf">↩ send · ⇧↩ new line · Esc close · edits arrive as tracked changes</div>
 </div>
 <script src="editor.js"></script>
 </body>

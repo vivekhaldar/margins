@@ -22,9 +22,9 @@ struct PendingInfo: Equatable {
 final class AppState: ObservableObject {
     static let shared = AppState()
 
-    @Published private(set) var doc = MarginsDocument()
+    @Published private(set) var doc = MarginsDocument() { didSet { scheduleThreads() } }
     @Published private(set) var fileURL: URL
-    @Published var pending = PendingInfo()
+    @Published var pending = PendingInfo() { didSet { scheduleThreads() } }
     @Published var inFlight = 0
     @Published var previewing: Version?
     @Published var showHistory = false
@@ -41,9 +41,11 @@ final class AppState: ObservableObject {
         didSet { defaults.set(toolPolicy.rawValue, forKey: "toolPolicy") }
     }
     /// Latest reasoning/narration per working instruction (not persisted).
-    @Published var liveThought: [Int: String] = [:]
+    @Published var liveThought: [Int: String] = [:] { didSet { scheduleThreads() } }
     /// Tool calls awaiting approval, per instruction step.
-    @Published var permissionAsks: [Int: PermissionAsk] = [:]
+    @Published var permissionAsks: [Int: PermissionAsk] = [:] { didSet { scheduleThreads() } }
+    private var threadsPush: Task<Void, Never>?
+    private var lastThreadsJSON = ""
     private var running: [Int: Task<Void, Never>] = [:]
     /// Steps whose next thought starts a fresh paragraph (a tool call happened since the last one).
     private var thoughtBreak: Set<Int> = []
@@ -194,6 +196,152 @@ final class AppState: ObservableObject {
                 scheduleSave()
             }
         }
+    }
+
+    // MARK: - inline discussion
+
+    /// One message in an inline thread about a selected passage. The agent may answer, edit the
+    /// selection (as tracked changes for this message's step), or both.
+    func discuss(thread: UUID, quote rawQuote: String, focus rawFocus: [String], anchor rawAnchor: String, message raw: String) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard let config = activeProvider else { lastError = "Choose a model provider."; return }
+        previewing = nil
+        let prior = doc.intents.filter { $0.kind == .instruction && $0.thread == thread }
+        let quote = prior.first?.quote ?? rawQuote
+        let focus = prior.first?.focus ?? rawFocus
+        let anchor = prior.first?.anchor ?? rawAnchor
+        let history = prior.map { p in
+            PromptBuilder.ThreadTurn(message: p.text,
+                                     reply: p.reply ?? p.error.map { "(no answer: \($0))" } ?? "",
+                                     changed: p.status == .pending || p.status == .reviewed ? p.summary : "")
+        }
+        let step = doc.nextStep
+        doc.nextStep += 1
+        var intent = Intent(step: step, text: text, provider: label(config))
+        intent.thread = thread
+        intent.quote = quote
+        intent.focus = focus
+        intent.anchor = anchor
+        doc.intents.append(intent)
+        inFlight += 1
+        running[step] = Task {
+            defer { finish(step) }
+            do {
+                let provider = try provider(for: config)
+                let sources = await fetchSources(for: text, step: step)
+                try Task.checkCancellation()
+                let snapshot = try await editor.blocks()
+                let live = focus.filter { id in snapshot.blocks.contains { $0.id == id } }
+                let agent = agentContext(step: step, kind: config.kind)
+                let request = GenerationRequest(
+                    system: PromptBuilder.system(tools: agent),
+                    prompt: PromptBuilder.discussPrompt(blocks: forPrompt(snapshot.blocks), focus: live.isEmpty ? focus : live,
+                                                        quote: quote, history: history, message: text, sources: sources),
+                    model: config.model.isEmpty ? nil : config.model, agent: agent)
+                let plan = try await provider.editPlan(request)
+                var result: EditorBridge.ApplyResult?
+                if !plan.edits.isEmpty {
+                    let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
+                    result = try await editor.apply(step: step, edits: edits, direct: false)
+                }
+                let changed = (result?.changes ?? 0) > 0
+                updateIntent(step) {
+                    $0.reply = plan.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+                    $0.summary = changed ? plan.summary : ""
+                    $0.notes = plan.notes
+                    if let missing = result?.missing, !missing.isEmpty {
+                        $0.notes.append("Ignored edits to unknown blocks: \(missing.joined(separator: ", "))")
+                    }
+                    if ($0.reply ?? "").isEmpty && !changed {
+                        $0.reply = plan.summary.isEmpty ? "No changes needed." : plan.summary
+                    }
+                    $0.status = changed ? .pending : .done
+                }
+                if let result, changed {
+                    let slug = plan.slug.isEmpty ? String(text.prefix(48)) : plan.slug
+                    doc.snapshot(html: result.html, slug: slug, author: .agent, detail: "On “\(quote.prefix(60))”: \(text)")
+                }
+                scheduleSave()
+            } catch is CancellationError {
+                updateIntent(step) { $0.status = .failed; $0.error = "Stopped." }
+                scheduleSave()
+            } catch {
+                updateIntent(step) { $0.status = .failed; $0.error = Task.isCancelled ? "Stopped." : error.localizedDescription }
+                scheduleSave()
+            }
+        }
+    }
+
+    func openThread(_ id: UUID) {
+        previewing = nil
+        Task {
+            await editor.endPreview()
+            await pushThreads()
+            await editor.openThread(id)
+        }
+    }
+
+    /// Threads change with intents, pending counts, live activity and permission prompts; coalesce pushes.
+    private func scheduleThreads() {
+        guard threadsPush == nil else { return }
+        threadsPush = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard let self else { return }
+            self.threadsPush = nil
+            await self.pushThreads()
+        }
+    }
+
+    private func pushThreads() async {
+        let list = threadPayload()
+        guard let data = try? JSONSerialization.data(withJSONObject: list, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8), json != lastThreadsJSON else { return }
+        lastThreadsJSON = json
+        await editor.setThreads(list)
+    }
+
+    private func threadPayload() -> [[String: Any]] {
+        var order: [UUID] = []
+        var groups: [UUID: [Intent]] = [:]
+        for i in doc.intents where i.kind == .instruction {
+            guard let t = i.thread else { continue }
+            if groups[t] == nil { order.append(t) }
+            groups[t, default: []].append(i)
+        }
+        return order.map { id in
+            let items = groups[id] ?? []
+            let first = items.first
+            return [
+                "id": id.uuidString.lowercased(),
+                "quote": first?.quote ?? "",
+                "anchor": first?.anchor ?? "",
+                "focus": first?.focus ?? [],
+                "messages": items.map { m -> [String: Any] in
+                    [
+                        "step": m.step,
+                        "text": m.text,
+                        "status": m.status.rawValue,
+                        "reply": m.reply ?? "",
+                        "summary": m.summary,
+                        "notes": m.notes,
+                        "changes": pending.byStep[m.step] ?? 0,
+                        "error": m.error ?? "",
+                        "waiting": permissionAsks[m.step] != nil,
+                        "activity": m.status == .working ? activity(m) : "",
+                    ]
+                },
+            ]
+        }
+    }
+
+    /// One line describing what the agent is doing right now.
+    private func activity(_ m: Intent) -> String {
+        if let s = m.steps?.last(where: { $0.status == .running }), !s.title.isEmpty { return s.title }
+        if let t = liveThought[m.step]?.split(whereSeparator: \.isNewline).last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            return String(t.trimmingCharacters(in: .whitespaces).suffix(140))
+        }
+        return "Thinking…"
     }
 
     // MARK: - agent
@@ -372,6 +520,8 @@ final class AppState: ObservableObject {
     private func handle(_ type: String, _ body: [String: Any]) {
         switch type {
         case "ready":
+            lastThreadsJSON = ""
+            scheduleThreads()
             Task {
                 await editor.setOutline(showOutline)
                 await editor.load(doc.html)
@@ -412,6 +562,13 @@ final class AppState: ObservableObject {
             doc.snapshot(html: body["html"] as? String ?? doc.html, slug: slug, author: .review,
                          detail: sections.map { "§\($0)" }.joined(separator: ", "))
             scheduleSave()
+        case "ask":
+            if let t = (body["thread"] as? String).flatMap(UUID.init(uuidString:)), let message = body["message"] as? String {
+                discuss(thread: t, quote: body["quote"] as? String ?? "", focus: body["focus"] as? [String] ?? [],
+                        anchor: body["anchor"] as? String ?? "", message: message)
+            }
+        case "stop":
+            if let s = body["step"] as? NSNumber { stop(step: s.intValue) }
         case "refine":
             if let cid = body["cid"] as? String, let text = body["instruction"] as? String { refine(cid: cid, instruction: text) }
         default:

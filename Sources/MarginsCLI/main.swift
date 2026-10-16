@@ -5,6 +5,7 @@ import MarginsCore
 //
 //   margins-cli models <copilot|codex|claude|openai> [--base-url URL]
 //   margins-cli edit   <provider> [--model M] [--blocks blocks.json] [--tools off|research|full] "instruction"
+//   margins-cli edit   <provider> --blocks blocks.json --quote "selected text" "message"   (inline discussion)
 //
 // With --tools, the agent's tool calls stream to stderr; permission asks (research mode) are approved
 // if --yes is given, else denied.
@@ -14,7 +15,7 @@ import MarginsCore
 func usage() -> Never {
     FileHandle.standardError.write(Data("""
     usage: margins-cli models <copilot|codex|claude|openai> [--base-url URL]
-           margins-cli edit <provider> [--model M] [--blocks FILE] [--base-url URL] [--tools off|research|full] [--yes] "instruction"
+           margins-cli edit <provider> [--model M] [--blocks FILE] [--base-url URL] [--tools off|research|full] [--yes] [--quote TEXT] "instruction"
 
     """.utf8))
     exit(2)
@@ -34,6 +35,7 @@ func option(_ name: String) -> String? {
 let model = option("--model")
 let blocksPath = option("--blocks")
 let baseURL = option("--base-url")
+let quote = option("--quote")
 let policy = option("--tools").flatMap(AgentToolPolicy.init(rawValue:)) ?? .off
 let autoYes = args.contains("--yes")
 args.removeAll { $0 == "--yes" }
@@ -87,7 +89,11 @@ do {
         }
         let plan = try await provider.editPlan(GenerationRequest(
             system: PromptBuilder.system(tools: policy == .off || !kind.supportsTools ? nil : agent),
-            prompt: PromptBuilder.editPrompt(blocks: blocks, instruction: instruction, sources: sources),
+            prompt: quote.map { q in
+                let plain = { (h: String) in h.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression) }
+                return PromptBuilder.discussPrompt(blocks: blocks, focus: blocks.filter { plain($0.html).contains(q) }.map(\.id),
+                                                   quote: q, history: [], message: instruction, sources: sources)
+            } ?? PromptBuilder.editPrompt(blocks: blocks, instruction: instruction, sources: sources),
             model: model, agent: agent))
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]

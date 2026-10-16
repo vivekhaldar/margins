@@ -141,6 +141,20 @@ struct IntentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let quote = intent.quote, let thread = intent.thread {
+                Button { state.openThread(thread) } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Image(systemName: "text.bubble").foregroundStyle(Color.accentColor)
+                        Text("“\(quote)”").italic().lineLimit(2).foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                    .padding(.leading, 6)
+                    .overlay(Rectangle().fill(Color.yellow.opacity(0.7)).frame(width: 2), alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open this thread in the document")
+            }
             Text(intent.text).font(.body.weight(.medium)).textSelection(.enabled)
             status
             if intent.steps != nil || state.liveThought[intent.step] != nil {
@@ -148,6 +162,12 @@ struct IntentCard: View {
             }
             if let ask = state.permissionAsks[intent.step] {
                 PermissionPrompt(ask: ask)
+            }
+            if let reply = intent.reply, !reply.isEmpty {
+                Text(reply).font(.callout).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
             }
             if !intent.summary.isEmpty {
                 Text(intent.summary).font(.callout).foregroundStyle(.secondary)
@@ -197,7 +217,7 @@ struct IntentCard: View {
             case .reviewed:
                 chip("reviewed", .green)
             case .done:
-                chip("applied", .green)
+                chip(intent.thread != nil ? "answered" : "applied", .green)
             case .failed:
                 chip("failed", .red)
             }

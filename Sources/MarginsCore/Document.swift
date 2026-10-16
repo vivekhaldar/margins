@@ -93,6 +93,14 @@ public struct Intent: Codable, Equatable, Identifiable, Sendable {
     public var error: String?
     /// Tool calls the agent made while working on this instruction (nil for one-shot runs).
     public var steps: [AgentStep]?
+    /// Inline discussion: messages in one thread share an id and are anchored to `quote` in block `anchor`.
+    public var thread: UUID?
+    public var quote: String?
+    public var anchor: String?
+    /// Blocks the selection spanned when the thread started.
+    public var focus: [String]?
+    /// The agent's answer in an inline discussion.
+    public var reply: String?
 
     public init(id: UUID = UUID(), kind: Kind = .instruction, step: Int, text: String, createdAt: Date = Date(),
                 status: Status = .working, summary: String = "", notes: [String] = [],

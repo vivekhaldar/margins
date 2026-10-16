@@ -29,6 +29,7 @@ The output isn't a reply. It's the document.
   - by selection: ⌘-click or `X`, then accept or reject the selected ones;
   - all at once.
 - **💬 Refine a single change.** Ask the agent to redo just that hunk ("shorter", "more formal"…) without touching the rest of the document.
+- **Discuss a selection inline.** Select some text and click **Ask** (or press ⌘J) to open a comment thread beside that passage. Ask questions ("is this accurate?", "explain this") and the agent answers in the thread without touching the text. Ask for a change ("tighten this") and it edits just that passage as tracked changes, with a one-line note in the thread. Threads stay as 💬 markers in the margin, so you can reopen and continue them, and each message also appears as a card in the left panel.
 - **Edit inline.** The document is plain editable rich text. Your edits are respected and recorded.
 - **Images and diagrams.** Ask for one ("add a diagram of the request flow"), and the agent draws it as SVG; it can revise it later like any other text. Paste or drag in images, or use Insert → Image… (⇧⌘I). Images are stored inside the `.margins` file, once each, no matter how many versions reference them.
 - **Links.** ⌘K links the selection (or edits the link under the caret), and pasting a URL over selected text links it. Click a link for Open ↗ / Edit / Remove; ⌘-click opens it in your browser.
@@ -53,6 +54,7 @@ swift build --product Margins && swift run Margins   # run unpackaged
 swift run MarginsSelfTest                            # core-logic checks
 swift run margins-cli models copilot                 # list models via a provider
 swift run margins-cli edit copilot "Draft a haiku about tracked changes"
+swift run margins-cli edit copilot --blocks blocks.json --quote "some text" "Is this accurate?"   # inline discussion
 swift scripts/make-icon.swift                        # resize assets/AppIcon-source.png → AppIcon.png + AppIcon.icns
 ```
 
