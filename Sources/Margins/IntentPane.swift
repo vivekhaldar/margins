@@ -91,8 +91,9 @@ struct IntentPane: View {
             HStack {
                 Text("↩ send · ⇧↩ newline").font(.caption2).foregroundStyle(.tertiary)
                 Spacer()
+                // Return (including ⌘Return) is handled by the focused composer above.
+                // A window-wide shortcut here would steal ⌘Return from the document.
                 Button("Send") { send() }
-                    .keyboardShortcut(.return, modifiers: .command)
                     .disabled(draftBox.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }

@@ -645,6 +645,8 @@ final class AppState: ObservableObject {
             doc.snapshot(html: body["html"] as? String ?? doc.html, slug: slug, author: .review,
                          detail: sections.map { "§\($0)" }.joined(separator: ", "))
             scheduleSave()
+        case "submitParagraph":
+            if previewing == nil, let text = body["text"] as? String { submit(text) }
         case "ask":
             if let t = (body["thread"] as? String).flatMap(UUID.init(uuidString:)), let message = body["message"] as? String {
                 discuss(thread: t, quote: body["quote"] as? String ?? "", focus: body["focus"] as? [String] ?? [],

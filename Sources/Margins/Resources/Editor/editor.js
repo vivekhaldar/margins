@@ -814,6 +814,7 @@
   });
 
   // ----- margin markers -----
+  const BUBBLE = '<svg class="bubsvg" viewBox="0 0 20 18" aria-hidden="true"><path d="M10 1.5C5.03 1.5 1.5 4.6 1.5 8.3c0 2.1 1.1 3.9 2.9 5.1-.2 1.3-.9 2.4-1.9 3.1 2.1 0 3.8-.8 4.9-1.9.8.2 1.7.3 2.6.3 4.97 0 8.5-3.1 8.5-6.8S14.97 1.5 10 1.5z"/></svg>';
   function scheduleMarks() { clearTimeout(marksTimer); marksTimer = setTimeout(drawMarks, 80); }
   function drawMarks() {
     tmarks.innerHTML = '';
@@ -829,7 +830,7 @@
       const m = document.createElement('button');
       const busy = t.messages.some((x) => x.status === 'working');
       m.className = 'tmark' + (openT && openT.id === t.id ? ' on' : '') + (busy ? ' busy' : '');
-      m.innerHTML = '<span class="bub"></span>' + (t.messages.length > 1 ? t.messages.length : '');
+      m.innerHTML = BUBBLE + (t.messages.length > 1 ? `<span class="n">${t.messages.length}</span>` : '');
       m.title = `“${trunc(t.quote, 120)}” — ${t.messages.length} message${t.messages.length === 1 ? '' : 's'}`;
       m.style.top = (r.top - sr.top + scroller.scrollTop + 2 + n * 24) + 'px';
       m.style.left = (ar.left - sr.left + scroller.scrollLeft + 10) + 'px';
@@ -868,6 +869,21 @@
   }
   document.addEventListener('keydown', (e) => {
     if (e.target === popin || e.target === lurl || e.target === tin) return;
+    if (e.key === 'Enter' && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && doc.contains(e.target)) {
+      e.preventDefault();
+      if (e.repeat || e.isComposing || doc.classList.contains('ro')) return;
+      const s = getSelection();
+      const node = s && s.focusNode;
+      const el = node && (node.nodeType === 1 ? node : node.parentElement);
+      if (!el || !doc.contains(el) || el.closest('[contenteditable="false"],.tools')) return;
+      const paragraph = el.closest('p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,td,th');
+      if (!paragraph || !doc.contains(paragraph)) return;
+      const text = paragraph.innerText.trim();
+      if (!text) return;
+      flushEdits();
+      post('submitParagraph', { text });
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'j') {
       const i = selInfo();
       if (i) { e.preventDefault(); startThread(i); }

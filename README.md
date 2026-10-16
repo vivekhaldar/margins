@@ -23,6 +23,7 @@ The output isn't a reply. It's the document.
 ## Features
 
 - **Instructions, not turns.** Each instruction becomes a card that shows its status, the agent's one-line summary and any assumptions the agent made. Select some text first to scope an instruction to it.
+- **Send a paragraph as a prompt.** Put the cursor in a document paragraph and press ⌘Enter to submit its text as an instruction. The paragraph stays in the document; the agent's changes use the usual review flow. In the instruction pane, Enter or ⌘Enter sends the draft, and Shift-Enter adds a newline.
 - **Tracked changes.** Agent edits show up as inline insertions and deletions. You can review them in several ways:
   - one at a time: ✓ / ✕, or the keys `A` / `R`;
   - by instruction: "Accept these";
