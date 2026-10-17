@@ -53,6 +53,16 @@ the repository's **Settings → Pages**, or run:
 gh api --method PUT repos/vivekhaldar/margins/pages -F https_enforced=true
 ```
 
+**Launched October 17, 2026.** The first deploy ran after `site/` reached `main`.
+The certificate (covering `getmargins.app` and `www.getmargins.app`) was issued a
+minute after the custom domain was re-saved through the Pages API, and
+**Enforce HTTPS** is on. `www` redirects to the apex. If a certificate ever stalls,
+re-saving the domain prompts GitHub to provision one:
+
+```sh
+gh api -X PUT repos/vivekhaldar/margins/pages -f cname=getmargins.app
+```
+
 The `.app` domain requires working HTTPS before browsers can open the site.
 Do not treat DNS configuration alone as a completed launch.
 
