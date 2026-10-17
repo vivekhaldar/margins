@@ -27,7 +27,7 @@ article h2{font-size:18px;margin:28px 0 8px}
 article h3{font-size:15px;margin:20px 0 6px}
 article p,article li{font-size:15px}
 article blockquote{margin:12px 0;padding-left:14px;border-left:3px solid var(--line);color:var(--mute)}
-article pre{background:var(--bg);border-radius:8px;padding:10px 12px;overflow:auto;font-size:13px}
+article pre{background:var(--bg);border-radius:8px;padding:10px 12px;overflow:auto;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
 article code{font:13px ui-monospace,Menlo,monospace;background:var(--bg);border-radius:4px;padding:0 3px}
 article table{border-collapse:collapse;margin:12px 0}
 article td,article th{border:1px solid var(--line);padding:4px 8px;font-size:14px}
