@@ -89,6 +89,7 @@ struct ProjectMenu: View {
     private var hint: String {
         switch state.toolPolicy {
         case .full: return "Agent tools: Full — can change files and run commands."
+        case .unrestricted: return "Agent tools: Unrestricted — can change anything on this Mac."
         case .research: return "Agent tools: Research — read-only (Copilot asks before changes)."
         case .off: return "Agent tools: Off — the agent only edits the document."
         }

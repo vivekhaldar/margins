@@ -9,6 +9,8 @@ public enum AgentToolPolicy: String, Codable, CaseIterable, Identifiable, Sendab
     case research
     /// Full agent: may also run shell commands and write files in the document's workspace.
     case full
+    /// No sandbox: may run any command and write anywhere the user can (home dir, config, ssh…).
+    case unrestricted
 
     public var id: String { rawValue }
 
@@ -17,6 +19,7 @@ public enum AgentToolPolicy: String, Codable, CaseIterable, Identifiable, Sendab
         case .off: return "Off — answer from the document only"
         case .research: return "Research — web and reading; ask before commands"
         case .full: return "Full agent — commands and file changes"
+        case .unrestricted: return "Unrestricted — anywhere on this Mac, no sandbox"
         }
     }
 
@@ -25,8 +28,12 @@ public enum AgentToolPolicy: String, Codable, CaseIterable, Identifiable, Sendab
         case .off: return "No tools"
         case .research: return "Research"
         case .full: return "Full agent"
+        case .unrestricted: return "Unrestricted"
         }
     }
+
+    /// May change files and run commands without asking.
+    public var canWrite: Bool { self == .full || self == .unrestricted }
 }
 
 /// ACP-style tool kinds (https://agentclientprotocol.com/protocol/tool-calls).
@@ -119,7 +126,7 @@ public struct AgentContext: Sendable {
     public func autoDecision(for kind: ToolKind) -> PermissionDecision? {
         switch policy {
         case .off: return .deny
-        case .full: return .allowAlways
+        case .full, .unrestricted: return .allowAlways
         case .research: return kind.isReadOnly ? .allowOnce : nil
         }
     }

@@ -33,18 +33,44 @@
   const insOf = (ch) => ch.querySelector(':scope > ins');
   const delOf = (ch) => ch.querySelector(':scope > del');
 
+  // Transient run state stays outside document HTML and supports concurrent prompts.
+  const paragraphRuns = new Map();
+  function drawParagraphRuns() {
+    const active = new Set(paragraphRuns.values());
+    tops().forEach(el => {
+      el.classList.toggle('paragraph-working',
+        !doc.classList.contains('ro') && active.has(el.dataset.bid));
+      if (el.getAttribute('class') === '') el.removeAttribute('class');
+    });
+  }
+
   // ---------- html hygiene ----------
   const INLINE = new Set(['A', 'B', 'STRONG', 'I', 'EM', 'CODE', 'SPAN', 'U', 'S', 'SUB', 'SUP', 'MARK', 'SMALL', 'BR', 'IMG']);
-  const KEEP_ATTRS = new Set(['href', 'src', 'alt', 'colspan', 'rowspan', 'start']);
+  const KEEP_ATTRS = new Set(['href', 'src', 'alt', 'colspan', 'rowspan', 'start', 'data-task']);
   const SAFE_IMG = /^(margins-asset:|https?:|data:image\/(png|jpe?g|gif|webp|svg\+xml);)/i;
+
+  const keepAttr = (el, name) => KEEP_ATTRS.has(name) ||
+    (el.tagName === 'INPUT' && ['type', 'checked'].includes(name));
+  function syncChecklists() {
+    doc.querySelectorAll('ul[data-task] > li').forEach(li => {
+      if (!li.querySelector(':scope > input[type=checkbox]')) {
+        const box = document.createElement('input'); box.type = 'checkbox'; li.prepend(box);
+      }
+    });
+    doc.querySelectorAll('input[type=checkbox]').forEach(box => {
+      box.contentEditable = 'false';
+      box.setAttribute('aria-label', 'Task complete');
+    });
+  }
 
   function blocksFrom(html) {
     const t = document.createElement('template');
     t.innerHTML = html || '';
     // Diagrams reach the editor as <img src="margins-asset://…">; Swift lifts inline <svg> out first.
     t.content.querySelectorAll('script,style,iframe,object,embed,link,meta,svg,math,foreignObject').forEach((x) => x.remove());
+    t.content.querySelectorAll('input:not([type=checkbox])').forEach(x => x.remove());
     t.content.querySelectorAll('*').forEach((x) => {
-      [...x.attributes].forEach((a) => { if (!KEEP_ATTRS.has(a.name) || /^\s*javascript:/i.test(a.value)) x.removeAttribute(a.name); });
+      [...x.attributes].forEach((a) => { if (!keepAttr(x, a.name) || /^\s*javascript:/i.test(a.value)) x.removeAttribute(a.name); });
     });
     t.content.querySelectorAll('img').forEach((x) => { if (!SAFE_IMG.test(x.getAttribute('src') || '')) x.remove(); });
     const out = [];
@@ -64,7 +90,7 @@
   function clean(el) {
     const c = el.cloneNode(true);
     c.querySelectorAll('.tools,.rb').forEach((x) => x.remove());
-    [c, ...c.querySelectorAll('*')].forEach((x) => [...x.attributes].forEach((a) => { if (!KEEP_ATTRS.has(a.name)) x.removeAttribute(a.name); }));
+    [c, ...c.querySelectorAll('*')].forEach((x) => [...x.attributes].forEach((a) => { if (!keepAttr(x, a.name)) x.removeAttribute(a.name); }));
     return c;
   }
   const squash = (s) => s.replace(/\s+/g, ' ').trim();
@@ -74,6 +100,7 @@
   }
 
   function normalize() {
+    syncChecklists();
     [...doc.childNodes].forEach((n) => {
       if (n.nodeType === 8) { n.remove(); return; }
       if (n.nodeType === 3 && !n.textContent.trim()) { n.remove(); return; }
@@ -97,12 +124,16 @@
       if (!ch.querySelector(':scope > .tools')) ch.appendChild(tools());
       const d = delOf(ch); if (d) d.contentEditable = 'false';
     });
+    drawParagraphRuns();
     doc.classList.toggle('empty', !doc.textContent.trim() && !doc.querySelector('img,hr,table'));
   }
 
   function currentHTML() {
     const c = doc.cloneNode(true);
-    c.querySelectorAll('.sel,.cur,.peek,.flash,.refining').forEach((x) => x.classList.remove('sel', 'cur', 'peek', 'flash', 'refining'));
+    c.querySelectorAll('.sel,.cur,.peek,.flash,.refining,.paragraph-working').forEach((x) => {
+      x.classList.remove('sel', 'cur', 'peek', 'flash', 'refining', 'paragraph-working');
+      if (!x.className) x.removeAttribute('class');
+    });
     return c.innerHTML;
   }
 
@@ -262,7 +293,16 @@
     clearTimeout(editTimer);
     editTimer = setTimeout(flushEdits, 1500);
   }
-  doc.addEventListener('input', () => { noteEdit(); syncLinkPop(); scheduleOutline(); });
+  doc.addEventListener('input', (e) => {
+    syncChecklists();
+    if (e.inputType === 'insertParagraph') {
+      const node = getSelection().anchorNode;
+      const el = node && (node.nodeType === 1 ? node : node.parentElement);
+      const box = el && el.closest('li')?.querySelector(':scope > input[type=checkbox]');
+      if (box) { box.checked = false; box.removeAttribute('checked'); }
+    }
+    noteEdit(); syncLinkPop(); scheduleOutline();
+  });
   function flushEdits() {
     clearTimeout(editTimer);
     if (!editSecs.size) return;
@@ -272,6 +312,92 @@
     post('edited', { sections, html: currentHTML() });
     emitPending();
   }
+
+  // ---------- author formatting ----------
+  const formatbar = $('#formatbar');
+  let formatRange = null;
+  function editableRange(range) {
+    if (!range || doc.classList.contains('ro')) return false;
+    const element = n => n.nodeType === 1 ? n : n.parentElement;
+    return [range.startContainer, range.endContainer].every(n => doc.contains(n) &&
+      !element(n).closest('[contenteditable="false"],.tools')) &&
+      ![...doc.querySelectorAll('.chg > del,.tools')].some(el => range.intersectsNode(el));
+  }
+  document.addEventListener('selectionchange', () => {
+    const sel = getSelection();
+    if (sel.rangeCount && editableRange(sel.getRangeAt(0))) formatRange = sel.getRangeAt(0).cloneRange();
+    formatbar.querySelectorAll('[data-format]').forEach(button => {
+      const command = button.dataset.format;
+      if (['bold', 'italic', 'underline'].includes(command))
+        button.setAttribute('aria-pressed', String(document.queryCommandState(command)));
+    });
+  });
+  function format(command) {
+    const commands = {bold:'bold', italic:'italic', underline:'underline', bullets:'insertUnorderedList',
+      numbers:'insertOrderedList', removeFormat:'removeFormat'};
+    const active = document.activeElement;
+    if (active !== document.body && !doc.contains(active) && !formatbar.contains(active)) return;
+    const sel = getSelection();
+    let range = sel.rangeCount ? sel.getRangeAt(0) : null;
+    if (!range || !doc.contains(range.commonAncestorContainer)) range = formatRange;
+    if (!editableRange(range) || !range.startContainer.isConnected) return;
+    doc.focus(); sel.removeAllRanges(); sel.addRange(range);
+    const el = n => n.nodeType === 1 ? n : n.parentElement;
+    const lists = () => [...doc.querySelectorAll('ul,ol')].filter(list =>
+      list.contains(sel.anchorNode) || (!sel.isCollapsed && sel.getRangeAt(0).intersectsNode(list)));
+    if (command === 'toggleCheck') {
+      const items = [...doc.querySelectorAll('ul[data-task] > li')].filter(li =>
+        li.contains(sel.anchorNode) || (!sel.isCollapsed && range.intersectsNode(li)));
+      const boxes = items.map(li => li.querySelector(':scope > input[type=checkbox]')).filter(Boolean);
+      const checked = boxes.some(box => !box.checked);
+      boxes.forEach(box => { box.checked = checked; box.toggleAttribute('checked', checked); });
+    } else if (command === 'checklist') {
+      if (!el(sel.anchorNode).closest('ul,ol')) document.execCommand('insertUnorderedList');
+      else if (el(sel.anchorNode).closest('ol')) document.execCommand('insertUnorderedList');
+      const targets = lists().filter(list => list.tagName === 'UL');
+      const remove = targets.length && targets.every(list => list.hasAttribute('data-task'));
+      targets.forEach(list => {
+        list.toggleAttribute('data-task', !remove);
+        if (remove) list.querySelectorAll(':scope > li > input[type=checkbox]').forEach(box => box.remove());
+      });
+      syncChecklists();
+    } else if (commands[command]) {
+      if (command === 'bullets' || command === 'numbers') {
+        lists().forEach(list => {
+          list.removeAttribute('data-task');
+          list.querySelectorAll(':scope > li > input[type=checkbox]').forEach(box => box.remove());
+        });
+      }
+      document.execCommand(commands[command], false, null);
+    } else return;
+    noteEdit(); normalize(); scheduleOutline();
+    formatRange = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  }
+  formatbar.addEventListener('mousedown', e => e.preventDefault());
+  formatbar.addEventListener('click', e => {
+    const button = e.target.closest('[data-format]');
+    if (button) format(button.dataset.format);
+  });
+  doc.addEventListener('click', e => {
+    if (!e.target.matches('input[type=checkbox]')) return;
+    if (doc.classList.contains('ro') || e.target.closest('.chg > del')) { e.preventDefault(); return; }
+    e.target.toggleAttribute('checked', e.target.checked);
+    noteEdit(e.target);
+  });
+  doc.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+      const key = e.key.toLowerCase();
+      const command = e.shiftKey ? ({'7':'numbers', '&':'numbers', '8':'bullets', '*':'bullets',
+        '9':'checklist', '(':'checklist', 'x':'toggleCheck'}[key]) : ({b:'bold', i:'italic', u:'underline'}[key]);
+      if (command) { e.preventDefault(); format(command); }
+    } else if (e.metaKey && e.altKey && e.key === '0') { e.preventDefault(); format('removeFormat'); }
+    else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const n = getSelection().anchorNode;
+      const li = n && (n.nodeType === 1 ? n : n.parentElement).closest('ul[data-task] > li');
+      // Let WebKit's empty-list-item behavior exit a checklist normally.
+      if (li && !li.textContent.trim()) li.querySelector(':scope > input[type=checkbox]')?.remove();
+    }
+  });
 
   // ---------- pointer ----------
   doc.addEventListener('mousedown', (e) => { if (e.target.closest('.tools')) e.preventDefault(); });
@@ -563,7 +689,7 @@
   }
   function layoutOutline() {
     document.body.classList.toggle('outline-rail', innerWidth >= RAIL_MIN_WIDTH);
-    outline.style.top = ($('#bar').offsetHeight + 1) + 'px';
+    outline.style.top = scroller.getBoundingClientRect().top + 'px';
   }
   function goHead(i) {
     const h = heads[i]; if (!h) return;
@@ -858,6 +984,132 @@
     drawMarks();
   }
 
+  // ---------- document find (no mutations to document HTML or selection) ----------
+  const findbar = $('#findbar'), findin = $('#findin'), findcount = $('#findcount'),
+    findmarks = $('#findmarks');
+  let findRanges = [], findIndex = -1, findFrame = null;
+
+  function drawFind() {
+    findmarks.replaceChildren();
+    if (findbar.hidden) return;
+    const origin = scroller.getBoundingClientRect();
+    const fragment = document.createDocumentFragment();
+    findRanges.forEach((range, index) => {
+      for (const rect of range.getClientRects()) {
+        if (!rect.width || !rect.height) continue;
+        const mark = document.createElement('span');
+        mark.className = 'findmark' + (index === findIndex ? ' active' : '');
+        mark.style.left = `${rect.left - origin.left + scroller.scrollLeft}px`;
+        mark.style.top = `${rect.top - origin.top + scroller.scrollTop}px`;
+        mark.style.width = `${rect.width}px`;
+        mark.style.height = `${rect.height}px`;
+        fragment.appendChild(mark);
+      }
+    });
+    findmarks.appendChild(fragment);
+  }
+
+  function revealFind() {
+    const range = findRanges[findIndex];
+    if (!range) return;
+    const rect = range.getBoundingClientRect(), viewport = scroller.getBoundingClientRect();
+    scroller.scrollBy({ top: rect.top - viewport.top - viewport.height / 2,
+      left: rect.left < viewport.left || rect.right > viewport.right ? rect.left - viewport.left - 40 : 0 });
+  }
+
+  function updateFind(reveal = false) {
+    findRanges = [];
+    if (!findbar.hidden && findin.value) {
+      // Keep inline formatting searchable; separate paragraphs, cells, and line breaks.
+      const groups = [];
+      let group = null, lastBlock = null;
+      const walker = document.createTreeWalker(doc, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+      for (let node; (node = walker.nextNode());) {
+        if (node.nodeType === 1) {
+          if (node.tagName === 'BR') group = null;
+          continue;
+        }
+        if (node.parentElement.closest('.tools,.rb,script,style,[hidden]') || !node.parentElement.getClientRects().length) continue;
+        const block = node.parentElement.closest('p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,td,th,figcaption,ins,del') || node.parentElement;
+        if (!group || block !== lastBlock) { group = { text: '', nodes: [] }; groups.push(group); }
+        lastBlock = block;
+        group.nodes.push({ node, start: group.text.length });
+        group.text += node.nodeValue;
+      }
+      const escaped = findin.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      for (const group of groups) {
+        const pattern = new RegExp(escaped, 'gi');
+        for (let match; (match = pattern.exec(group.text));) {
+          const start = match.index, end = start + match[0].length;
+          const a = group.nodes.find(x => x.start + x.node.length > start);
+          const b = group.nodes.find(x => x.start + x.node.length >= end);
+          const range = document.createRange();
+          range.setStart(a.node, start - a.start);
+          range.setEnd(b.node, end - b.start);
+          findRanges.push(range);
+        }
+      }
+    }
+    findIndex = findRanges.length ? Math.max(0, Math.min(findIndex, findRanges.length - 1)) : -1;
+    findcount.textContent = findin.value ? (findRanges.length ? `${findIndex + 1} of ${findRanges.length}` : 'No matches') : '';
+    $('#findprev').disabled = $('#findnext').disabled = !findRanges.length;
+    if (reveal) revealFind();
+    drawFind();
+  }
+
+  function scheduleFind() {
+    if (findbar.hidden || findFrame !== null) return;
+    findFrame = requestAnimationFrame(() => { findFrame = null; updateFind(); });
+  }
+  function showFind() {
+    findbar.hidden = false;
+    layoutOutline();
+    findin.focus();
+    findin.select();
+    updateFind(true);
+  }
+  function findNext(backward = false) {
+    if (findbar.hidden) { showFind(); return; }
+    updateFind();
+    if (!findRanges.length) return;
+    findIndex = (findIndex + (backward ? -1 : 1) + findRanges.length) % findRanges.length;
+    findcount.textContent = `${findIndex + 1} of ${findRanges.length}`;
+    revealFind();
+    drawFind();
+  }
+  function closeFind() {
+    findbar.hidden = true;
+    layoutOutline();
+    findRanges = [];
+    findmarks.replaceChildren();
+    doc.focus();
+  }
+  findin.addEventListener('input', () => { findIndex = -1; updateFind(true); });
+  $('#findprev').addEventListener('click', () => findNext(true));
+  $('#findnext').addEventListener('click', () => findNext());
+  $('#findclose').addEventListener('click', closeFind);
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && ['f', 'g'].includes(e.key.toLowerCase())) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (e.key.toLowerCase() === 'f') showFind(); else findNext(e.shiftKey);
+    } else if (!findbar.hidden && (e.key === 'Escape' || (e.key === 'Enter' && findbar.contains(e.target)))) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (e.key === 'Escape') closeFind(); else findNext(e.shiftKey);
+    } else if (findbar.contains(e.target)) {
+      // Typing in the search field must not trigger single-letter review commands.
+      e.stopImmediatePropagation();
+    }
+  }, true);
+  new MutationObserver(scheduleFind).observe(doc, { childList: true, characterData: true, subtree: true });
+  new ResizeObserver(scheduleFind).observe(doc);
+  // Both header rows can change height independently of the window size.
+  const headerObserver = new ResizeObserver(layoutOutline);
+  headerObserver.observe($('#bar'));
+  headerObserver.observe(formatbar);
+  headerObserver.observe(findbar);
+  scroller.addEventListener('scroll', scheduleFind, true);
+  window.addEventListener('resize', scheduleFind);
+
   // ---------- keyboard review ----------
   let cur = -1;
   function move(d) {
@@ -881,7 +1133,11 @@
       const text = paragraph.innerText.trim();
       if (!text) return;
       flushEdits();
-      post('submitParagraph', { text });
+      normalize();
+      let block = paragraph;
+      while (block.parentElement && block.parentElement !== doc) block = block.parentElement;
+      if (!block.dataset.bid) return;
+      post('submitParagraph', { text, blockId: block.dataset.bid });
       return;
     }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'j') {
@@ -940,8 +1196,10 @@
 
   // ---------- API for Swift ----------
   window.margins = {
+    format,
     load(html) {
       live = null;
+      formatRange = null;
       closeThread();
       doc.innerHTML = html || '';
       doc.contentEditable = 'true';
@@ -952,6 +1210,12 @@
       emitPending();
       return currentHTML();
     },
+    setParagraphWorking(step, blockId) {
+      if (blockId) paragraphRuns.set(step, blockId);
+      else paragraphRuns.delete(step);
+      drawParagraphRuns();
+    },
+    flushForSave: () => { flushEdits(); flushReview(); },
     html: () => { flushEdits(); return currentHTML(); },
     getBlocks() {
       endPreview();
@@ -991,6 +1255,8 @@
     },
     insertImage: (src, alt) => insertImage(src, alt),
     setOutline: (on) => setOutline(on),
+    showFind,
+    findNext,
     editLink: () => editLink(),
     refineFailed(cid) { const ch = byCid(cid); if (ch) ch.classList.remove('refining'); },
     highlightStep(step) {

@@ -6,7 +6,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG=release
-VERSION=$(git describe --tags --always 2>/dev/null || echo "0.1.0")
+VERSION=${MARGINS_VERSION:-0.1.0}
+BUILD_NUMBER=${MARGINS_BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+  echo "MARGINS_VERSION must be X.Y.Z and MARGINS_BUILD_NUMBER must be numeric" >&2
+  exit 1
+fi
 swift build -c "$CONFIG" --product Margins
 BIN_DIR=$(swift build -c "$CONFIG" --show-bin-path)
 
@@ -28,8 +33,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Margins</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>

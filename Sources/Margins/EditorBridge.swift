@@ -91,6 +91,12 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("return window.margins.load(html)", ["html": html])
     }
 
+    /// Deliver pending debounced edit/review events before the final save on Quit.
+    func flushForSave() async {
+        guard isReady else { return }
+        _ = try? await call("window.margins.flushForSave()")
+    }
+
     func html() async -> String? {
         try? await call("return window.margins.html()") as? String
     }
@@ -114,6 +120,11 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                                ["step": step, "edits": payload, "direct": direct]) as? [String: Any] ?? [:]
         return ApplyResult(html: r["html"] as? String ?? "", missing: r["missing"] as? [String] ?? [],
                            changes: (r["changes"] as? NSNumber)?.intValue ?? 0)
+    }
+
+    func setParagraphWorking(step: Int, blockID: String?) async {
+        _ = try? await call("window.margins.setParagraphWorking(step, blockId)",
+                            ["step": step, "blockId": blockID.map { $0 as Any } ?? NSNull()])
     }
 
     func resolve(accept: Bool, step: Int? = nil, all: Bool = false) async {
@@ -151,6 +162,17 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     func setThreads(_ list: [[String: Any]]) async { _ = try? await call("window.margins.setThreads(list)", ["list": list]) }
     func openThread(_ id: UUID) async {
         _ = try? await call("window.margins.openThread(id)", ["id": id.uuidString.lowercased()])
+    }
+    func showFind() async {
+        webView.window?.makeFirstResponder(webView)
+        _ = try? await call("window.margins.showFind()")
+    }
+    func findNext(backward: Bool = false) async {
+        _ = try? await call("window.margins.findNext(backward)", ["backward": backward])
+    }
+    func format(_ command: String) async {
+        webView.window?.makeFirstResponder(webView)
+        _ = try? await call("window.margins.format(command)", ["command": command])
     }
     func editLink() async { _ = try? await call("window.margins.editLink()") }
 

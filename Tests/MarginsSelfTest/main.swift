@@ -19,6 +19,31 @@ func test(_ name: String, _ body: () throws -> Void) {
     do { try body() } catch { failures += 1; print("✗ \(name) threw \(error)") }
 }
 
+test("open window session round trip and restoration") {
+    let first = URL(fileURLWithPath: "/documents/first.margins")
+    let second = URL(fileURLWithPath: "/documents/second.margins")
+    let missing = URL(fileURLWithPath: "/documents/missing.margins")
+    let session = WindowSession(windows: [
+        .init(url: first, frame: "{{10, 20}, {1280, 820}}"),
+        .init(url: second, frame: "{{50, 60}, {1000, 700}}", miniaturized: true)
+    ], activeURL: first)
+    let decoded = try JSONDecoder().decode(WindowSession.self, from: JSONEncoder().encode(session))
+    check(decoded == session, "all document paths, geometry, minimized state and focus survive relaunch")
+    check(decoded.restorable { _ in true } == session, "restore every valid window in order")
+    let filtered = WindowSession(windows: session.windows + [
+        .init(url: missing, frame: ""),
+        .init(url: first.deletingLastPathComponent().appendingPathComponent("./first.margins"), frame: "duplicate"),
+        .init(url: URL(string: "https://example.com/document")!, frame: "")
+    ], activeURL: missing).restorable { $0 != missing }
+    check(filtered.windows == session.windows, "skip missing documents, non-files and duplicate paths")
+    check(filtered.activeURL == nil, "unavailable active document does not block restoration")
+    let closed = WindowSession(windows: [session.windows[1]], activeURL: second)
+    check(closed.restorable { _ in true }.windows.map(\.url) == [second], "closed document stays closed")
+    check(WindowSession().restorable { _ in true }.windows.isEmpty, "explicit empty session remains empty")
+    check((try? JSONDecoder().decode(WindowSession.self, from: Data("invalid".utf8))) == nil,
+          "invalid session data can fall back safely")
+}
+
 test("parse bare JSON") {
     let p = try EditPlanParser.parse(#"{"slug":"tighten intro","summary":"s","notes":[],"edits":[{"op":"replace","blockId":"b1","html":"<p>x</p>"}]}"#)
     check(p.slug == "tighten intro", "slug")
@@ -59,6 +84,19 @@ test("prompt builder") {
     check(PromptBuilder.editPrompt(blocks: [], instruction: "x").contains("(empty)"), "empty doc")
     let r = PromptBuilder.refinePrompt(blocks: [], blockId: "b9", original: "", proposed: "<p>n</p>", originalInstruction: "add", refinement: "shorter")
     check(r.contains("blockId \"b9\"") && r.contains("this was an insertion"), "refine prompt")
+}
+
+test("paragraph prompt writes an answer at its original location") {
+    let blocks = [Block(id: "b1", html: "<h1>Context</h1>"),
+                  Block(id: "b2", html: "<p>Why does this matter?</p>")]
+    let prompt = PromptBuilder.paragraphPrompt(blocks: blocks, blockId: "b2", instruction: "Why does this matter?")
+    check(prompt.contains("[b1] <h1>Context</h1>"), "paragraph answer receives surrounding context")
+    check(prompt.contains("blockId \"b2\""), "replacement targets the originating block")
+    check(prompt.contains("reply alone does not fulfill"), "questions still require document edits")
+    check(prompt.contains("preserve the rest of that block"), "nested prompts preserve their container")
+    check(prompt.contains("ROUGH PROMPT\nWhy does this matter?"), "rough instruction retained")
+    let ordinary = PromptBuilder.editPrompt(blocks: blocks, instruction: "Why does this matter?")
+    check(!ordinary.contains("ROUGH PROMPT"), "ordinary submissions keep their behavior")
 }
 
 test("document round trip and title") {
@@ -111,6 +149,14 @@ test("markdown export") {
     check(md.contains("```\nlet x = 1\n```") && md.contains("> Quoted"), "code block + quote")
     check(md.contains("| A | B |\n| --- | --- |\n| 1 | 2 |"), "table")
     check(md.contains("line  \nbreak"), "line break")
+}
+
+test("checklist markdown export") {
+    let md = MarkdownExporter.markdown(fromHTML: """
+    <ul data-task><li><input type="checkbox">Todo</li><li><input type="checkbox" checked>Done<ul><li>Detail</li></ul></li></ul>
+    """)
+    check(md.contains("- [ ] Todo"), "unchecked task")
+    check(md.contains("- [x] Done\n      - Detail"), "checked task with nested list")
 }
 
 test("assets") {
@@ -308,6 +354,19 @@ do {
     check(after.map { ProjectChanges.changed(from: before!, to: $0) } == ["keep.txt", "src/new.swift"], "changed files exclude untouched dirty file")
     check(ProjectChanges.snapshot(FileManager.default.temporaryDirectory.appendingPathComponent("no-such-\(UUID())")) == nil, "non-repo → nil")
 } catch { check(false, "project folder tests threw \(error)") }
+
+// --- unrestricted policy ---
+do {
+    let ws = URL(fileURLWithPath: "/tmp/ws")
+    check(CodexExecProvider.policyArguments(.unrestricted).contains("danger-full-access"), "unrestricted: codex no sandbox")
+    check(ClaudeCodeProvider.policyArguments(.unrestricted).contains("--dangerously-skip-permissions"), "unrestricted: claude skips permissions")
+    check(AgentContext(policy: .unrestricted, workspace: ws).autoDecision(for: .delete) == .allowAlways, "unrestricted allows all")
+    check(AgentToolPolicy.unrestricted.canWrite && AgentToolPolicy.full.canWrite && !AgentToolPolicy.research.canWrite, "canWrite")
+    let u = PromptBuilder.system(tools: AgentContext(policy: .unrestricted, workspace: ws))
+    check(u.contains("not sandboxed") && u.contains("Never use sudo"), "unrestricted prompt allows outside work")
+    let f = PromptBuilder.system(tools: AgentContext(policy: .full, workspace: ws))
+    check(f.contains("Never modify anything outside it") && f.contains("Unrestricted"), "full prompt points to Unrestricted")
+}
 
 let sem = DispatchSemaphore(value: 0)
 Task {

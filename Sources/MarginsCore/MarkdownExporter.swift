@@ -232,7 +232,9 @@ private struct Renderer {
             else if isChg(c) { items.append(contentsOf: accepted(c).filter { $0.tag == "li" }) }
         }
         for li in items {
-            let marker = ordered ? "\(k). " : "- "
+            let checkbox = li.children.first { $0.tag == "input" && $0.attrs["type"] == "checkbox" }
+            let task = checkbox.map { $0.attrs["checked"] != nil ? "[x] " : "[ ] " } ?? ""
+            let marker = (ordered ? "\(k). " : "- ") + task
             k += 1
             let pad = String(repeating: " ", count: marker.count)
             let body = hasBlockChild(li) ? blocks(li.children, indent: pad, separator: "\n") : inline(li.children).trimmingCharacters(in: .whitespacesAndNewlines)

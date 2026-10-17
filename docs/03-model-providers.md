@@ -77,6 +77,7 @@ The first version deliberately gave the model no tools. In practice that was too
 | **Off** | every permission request rejected | `-s read-only`, `web_search="disabled"` | `--tools ""` |
 | **Research** (default) | fetch / search / read auto-allowed; execute / edit / delete → **inline Allow/Deny prompt** | `-s read-only`, `web_search="live"` | `WebFetch, WebSearch, Read, Grep, Glob` |
 | **Full agent** | everything allowed | `-s workspace-write`, network on, live search | + `Bash, Write, Edit` |
+| **Unrestricted** | everything allowed; prompt permits work outside the workspace | `-s danger-full-access`, live search | + `Bash, Write, Edit`, `--dangerously-skip-permissions --add-dir ~` |
 
 Design points:
 
@@ -84,6 +85,7 @@ Design points:
 - **One workspace per document** (`~/Library/Application Support/Margins/Workspaces/<doc-id>/`). Downloads and scratch scripts persist between instructions on the same document and never land next to your files.
 - **Visible and stoppable.** Tool calls stream onto the instruction card. Stop (⌘.) cancels the run (ACP `session/cancel`, or the subprocess is terminated).
 - **Project folder.** A document can point the agent at the author's project instead of its scratch workspace (`AgentContext.project`). The same policies apply; only the cwd and the prompt change. To write code, use *Full agent*: Codex's `workspace-write` sandbox then covers the project, and Claude gets `Write`/`Edit`/`Bash`. In *Research*, Copilot asks before each write and the other two can only read, so the prompt tells the agent to say so and suggest Full agent.
+- **Unrestricted** was added after a real request ("install herdr in my home dir and register my VPS") hit the Full-agent sandbox: Codex's `workspace-write` can't write to `~/.local` or `~/.config`, and the prompt forbade it anyway. Full agent now tells the author to switch to Unrestricted when a task needs that, rather than just failing.
 - **Security.** Codex has the strongest guarantee (OS sandbox). Copilot relies on its permission protocol, which Margins answers per policy. Claude relies on its allow-list. In *Full agent*, commands can still reach outside the workspace on Copilot and Claude, so use it deliberately.
 
 **Margins-side sources.** Some content is hard for any agent to reach. YouTube is the clearest case: the watch page has no transcript in its HTML, web search doesn't index captions, and Codex's Research sandbox blocks network commands, so agents ended up "summarizing" the video description. Margins now fetches YouTube transcripts natively, before the model runs, and passes them in as source material. This works for every provider, even with tools off. With the transcript provided, Codex in Research mode wrote a full, linked summary of the talk in ~30 s.

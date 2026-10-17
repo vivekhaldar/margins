@@ -57,16 +57,25 @@ public enum PromptBuilder {
             """
         case let p?:
             let ws = tools!.workspace.path
-            let can = p == .full
+            let can = p == .unrestricted
+                ? "fetch web pages, search the web, run any shell command, and read and write files anywhere on the author's Mac"
+                : p == .full
                 ? "fetch web pages, search the web, run shell commands, and read and write files"
                 : "fetch web pages, search the web, and read files (shell commands and file writes need the author's approval and may be denied)"
+            let outside = p == .unrestricted
+                ? "You are not sandboxed: when the instruction asks, you may also act outside it on the author's machine — " +
+                  "install tools under their home directory, edit their config files, ssh to their servers. Never use sudo, " +
+                  "and don't delete or overwrite anything you weren't asked to. "
+                : "Never modify anything outside it; if the instruction needs that (installing tools in the home directory, " +
+                  "editing config files), do what you can inside it, then say so plainly and tell the author to switch " +
+                  "Agent tools to \"Unrestricted\". "
             let place: String
             if tools!.project {
                 place = """
                 Your working directory is the author's project at \(ws). Besides editing the document, you may \
                 do real work in this project when asked: implement features, fix bugs, write or change code, docs \
                 and config, and run its build and tests to check your work. Make focused changes, follow the \
-                project's conventions, and never touch anything outside \(ws). Do not commit or push unless asked. \
+                project's conventions. \(outside)Do not commit or push unless asked. \
                 If you cannot change files (a write or command was refused, or your sandbox is read-only), \
                 say so plainly and tell the author to switch Agent tools to "Full agent". \
 
@@ -74,7 +83,7 @@ public enum PromptBuilder {
             } else {
                 place = """
                 Your working directory is \(ws); it belongs to this document and persists between instructions, \
-                so keep downloads and scratch files there and never modify anything outside it. \
+                so keep downloads and scratch files there. \(outside)\
                 If the author asks you to change code or files in one of their projects, explain that no project \
                 folder is set and tell them to choose one with Agent → Project Folder…. \
 
@@ -145,6 +154,28 @@ public enum PromptBuilder {
         }
         s += "\nINSTRUCTION\n\(instruction)\n\nReturn the JSON edit plan now."
         return s
+    }
+
+    /// Command-Enter turns a rough prompt in the document into finished prose at that location.
+    public static func paragraphPrompt(blocks: [Block], blockId: String, instruction: String,
+                                       sources: [SourceMaterial] = []) -> String {
+        let task = """
+        The author pressed Command-Enter on a rough prompt within block [\(blockId)].
+        Treat the paragraph below as an instruction to carry out, then write a clean, synthesized answer \
+        directly into the document, matching the surrounding voice, structure, and level of detail.
+        Replace the rough prompt paragraph with the finished answer using a replace operation on \
+        blockId "\(blockId)". You may return several complete HTML blocks in that replacement.
+        If the prompt is inside a list, table, quote, or another larger block, preserve the rest of that \
+        block and its structure; replace only the prompt's content. Leave unrelated blocks unchanged.
+        Use tools when needed to research or carry out the request. If it requests project work, do the \
+        work and synthesize the verified outcome into the document at the prompt's location.
+        Return document edits even when the rough prompt is phrased as a question; a reply alone does \
+        not fulfill this request. Do not merely polish or repeat the rough prompt.
+
+        ROUGH PROMPT
+        \(instruction)
+        """
+        return editPrompt(blocks: blocks, instruction: task, sources: sources)
     }
 
     /// Material Margins already fetched for URLs in the instruction.

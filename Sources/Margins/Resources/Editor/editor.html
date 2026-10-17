@@ -18,7 +18,25 @@
   <button class="btn" id="rejAll" data-act="rej-all" disabled>Reject all</button>
   <button class="btn p" id="accAll" data-act="acc-all" disabled>Accept all</button>
 </div>
+<div class="formatbar" id="formatbar" role="toolbar" aria-label="Text formatting">
+  <button class="btn" data-format="bold" title="Bold (⌘B)" aria-label="Bold"><strong>B</strong></button>
+  <button class="btn" data-format="italic" title="Italic (⌘I)" aria-label="Italic"><em>I</em></button>
+  <button class="btn" data-format="underline" title="Underline (⌘U)" aria-label="Underline">Underline</button>
+  <button class="btn" data-format="bullets" title="Bulleted list (⌘⇧8)">• Bullets</button>
+  <button class="btn" data-format="numbers" title="Numbered list (⌘⇧7)">1. Numbers</button>
+  <button class="btn" data-format="checklist" title="Checklist (⌘⇧9)">☐ Checklist</button>
+  <button class="btn" data-format="toggleCheck" title="Toggle checked (⌘⇧X)">✓ Toggle checked</button>
+  <button class="btn" data-format="removeFormat" title="Clear inline formatting (⌘⌥0)">Clear formatting</button>
+</div>
+<div class="findbar" id="findbar" role="search" hidden>
+  <input id="findin" type="search" aria-label="Find in document" placeholder="Find in document" spellcheck="false" autocomplete="off">
+  <span id="findcount" role="status" aria-live="polite"></span>
+  <button class="btn" id="findprev" aria-label="Previous match" title="Previous match (⇧↩)">↑</button>
+  <button class="btn" id="findnext" aria-label="Next match" title="Next match (↩)">↓</button>
+  <button class="btn" id="findclose" aria-label="Close search" title="Close (Esc)">✕</button>
+</div>
 <div class="scroll" id="scroll">
+  <div id="findmarks" aria-hidden="true"></div>
   <article id="doc" contenteditable="true" spellcheck="true"
            data-placeholder="Your document will appear here. Describe what you want to write in the panel on the left — or just start typing."></article>
   <div id="tmarks"></div>

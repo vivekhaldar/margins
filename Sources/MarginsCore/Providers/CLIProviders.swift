@@ -45,6 +45,7 @@ public final class CodexExecProvider: ModelProvider {
         case .research: return ["-s", "read-only", "-c", "web_search=\"live\""]
         case .full: return ["-s", "workspace-write", "-c", "sandbox_workspace_write.network_access=true",
                             "-c", "web_search=\"live\""]
+        case .unrestricted: return ["-s", "danger-full-access", "-c", "web_search=\"live\""]
         }
     }
 
@@ -165,6 +166,9 @@ public final class ClaudeCodeProvider: ModelProvider {
         case .full:
             let all = read + ",Bash,Write,Edit"
             return ["--tools", all, "--allowedTools", all, "--permission-mode", "dontAsk"]
+        case .unrestricted:
+            let all = read + ",Bash,Write,Edit"
+            return ["--tools", all, "--dangerously-skip-permissions", "--add-dir", NSHomeDirectory()]
         }
     }
 

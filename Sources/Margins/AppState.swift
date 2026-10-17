@@ -20,8 +20,6 @@ struct PendingInfo: Equatable {
 
 @MainActor
 final class AppState: ObservableObject {
-    static let shared = AppState()
-
     @Published private(set) var doc = MarginsDocument() { didSet { scheduleThreads() } }
     @Published private(set) var fileURL: URL
     @Published var pending = PendingInfo() { didSet { scheduleThreads() } }
@@ -60,8 +58,9 @@ final class AppState: ObservableObject {
     private var instances: [UUID: (config: ProviderConfig, provider: ModelProvider)] = [:]
     private let defaults = UserDefaults.standard
     private var saveTask: Task<Void, Never>?
+    private var settingsObserver: NSObjectProtocol?
 
-    private init() {
+    init(restoreLastDocument: Bool = false, untitledURL: URL? = nil) {
         let ud = UserDefaults.standard
         var list = ProviderConfig.defaults
         if let data = ud.data(forKey: "providers"),
@@ -71,7 +70,7 @@ final class AppState: ObservableObject {
         let saved = ud.string(forKey: "activeProvider").flatMap(UUID.init(uuidString:))
         providers = list
         activeProviderID = list.first { $0.id == saved }?.id ?? list.first { $0.enabled }?.id ?? list[0].id
-        fileURL = Self.newUntitledURL()
+        fileURL = untitledURL ?? Self.newUntitledURL()
 
         editor.onMessage = { [weak self] type, body in self?.handle(type, body) }
         editor.assetLookup = { [weak self] id in self?.doc.assets[id] }
@@ -81,9 +80,19 @@ final class AppState: ObservableObject {
         let savedZoom = ud.double(forKey: "zoom")
         setZoom(savedZoom > 0 ? savedZoom : 1.0)
 
-        if let last = defaults.url(forKey: "lastDocument"), FileManager.default.fileExists(atPath: last.path) {
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: ud, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reloadProviderSettings() }
+        }
+
+        if restoreLastDocument, let last = defaults.url(forKey: "lastDocument"), FileManager.default.fileExists(atPath: last.path) {
             open(last)
         }
+    }
+
+    deinit {
+        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
     }
 
     // MARK: - zoom
@@ -108,6 +117,19 @@ final class AppState: ObservableObject {
     func setModel(_ model: String, for id: UUID) {
         guard let i = providers.firstIndex(where: { $0.id == id }) else { return }
         providers[i].model = model
+    }
+
+    private func reloadProviderSettings() {
+        guard let data = defaults.data(forKey: "providers"),
+              let stored = try? JSONDecoder().decode([ProviderConfig].self, from: data), !stored.isEmpty else { return }
+        if providers != stored {
+            // Existing runs keep their provider; provider(for:) refreshes changed connections on next use.
+            for config in providers where !stored.contains(config) { models[config.id] = nil }
+            providers = stored
+        }
+        let saved = defaults.string(forKey: "activeProvider").flatMap(UUID.init(uuidString:))
+        let selected = providers.first { $0.id == saved }?.id ?? providers.first { $0.enabled }?.id ?? providers[0].id
+        if selected != activeProviderID { activeProviderID = selected }
     }
 
     private func persistProviders() {
@@ -150,7 +172,7 @@ final class AppState: ObservableObject {
 
     var busy: Bool { inFlight > 0 }
 
-    func submit(_ raw: String) {
+    func submit(_ raw: String, paragraphBlockID: String? = nil) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard let config = activeProvider else { lastError = "Choose a model provider."; return }
@@ -161,21 +183,36 @@ final class AppState: ObservableObject {
         inFlight += 1
         running[step] = Task {
             defer { finish(step) }
+            if let paragraphBlockID { await editor.setParagraphWorking(step: step, blockID: paragraphBlockID) }
             do {
+                try Task.checkCancellation()
                 let provider = try provider(for: config)
                 let sources = await fetchSources(for: text, step: step)
                 try Task.checkCancellation()
                 let snapshot = try await editor.blocks()
+                if let paragraphBlockID, !snapshot.blocks.contains(where: { $0.id == paragraphBlockID }) {
+                    throw ProviderError.protocolError("The prompt paragraph is no longer in the document. Try again from its current location.")
+                }
                 let agent = agentContext(step: step, kind: config.kind)
+                let prompt: String
+                if let paragraphBlockID {
+                    prompt = PromptBuilder.paragraphPrompt(blocks: forPrompt(snapshot.blocks), blockId: paragraphBlockID,
+                                                           instruction: text, sources: sources)
+                } else {
+                    prompt = PromptBuilder.editPrompt(blocks: forPrompt(snapshot.blocks), instruction: text,
+                                                      focus: snapshot.focus, sources: sources)
+                }
                 let request = GenerationRequest(
                     system: PromptBuilder.system(tools: agent),
-                    prompt: PromptBuilder.editPrompt(blocks: forPrompt(snapshot.blocks), instruction: text,
-                                                     focus: snapshot.focus, sources: sources),
+                    prompt: prompt,
                     model: config.model.isEmpty ? nil : config.model, agent: agent)
                 let before = await projectSnapshot(agent)
                 let plan: EditPlan
                 do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step); throw error }
                 await recordProjectChanges(before, step: step)
+                if paragraphBlockID != nil && plan.edits.isEmpty {
+                    throw ProviderError.protocolError("The agent returned no document update. Retry the paragraph prompt.")
+                }
                 let direct = snapshot.blocks.isEmpty
                 let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
                 let result = try await editor.apply(step: step, edits: edits, direct: direct)
@@ -202,6 +239,7 @@ final class AppState: ObservableObject {
                 updateIntent(step) { $0.status = .failed; $0.error = Task.isCancelled ? "Stopped." : error.localizedDescription }
                 scheduleSave()
             }
+            if paragraphBlockID != nil { await editor.setParagraphWorking(step: step, blockID: nil) }
         }
     }
 
@@ -484,7 +522,7 @@ final class AppState: ObservableObject {
         if let p = doc.projectFolder { panel.directoryURL = URL(fileURLWithPath: p) }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         setProjectFolder(url)
-        if toolPolicy != .full { offerFullAgent(for: url) }
+        if !toolPolicy.canWrite { offerFullAgent(for: url) }
     }
 
     func setProjectFolder(_ url: URL?) {
@@ -646,7 +684,10 @@ final class AppState: ObservableObject {
                          detail: sections.map { "§\($0)" }.joined(separator: ", "))
             scheduleSave()
         case "submitParagraph":
-            if previewing == nil, let text = body["text"] as? String { submit(text) }
+            if previewing == nil, let text = body["text"] as? String,
+               let blockId = body["blockId"] as? String, !blockId.isEmpty {
+                submit(text, paragraphBlockID: blockId)
+            }
         case "ask":
             if let t = (body["thread"] as? String).flatMap(UUID.init(uuidString:)), let message = body["message"] as? String {
                 discuss(thread: t, quote: body["quote"] as? String ?? "", focus: body["focus"] as? [String] ?? [],
@@ -785,9 +826,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    func saveNow() {
+    func saveNow(includeEmpty: Bool = false) {
         saveTask?.cancel()
-        guard !doc.versions.isEmpty || !doc.intents.isEmpty else { return }
+        guard includeEmpty || !doc.versions.isEmpty || !doc.intents.isEmpty else { return }
         // Name untitled docs after their title once they have one.
         if isUntitled(fileURL), doc.title != "Untitled" {
             let safe = doc.title.replacingOccurrences(of: "[/:\\\\]", with: "-", options: .regularExpression).prefix(80)

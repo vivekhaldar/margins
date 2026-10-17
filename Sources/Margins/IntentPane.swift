@@ -29,18 +29,22 @@ struct IntentPane: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if state.doc.intents.isEmpty { EmptyIntro() }
-                        ForEach(state.doc.intents) { intent in
-                            if intent.kind == .edit {
-                                EditRow(intent: intent)
-                            } else {
-                                IntentCard(intent: intent).id(intent.id)
+                        ForEach(state.doc.intents.reversed()) { intent in
+                            Group {
+                                if intent.kind == .edit {
+                                    EditRow(intent: intent)
+                                } else {
+                                    IntentCard(intent: intent)
+                                }
                             }
+                            // Both instruction cards and manual-edit rows are scroll targets.
+                            .id(intent.id)
                         }
                     }
                     .padding(12)
                 }
-                .onChange(of: state.doc.intents.count) {
-                    if let last = state.doc.intents.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                .onChange(of: state.doc.intents.last?.id) {
+                    if let newest = state.doc.intents.last { withAnimation { proxy.scrollTo(newest.id, anchor: .top) } }
                 }
             }
             Divider()
@@ -139,6 +143,7 @@ struct IntentCard: View {
     @StateObject private var hoverBox = Local(false)
 
     private var pendingCount: Int { state.pending.byStep[intent.step] ?? 0 }
+    private var isActive: Bool { intent.status == .working }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -202,8 +207,16 @@ struct IntentCard: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(hoverBox.value && pendingCount > 0 ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.2)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(isActive ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor)))
+        .overlay(alignment: .leading) {
+            if isActive {
+                Capsule().fill(Color.accentColor)
+                    .frame(width: 3)
+                    .padding(.vertical, 10)
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(isActive ? Color.accentColor : (hoverBox.value && pendingCount > 0 ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.2)), lineWidth: isActive ? 2 : 1).allowsHitTesting(false))
         .onHover { h in
             hoverBox.value = h
             if pendingCount > 0 || !h { state.hover(step: h ? intent.step : nil) }

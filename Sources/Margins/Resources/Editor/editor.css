@@ -51,7 +51,7 @@ article a{color:var(--acc)}
 .chg.sel{outline:2px solid var(--acc);outline-offset:2px}
 .chg.cur{box-shadow:0 0 0 3px #f5c542}
 .chg.peek{outline:1px dashed var(--acc);outline-offset:3px;background:var(--accbg)}
-.chg.refining>ins{background:linear-gradient(90deg,var(--ins) 0%,var(--accbg) 50%,var(--ins) 100%);background-size:200% 100%;animation:sh 1s linear infinite}
+.chg.refining>ins,#doc > .paragraph-working{background:linear-gradient(90deg,var(--ins) 0%,var(--accbg) 50%,var(--ins) 100%);background-size:200% 100%;animation:sh 1s linear infinite}
 @keyframes sh{to{background-position:-200% 0}}
 .flash{animation:f 1.4s ease}
 @keyframes f{from{box-shadow:0 0 0 5px var(--accline)}to{box-shadow:0 0 0 0 transparent}}
@@ -183,3 +183,23 @@ article.ro~#tmarks{display:none}
 .tpop textarea:focus{border-color:var(--accline);box-shadow:0 0 0 3px var(--accbg)}
 .tpop textarea:disabled{opacity:.5}
 .tpop .pf{font-size:11px;color:var(--mute);margin-top:5px}
+
+/* Find highlights live outside the editable HTML and never enter saved documents. */
+.findbar{display:flex;align-items:center;gap:8px;padding:8px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+.findbar[hidden]{display:none}
+.findbar input{flex:1;min-width:80px;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+#findcount{font-size:12px;color:var(--mute);white-space:nowrap}
+#findmarks{position:absolute;inset:0;pointer-events:none;z-index:2}
+.findmark{position:absolute;background:rgba(255,210,0,.30);border-radius:2px}
+.findmark.active{background:rgba(255,145,0,.40);outline:2px solid #c77900}
+
+/* Command-Enter prompts remain visibly marked until their agent run finishes. */
+#doc > .paragraph-working{box-shadow:inset 3px 0 var(--acc);border-radius:4px}
+
+/* Formatting controls stay above the document without taking its selection. */
+.formatbar{display:flex;flex-wrap:wrap;gap:6px;padding:6px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+.formatbar button[aria-pressed=true]{background:var(--accbg);border-color:var(--acc);color:var(--acc)}
+body.previewing .formatbar{display:none}
+article ul[data-task]{list-style:none;padding-left:24px}
+article input[type=checkbox]{margin:0 8px 0 -22px;accent-color:var(--acc);cursor:pointer}
+article.ro input[type=checkbox],.chg>del input[type=checkbox]{pointer-events:none}
