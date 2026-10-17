@@ -193,8 +193,8 @@ article.ro~#tmarks{display:none}
 .findmark{position:absolute;background:rgba(255,210,0,.30);border-radius:2px}
 .findmark.active{background:rgba(255,145,0,.40);outline:2px solid #c77900}
 
-/* Command-Enter prompts remain visibly marked until their agent run finishes. */
-#doc > .paragraph-working{box-shadow:inset 3px 0 var(--acc);border-radius:4px}
+/* Keep the Command-Enter accent in the gutter, with a 6px gap and no text reflow. */
+#doc > .paragraph-working{box-shadow:-6px 0 var(--panel),-9px 0 var(--acc);border-radius:4px}
 
 /* Formatting controls stay above the document without taking its selection. */
 .formatbar{display:flex;flex-wrap:wrap;gap:6px;padding:6px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
