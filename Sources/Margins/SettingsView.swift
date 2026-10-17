@@ -94,6 +94,16 @@ private struct ProviderDetail: View {
             }
             Section("Model") {
                 TextField("Default model", text: $config.model, prompt: Text("provider default"))
+                if config.kind == .codex {
+                    Picker("Reasoning effort", selection: $config.reasoningEffort) {
+                        Text("Default (Codex configuration)").tag(nil as ReasoningEffort?)
+                        ForEach(ReasoningEffort.allCases) { effort in
+                            Text(effort.title).tag(Optional(effort))
+                        }
+                    }
+                    Text("Available levels depend on the model and installed Codex version.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     Button(ui.value.testing ? "Testing…" : "Test connection & list models") { test() }
                         .disabled(ui.value.testing)

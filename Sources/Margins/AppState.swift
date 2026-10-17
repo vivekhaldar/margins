@@ -119,6 +119,11 @@ final class AppState: ObservableObject {
         providers[i].model = model
     }
 
+    func setReasoningEffort(_ effort: ReasoningEffort?, for id: UUID) {
+        guard let i = providers.firstIndex(where: { $0.id == id }), providers[i].kind == .codex else { return }
+        providers[i].reasoningEffort = effort
+    }
+
     private func reloadProviderSettings() {
         guard let data = defaults.data(forKey: "providers"),
               let stored = try? JSONDecoder().decode([ProviderConfig].self, from: data), !stored.isEmpty else { return }
@@ -205,7 +210,7 @@ final class AppState: ObservableObject {
                 let request = GenerationRequest(
                     system: PromptBuilder.system(tools: agent),
                     prompt: prompt,
-                    model: config.model.isEmpty ? nil : config.model, agent: agent)
+                    model: config.model.isEmpty ? nil : config.model, agent: agent, reasoningEffort: config.reasoningEffort)
                 let before = await projectSnapshot(agent)
                 let plan: EditPlan
                 do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step); throw error }
@@ -283,7 +288,7 @@ final class AppState: ObservableObject {
                     system: PromptBuilder.system(tools: agent),
                     prompt: PromptBuilder.discussPrompt(blocks: forPrompt(snapshot.blocks), focus: live.isEmpty ? focus : live,
                                                         quote: quote, history: history, message: text, sources: sources),
-                    model: config.model.isEmpty ? nil : config.model, agent: agent)
+                    model: config.model.isEmpty ? nil : config.model, agent: agent, reasoningEffort: config.reasoningEffort)
                 let before = await projectSnapshot(agent)
                 let plan: EditPlan
                 do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step); throw error }
@@ -593,7 +598,7 @@ final class AppState: ObservableObject {
                         prompt: PromptBuilder.refinePrompt(blocks: blocks, blockId: ctx.blockId, original: ctx.original,
                                                            proposed: ctx.proposed, originalInstruction: prior?.text ?? "",
                                                            refinement: instruction),
-                        model: config.model.isEmpty ? nil : config.model, agent: agent))
+                        model: config.model.isEmpty ? nil : config.model, agent: agent, reasoningEffort: config.reasoningEffort))
                     guard let edit = plan.edits.first(where: { $0.blockId == ctx.blockId }) ?? plan.edits.first else {
                         throw ProviderError.protocolError("The model returned no refinement.")
                     }

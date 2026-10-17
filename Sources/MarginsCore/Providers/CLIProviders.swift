@@ -24,7 +24,8 @@ public final class CodexExecProvider: ModelProvider {
         let tools = request.tools
         let cwd = tools?.workspace ?? ProcessRunner.scratchDirectory()
         var args = ["exec", "--json", "--output-schema", schemaURL.path, "--skip-git-repo-check",
-                    "--ephemeral", "-C", cwd.path, "-c", "model_reasoning_effort=\"medium\""]
+                    "--ephemeral", "-C", cwd.path]
+        args += Self.effortArguments(request.reasoningEffort)
         args += Self.policyArguments(tools?.policy ?? .off)
         if let m = request.model, !m.isEmpty { args += ["-m", m] }
         args.append("-")
@@ -35,6 +36,11 @@ public final class CodexExecProvider: ModelProvider {
         if let msg = Self.lastAgentMessage(jsonl: r.stdout) { return msg }
         if let err = Self.firstError(jsonl: r.stdout) { throw ProviderError.protocolError("Codex: \(err)") }
         throw ProviderError.processFailed("codex", r.status, r.stderr.isEmpty ? r.stdout : r.stderr)
+    }
+
+    static func effortArguments(_ effort: ReasoningEffort?) -> [String] {
+        guard let effort else { return [] }
+        return ["-c", "model_reasoning_effort=\"\(effort.rawValue)\""]
     }
 
     /// Codex enforces policy with its own OS sandbox; it never asks, so `.research` means

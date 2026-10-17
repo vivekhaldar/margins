@@ -82,6 +82,15 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
     }
 }
 
+public enum ReasoningEffort: String, Codable, CaseIterable, Identifiable, Sendable {
+    case low, medium, high, xhigh, max, ultra
+
+    public var id: String { rawValue }
+    public var title: String {
+        self == .xhigh ? "Extra high" : rawValue.capitalized
+    }
+}
+
 public struct ProviderConfig: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var kind: ProviderKind
@@ -93,9 +102,12 @@ public struct ProviderConfig: Codable, Equatable, Identifiable, Sendable {
     public var baseURL: String
     /// Default model id; empty = provider default.
     public var model: String
+    /// Codex only. Nil inherits the CLI configuration; optional for older saved settings.
+    public var reasoningEffort: ReasoningEffort?
 
     public init(id: UUID = UUID(), kind: ProviderKind, name: String? = nil, enabled: Bool = true,
-                binaryPath: String = "", baseURL: String = "", model: String = "") {
+                binaryPath: String = "", baseURL: String = "", model: String = "",
+                reasoningEffort: ReasoningEffort? = nil) {
         self.id = id
         self.kind = kind
         self.name = name ?? kind.title
@@ -103,6 +115,7 @@ public struct ProviderConfig: Codable, Equatable, Identifiable, Sendable {
         self.binaryPath = binaryPath
         self.baseURL = baseURL
         self.model = model
+        self.reasoningEffort = reasoningEffort
     }
 
     public static var defaults: [ProviderConfig] {

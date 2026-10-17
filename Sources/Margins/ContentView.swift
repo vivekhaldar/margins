@@ -115,6 +115,20 @@ struct ProviderMenu: View {
                 }
             }
             Divider()
+            if let p = state.activeProvider {
+                if p.kind == .codex {
+                    Menu("Reasoning effort: \(p.reasoningEffort?.title ?? "Default")") {
+                        Toggle("Default (Codex configuration)", isOn: effortSelection(p, nil))
+                        ForEach(ReasoningEffort.allCases) { effort in
+                            Toggle(effort.title, isOn: effortSelection(p, effort))
+                        }
+                        Divider()
+                        Text("Available levels depend on the model and installed Codex version.")
+                    }
+                } else {
+                    Text("Effort selection is available for Codex.")
+                }
+            }
             Section("Agent tools") {
                 ForEach(AgentToolPolicy.allCases) { p in
                     Toggle(p.title, isOn: Binding(get: { state.toolPolicy == p }, set: { _ in state.toolPolicy = p }))
@@ -138,6 +152,11 @@ struct ProviderMenu: View {
 
     private var toolsActive: Bool { state.toolPolicy != .off && state.activeProvider?.kind.supportsTools == true }
 
+    private func effortSelection(_ p: ProviderConfig, _ effort: ReasoningEffort?) -> Binding<Bool> {
+        Binding(get: { p.reasoningEffort == effort },
+                set: { _ in state.setReasoningEffort(effort, for: p.id) })
+    }
+
     /// Checkmark binding: on when this provider is active and this model is its selected one.
     private func selection(_ p: ProviderConfig, _ modelID: String) -> Binding<Bool> {
         Binding(
@@ -158,7 +177,11 @@ struct ProviderMenu: View {
         } else if p.model.isEmpty, model == "Default" || model.hasPrefix("Default ") {
             model = "Default"
         }
-        return model.isEmpty ? p.name : "\(p.name) · \(model)"
+        let label = model.isEmpty ? p.name : "\(p.name) · \(model)"
+        if p.kind == .codex, let effort = p.reasoningEffort {
+            return "\(label) · \(effort.title)"
+        }
+        return label
     }
 }
 

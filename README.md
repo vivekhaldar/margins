@@ -97,6 +97,8 @@ Margins drives each vendor's own CLI, so your subscription is used exactly as th
 
 Why it works this way: [docs/03-model-providers.md](docs/03-model-providers.md).
 
+For **ChatGPT / Codex**, open the model menu and choose **Reasoning effort**: Default (inherit the Codex configuration), Low, Medium, High, Extra high, Max, or Ultra. Supported levels depend on your model and installed Codex version; use Default if an explicit level is rejected. The choice is saved per provider and applies to new edits, paragraph prompts, discussions, and refinements. Explicit effort appears beside the model in the toolbar. You can also change it in **Settings → Providers**. Other backends do not yet expose effort selection in Margins.
+
 ### Agent tools
 
 Pick a tool level from the model menu in the toolbar or from the **Agent → Tools** menu. The setting is remembered.

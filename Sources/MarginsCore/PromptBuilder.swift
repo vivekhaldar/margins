@@ -25,13 +25,16 @@ public struct GenerationRequest: Sendable {
     public var system: String
     public var prompt: String
     public var model: String?
+    public var reasoningEffort: ReasoningEffort?
     /// When set (and the policy isn't `.off`), the provider runs as a tool-using agent.
     public var agent: AgentContext?
 
-    public init(system: String, prompt: String, model: String? = nil, agent: AgentContext? = nil) {
+    public init(system: String, prompt: String, model: String? = nil, agent: AgentContext? = nil,
+                reasoningEffort: ReasoningEffort? = nil) {
         self.system = system
         self.prompt = prompt
         self.model = model
+        self.reasoningEffort = reasoningEffort
         self.agent = agent
     }
 

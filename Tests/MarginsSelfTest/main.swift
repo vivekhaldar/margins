@@ -112,6 +112,23 @@ test("document round trip and title") {
     check(back.html == d.html && back.versions.map(\.slug) == d.versions.map(\.slug) && back.intents.map(\.id) == d.intents.map(\.id), "round trip")
 }
 
+test("reasoning effort settings and Codex overrides") {
+    let config = ProviderConfig(kind: .codex, model: "gpt-6.1-sol", reasoningEffort: .high)
+    let encoded = try JSONEncoder().encode(config)
+    check(try JSONDecoder().decode(ProviderConfig.self, from: encoded) == config, "effort survives saved provider settings")
+    var legacy = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+    legacy.removeValue(forKey: "reasoningEffort")
+    let old = try JSONDecoder().decode(ProviderConfig.self, from: JSONSerialization.data(withJSONObject: legacy))
+    check(old.reasoningEffort == nil && old.model == config.model && old.id == config.id,
+          "old provider settings retain model and identity with default effort")
+    check(CodexExecProvider.effortArguments(nil).isEmpty, "default does not override Codex configuration")
+    for effort in ReasoningEffort.allCases {
+        let request = GenerationRequest(system: "s", prompt: "p", reasoningEffort: effort)
+        check(CodexExecProvider.effortArguments(request.reasoningEffort) == ["-c", "model_reasoning_effort=\"\(effort.rawValue)\""],
+              "selected \(effort.rawValue) is passed as a TOML CLI override")
+    }
+}
+
 test("codex JSONL extraction") {
     let jsonl = """
     {"type":"thread.started","thread_id":"x"}
