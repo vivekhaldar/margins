@@ -62,12 +62,13 @@ final class AppState: ObservableObject {
 
     let editor = EditorBridge()
     private var instances: [UUID: (config: ProviderConfig, provider: ModelProvider)] = [:]
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private var saveTask: Task<Void, Never>?
     private var settingsObserver: NSObjectProtocol?
 
-    init(restoreLastDocument: Bool = false, untitledURL: URL? = nil) {
-        let ud = UserDefaults.standard
+    init(restoreLastDocument: Bool = false, untitledURL: URL? = nil, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let ud = defaults
         var list = ProviderConfig.defaults
         if let data = ud.data(forKey: "providers"),
            let stored = try? JSONDecoder().decode([ProviderConfig].self, from: data), !stored.isEmpty {

@@ -7,15 +7,17 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             IntentPane()
+                .interfaceZoom(state.zoom)
                 .frame(minWidth: 280, idealWidth: 340, maxWidth: 420)
             VStack(spacing: 0) {
-                if let v = state.previewing { PreviewBanner(version: v) }
+                if let v = state.previewing { PreviewBanner(version: v).interfaceZoom(state.zoom) }
                 EditorView(bridge: state.editor)
             }
             .frame(minWidth: 480)
         }
         .inspector(isPresented: $state.showHistory) {
             HistoryView()
+                .interfaceZoom(state.zoom)
                 .inspectorColumnWidth(min: 260, ideal: 320, max: 460)
         }
         .navigationTitle(state.doc.title)
@@ -39,15 +41,16 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            if state.busy { ProgressView().controlSize(.small) }
-            ProjectMenu()
-            ProviderMenu()
+            if state.busy { ProgressView().controlSize(.small).interfaceZoom(state.zoom) }
+            ProjectMenu().interfaceZoom(state.zoom)
+            ProviderMenu().interfaceZoom(state.zoom)
             Button {
                 state.showOutline.toggle()
             } label: {
                 Label("Outline", systemImage: state.showOutline ? "list.bullet.indent" : "list.bullet")
             }
             .help(state.showOutline ? "Hide outline (⌃⌘O)" : "Show outline (⌃⌘O)")
+            .interfaceZoom(state.zoom)
             Button {
                 state.showHistory.toggle()
             } label: {
@@ -55,6 +58,7 @@ struct ContentView: View {
             }
             .help("Version history (⌥⌘H)")
             .keyboardShortcut("h", modifiers: [.command, .option])
+            .interfaceZoom(state.zoom)
         }
     }
 }
