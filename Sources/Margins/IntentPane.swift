@@ -46,6 +46,9 @@ struct IntentPane: View {
                 .onChange(of: state.doc.intents.last?.id) {
                     if let newest = state.doc.intents.last { withAnimation { proxy.scrollTo(newest.id, anchor: .top) } }
                 }
+                .onChange(of: state.instructionRevealRequest) {
+                    if let id = state.revealedIntentID { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                }
             }
             Divider()
             composer
@@ -216,7 +219,7 @@ struct IntentCard: View {
                     .allowsHitTesting(false)
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(isActive ? Color.accentColor : (hoverBox.value && pendingCount > 0 ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.2)), lineWidth: isActive ? 2 : 1).allowsHitTesting(false))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(isActive || state.revealedIntentID == intent.id ? Color.accentColor : (hoverBox.value && pendingCount > 0 ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.2)), lineWidth: isActive || state.revealedIntentID == intent.id ? 2 : 1).allowsHitTesting(false))
         .onHover { h in
             hoverBox.value = h
             if pendingCount > 0 || !h { state.hover(step: h ? intent.step : nil) }

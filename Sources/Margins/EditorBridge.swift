@@ -16,6 +16,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     /// Stores pasted/dropped image bytes and returns their `margins-asset://` URL.
     var onAddAsset: ((Data, String) -> String?)?
     private var isReady = false
+    var isReadyForSnapshot: Bool { isReady }
     private var readyWaiters: [CheckedContinuation<Void, Never>] = []
     private let assetHandler = AssetSchemeHandler()
 
@@ -87,8 +88,9 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     // MARK: typed API
 
-    func load(_ html: String) async {
-        _ = try? await call("return window.margins.load(html)", ["html": html])
+    func load(_ html: String, annotations: DocumentAnnotations = DocumentAnnotations(), session: String? = nil) async {
+        _ = try? await call("return window.margins.load(html, annotations, session)",
+                            ["html": html, "annotations": Self.jsonObject(annotations), "session": session.map { $0 as Any } ?? NSNull()])
     }
 
     /// Deliver pending debounced edit/review events before the final save on Quit.
@@ -101,7 +103,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         try? await call("return window.margins.html()") as? String
     }
 
-    struct BlocksResult { var blocks: [Block]; var focus: [String] }
+    struct BlocksResult { var blocks: [Block]; var focus: [String]; var revision: Int }
 
     func blocks() async throws -> BlocksResult {
         let r = try await call("return window.margins.getBlocks()") as? [String: Any] ?? [:]
@@ -109,16 +111,28 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             guard let id = d["id"] as? String, let html = d["html"] as? String else { return nil }
             return Block(id: id, html: html, pending: d["pending"] as? Bool ?? false)
         }
-        return BlocksResult(blocks: blocks, focus: r["focus"] as? [String] ?? [])
+        return BlocksResult(blocks: blocks, focus: r["focus"] as? [String] ?? [], revision: (r["revision"] as? NSNumber)?.intValue ?? 0)
     }
 
-    struct ApplyResult { var html: String; var missing: [String]; var changes: Int }
+    struct Snapshot { var html: String; var annotations: DocumentAnnotations }
+    struct ApplyResult { var html: String; var annotations: DocumentAnnotations; var missing: [String]; var changes: Int }
 
-    func apply(step: Int, edits: [EditOp], direct: Bool) async throws -> ApplyResult {
+    func snapshot() async -> Snapshot? {
+        guard let r = try? await call("return window.margins.snapshot()") as? [String: Any],
+              let html = r["html"] as? String else { return nil }
+        return Snapshot(html: html, annotations: Self.annotations(in: r) ?? DocumentAnnotations())
+    }
+
+    func apply(step: Int, edits: [EditOp], direct: Bool, runID: UUID, expectedRevision: Int, parentRunID: UUID? = nil) async throws -> ApplyResult {
         let payload = edits.map { ["op": $0.op.rawValue, "blockId": $0.blockId, "html": $0.html] }
-        let r = try await call("return window.margins.applyEdits(step, edits, direct)",
-                               ["step": step, "edits": payload, "direct": direct]) as? [String: Any] ?? [:]
-        return ApplyResult(html: r["html"] as? String ?? "", missing: r["missing"] as? [String] ?? [],
+        var options: [String: Any] = ["runId": runID.uuidString.lowercased(), "expectedRevision": expectedRevision]
+        if let parentRunID { options["parentRunId"] = parentRunID.uuidString.lowercased() }
+        let r = try await call("return window.margins.applyEdits(step, edits, direct, options)",
+                               ["step": step, "edits": payload, "direct": direct,
+                                "options": options]) as? [String: Any] ?? [:]
+        try Self.validateRevision(r)
+        return ApplyResult(html: r["html"] as? String ?? "", annotations: Self.annotations(in: r) ?? DocumentAnnotations(),
+                           missing: r["missing"] as? [String] ?? [],
                            changes: (r["changes"] as? NSNumber)?.intValue ?? 0)
     }
 
@@ -134,18 +148,25 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("return window.margins.\(accept ? "accept" : "reject")(filter)", ["filter": filter])
     }
 
-    struct RefineContext { var blockId: String; var step: Int; var original: String; var proposed: String }
+    struct RefineContext { var blockId: String; var step: Int; var original: String; var proposed: String; var revision: Int }
 
     func refineContext(cid: String) async -> RefineContext? {
         guard let r = try? await call("return window.margins.refineContext(cid)", ["cid": cid]) as? [String: Any],
               let bid = r["blockId"] as? String else { return nil }
         return RefineContext(blockId: bid, step: (r["step"] as? NSNumber)?.intValue ?? 0,
-                             original: r["original"] as? String ?? "", proposed: r["proposed"] as? String ?? "")
+                             original: r["original"] as? String ?? "", proposed: r["proposed"] as? String ?? "",
+                             revision: (r["revision"] as? NSNumber)?.intValue ?? 0)
     }
 
-    func applyRefinement(cid: String, html: String, count: Int) async -> String? {
-        try? await call("return window.margins.applyRefinement(cid, html, count)",
-                        ["cid": cid, "html": html, "count": count]) as? String
+    func applyRefinement(cid: String, html: String, count: Int, runID: UUID, expectedRevision: Int, parentRunID: UUID? = nil) async throws -> Snapshot? {
+        var options: [String: Any] = ["runId": runID.uuidString.lowercased(), "expectedRevision": expectedRevision]
+        if let parentRunID { options["parentRunId"] = parentRunID.uuidString.lowercased() }
+        guard let r = try await call("return window.margins.applyRefinement(cid, html, count, options)",
+                        ["cid": cid, "html": html, "count": count,
+                         "options": options]) as? [String: Any] else { return nil }
+        try Self.validateRevision(r)
+        guard let html = r["html"] as? String else { return nil }
+        return Snapshot(html: html, annotations: Self.annotations(in: r) ?? DocumentAnnotations())
     }
 
     func refineFailed(cid: String) async { _ = try? await call("window.margins.refineFailed(cid)", ["cid": cid]) }
@@ -153,13 +174,44 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("window.margins.highlightStep(step)", ["step": step.map { $0 as Any } ?? NSNull()])
     }
     func reveal(step: Int) async { _ = try? await call("window.margins.revealStep(step)", ["step": step]) }
-    func preview(_ html: String) async { _ = try? await call("window.margins.preview(html)", ["html": html]) }
+    func preview(_ html: String, annotations: DocumentAnnotations = DocumentAnnotations()) async {
+        _ = try? await call("window.margins.preview(html, annotations)", ["html": html, "annotations": Self.jsonObject(annotations)])
+    }
     func endPreview() async { _ = try? await call("window.margins.endPreview()") }
     func insertImage(src: String, alt: String) async {
         _ = try? await call("window.margins.insertImage(src, alt)", ["src": src, "alt": alt])
     }
     func setOutline(_ on: Bool) async { _ = try? await call("window.margins.setOutline(on)", ["on": on]) }
     func setThreads(_ list: [[String: Any]]) async { _ = try? await call("window.margins.setThreads(list)", ["list": list]) }
+    func setAnnotationRuns(_ runs: [AnnotationRun], availableIntentIDs: Set<UUID>? = nil) async {
+        var payload = Self.jsonObject(runs) as? [[String: Any]] ?? []
+        for index in payload.indices {
+            if let availableIntentIDs { payload[index]["canRevealInstruction"] = availableIntentIDs.contains(runs[index].intentId) }
+            for key in ["id", "intentId", "parentRunId"] {
+                if let value = payload[index][key] as? String { payload[index][key] = value.lowercased() }
+            }
+        }
+        _ = try? await call("window.margins.setAnnotationRuns(runs)", ["runs": payload])
+    }
+
+    static func annotations(in body: [String: Any]) -> DocumentAnnotations? {
+        guard let value = body["annotations"], JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+        return try? JSONDecoder().decode(DocumentAnnotations.self, from: data)
+    }
+
+    private static func jsonObject<T: Encodable>(_ value: T) -> Any {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(value), let object = try? JSONSerialization.jsonObject(with: data) else { return [:] }
+        return object
+    }
+
+    private static func validateRevision(_ body: [String: Any]) throws {
+        if (body["conflict"] as? Bool) == true || body["error"] as? String == "revision-conflict" {
+            throw ProviderError.protocolError("The document changed while the agent was working. Your edits were kept; retry the instruction on the current document.")
+        }
+    }
     func openThread(_ id: UUID) async {
         _ = try? await call("window.margins.openThread(id)", ["id": id.uuidString.lowercased()])
     }

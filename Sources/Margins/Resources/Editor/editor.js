@@ -6,9 +6,13 @@
   const doc = $('#doc');
   const pop = $('#pop');
   const popin = $('#popin');
+  let annotations = null;
+  let nativeSession = null;
 
   const post = (type, data = {}) => {
     const msg = Object.assign({ type }, data);
+    if (nativeSession) msg.documentSession = nativeSession;
+    if (annotations && ['edited', 'reviewed'].includes(type)) msg.annotations = annotations.snapshot();
     const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.margins;
     if (h) h.postMessage(msg);
     else (window.__marginsLog = window.__marginsLog || []).push(msg); // standalone/debug
@@ -37,6 +41,8 @@
   const paragraphRuns = new Map();
   function drawParagraphRuns() {
     const active = new Set(paragraphRuns.values());
+    // A replacement may move the highlighted paragraph into its original <del>.
+    doc.querySelectorAll('.paragraph-working').forEach(el => { el.classList.remove('paragraph-working'); if (!el.className) el.removeAttribute('class'); });
     tops().forEach(el => {
       el.classList.toggle('paragraph-working',
         !doc.classList.contains('ro') && active.has(el.dataset.bid));
@@ -175,8 +181,11 @@
 
   function flash(el) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500); }
 
-  function applyEdits(step, edits, direct) {
+  function applyEdits(step, edits, direct, options = {}) {
     normalize();
+    annotations?.sync({silent: true});
+    if (options.expectedRevision != null && options.expectedRevision !== annotations?.state.revision)
+      return {html: currentHTML(), annotations: annotations?.snapshot(), missing: [], changes: 0, conflict: true, error: 'revision-conflict'};
     const missing = [], touched = [], lastAfter = {};
     for (const e of edits || []) {
       const html = sanitize(e.html || '');
@@ -210,7 +219,7 @@
           el.replaceWith(ch); touched.push(ch);
         }
       } else if (e.op === 'delete') {
-        if (direct) { el.remove(); }
+        if (direct) { annotations?.detachBlock(el.dataset.bid); el.remove(); }
         else if (isChg(el)) {
           if (!delOf(el).innerHTML.trim()) el.remove();
           else { insOf(el).innerHTML = ''; el.dataset.kind = 'delete'; el.dataset.step = String(step); touched.push(el); }
@@ -221,11 +230,12 @@
       }
     }
     normalize();
+    annotations?.sync({origin: 'agent', runId: options.runId, parentRunId: options.parentRunId, silent: true});
     const els = touched.filter((n) => n.nodeType === 1 && n.isConnected);
     els.forEach(flash);
     if (els[0]) els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
     emitPending();
-    return { html: currentHTML(), missing, changes: els.filter(isChg).length };
+    return { html: currentHTML(), annotations: annotations?.snapshot(), missing, changes: els.filter(isChg).length };
   }
 
   // ---------- review ----------
@@ -244,7 +254,9 @@
   }
 
   function resolve(ch, ok) {
-    if (!ch || !ch.isConnected) return;
+    if (!ch || !ch.isConnected || doc.classList.contains('ro')) return;
+    annotations?.sync({silent: true});
+    annotations?.resolveChange(ch.dataset.bid, ok);
     noteReview(ch, ok);
     const src = ok ? insOf(ch) : delOf(ch);
     const nodes = src ? [...src.childNodes] : [];
@@ -264,15 +276,17 @@
     return [];
   }
   function resolveWhere(filter, ok) {
+    if (doc.classList.contains('ro')) return {count: 0, html: live?.html || currentHTML(), annotations: live?.annotations || annotations?.snapshot()};
     const list = select(filter);
     list.forEach((c) => resolve(c, ok));
     cur = -1;
     normalize();
     emitPending();
-    return { count: list.length, html: currentHTML() };
+    return { count: list.length, html: currentHTML(), annotations: annotations?.snapshot() };
   }
 
   function emitPending() {
+    annotations?.sync({silent: true});
     const all = chgs(), byStep = {};
     all.forEach((c) => { byStep[c.dataset.step] = (byStep[c.dataset.step] || 0) + 1; });
     const selected = all.filter((c) => c.classList.contains('sel')).length;
@@ -287,6 +301,25 @@
 
   // ---------- inline edits ----------
   let editSecs = new Set(), editTimer = null;
+  let annotationInput = null, annotationPaste = null;
+  function captureAnnotationInput(e) {
+    annotations?.sync({silent: true});
+    const selection = annotations?.selectionFromDOM(), caret = annotations?.getCaretOffset();
+    const priorState = annotations?.getState();
+    if (/^delete/.test(e.inputType || '') && selection) annotations.detachDeleted(selection.start, selection.end);
+    const parentRuns = new Set((priorState?.spans || []).filter(span => selection ? span.start < selection.end && span.end > selection.start : span.start < caret && span.end > caret).map(span => span.runId || span.parentRunId).filter(Boolean));
+    annotationInput = {history: e.inputType === 'historyUndo' ? 'undo' : e.inputType === 'historyRedo' ? 'redo' : null,
+      origin: annotationPaste || /insertFrom(Paste|Drop)/.test(e.inputType || '') ? 'pasted' : 'author',
+      inputType: e.inputType || '',
+      edit: /^(insert|delete)/.test(e.inputType || '') && caret != null ? {
+        start: selection ? selection.start : caret, end: selection ? selection.end : caret,
+        length: priorState.text.length, priorSpans: priorState.spans, priorComments: priorState.comments
+      } : null,
+      parentRunId: parentRuns.size === 1 ? [...parentRuns][0] : undefined,
+      insertion: /^insert/.test(e.inputType || '') && !/^insertLink/.test(e.inputType || '') && caret != null ?
+        {start: selection ? selection.start : caret, end: selection ? selection.end : caret, length: priorState.text.length} : null};
+  }
+  doc.addEventListener('beforeinput', captureAnnotationInput);
   function noteEdit(node) {
     if (!node) { const s = getSelection(); node = s && s.anchorNode; }
     editSecs.add(sectionOf(node));
@@ -301,6 +334,33 @@
       const box = el && el.closest('li')?.querySelector(':scope > input[type=checkbox]');
       if (box) { box.checked = false; box.removeAttribute('checked'); }
     }
+    normalize();
+    const synced = annotations?.sync(Object.assign({silent: true}, annotationInput || {}));
+    if (annotationInput?.edit && annotations) {
+      const edit = annotationInput.edit, delta = annotations.getState().text.length - edit.length;
+      if (/^delete/.test(annotationInput.inputType) && edit.start === edit.end && delta < 0) {
+        if (/Backward/.test(annotationInput.inputType)) edit.start = Math.max(0, edit.start + delta);
+        else edit.end = edit.end - delta;
+      }
+      const length = Math.max(0, delta + edit.end - edit.start);
+      const removed = edit.priorComments.filter(comment => !comment.detached && comment.start >= edit.start && comment.end <= edit.end && comment.end > comment.start).map(comment => ({id: comment.id, quote: comment.anchor.quote}));
+      annotations.reconcileReplacement(edit.start, edit.start + length, removed);
+      annotations.applyExactEdit(edit.priorSpans, edit.start, edit.end, length, annotationInput.origin, annotationInput.parentRunId, !synced);
+    }
+    if (annotationPaste && annotations && (annotationPaste.kind !== 'drop' || e.inputType === 'insertFromDrop')) {
+      const current = annotations.getState().text;
+      let start = annotationPaste.kind === 'drop' && annotationInput?.insertion ? annotationInput.insertion.start : annotationPaste.start;
+      // The paste caret is collapsed; its global offset is measured from the
+      // common unchanged suffix, preserving formatting and multi-block copies.
+      let suffix = 0;
+      while (suffix < annotationPaste.after.length && suffix < current.length - start &&
+        annotationPaste.after[annotationPaste.after.length - suffix - 1] === current[current.length - suffix - 1]) suffix++;
+      const end = current.length - suffix;
+      if (annotationPaste.payload) annotations.applyClipboard(annotationPaste.payload, start, end);
+      else if (!annotationInput?.insertion) annotations.markOrigin(start, end, 'pasted', !synced);
+      annotationPaste = null;
+    }
+    annotationInput = null;
     noteEdit(); syncLinkPop(); scheduleOutline();
   });
   function flushEdits() {
@@ -309,6 +369,7 @@
     const sections = [...editSecs];
     editSecs = new Set();
     normalize();
+    annotations?.sync({silent: true});
     post('edited', { sections, html: currentHTML() });
     emitPending();
   }
@@ -573,6 +634,60 @@
   $('#scroll').addEventListener('scroll', () => { if (lpop.dataset.mode) { if (linkEl && lpop.dataset.mode === 'view') showLinkView(linkEl); else hideLinkPop(); } });
 
   // Paste a URL over selected text → link it.
+  const ANNOTATION_CLIPBOARD = 'application/x-margins-attribution+json';
+  function cleanSelectionHTML(range) {
+    const container = document.createElement('div'); container.appendChild(range.cloneContents());
+    container.querySelectorAll('.tools,.rb,.chg > del').forEach(el => el.remove());
+    container.querySelectorAll('.chg').forEach(el => el.replaceWith(...(el.querySelector(':scope > ins')?.childNodes || [])));
+    container.querySelectorAll('ins').forEach(el => el.replaceWith(...el.childNodes));
+    container.querySelectorAll('*').forEach(el => [...el.attributes].forEach(attr => { if (!keepAttr(el, attr.name)) el.removeAttribute(attr.name); }));
+    return container.innerHTML;
+  }
+  function copyAnnotations(e) {
+    if (!annotations || !e.clipboardData) return;
+    const selection = annotations.selectionFromDOM(), native = getSelection();
+    if (!selection || !native.rangeCount) return;
+    e.clipboardData.setData('text/plain', selection.text);
+    e.clipboardData.setData('text/html', cleanSelectionHTML(native.getRangeAt(0)));
+    e.clipboardData.setData(ANNOTATION_CLIPBOARD, JSON.stringify(annotations.clipboardPayload(selection)));
+    e.preventDefault();
+    if (e.type === 'cut' && !doc.classList.contains('ro')) { captureAnnotationInput({inputType: 'deleteByCut'}); document.execCommand('delete'); }
+  }
+  doc.addEventListener('copy', copyAnnotations);
+  doc.addEventListener('cut', copyAnnotations);
+  doc.addEventListener('dragstart', e => {
+    const selection = annotations?.selectionFromDOM(), native = getSelection();
+    if (!selection || !e.dataTransfer || !native.rangeCount) return;
+    e.dataTransfer.setData(ANNOTATION_CLIPBOARD, JSON.stringify(annotations.clipboardPayload(selection)));
+    e.dataTransfer.setData('text/plain', selection.text);
+    e.dataTransfer.setData('text/html', cleanSelectionHTML(native.getRangeAt(0)));
+  });
+  doc.addEventListener('drop', e => {
+    if (!annotations || doc.classList.contains('ro') || imageFiles(e.dataTransfer).length) return;
+    const range = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+    if (!range || !doc.contains(range.startContainer)) return;
+    const start = annotations.offsetForDOM(range.startContainer, range.startOffset);
+    if (start == null) return;
+    let payload = null;
+    try { payload = JSON.parse(e.dataTransfer?.getData(ANNOTATION_CLIPBOARD) || 'null'); } catch (_) {}
+    const text = annotations.getState().text;
+    annotationPaste = {start, after: text.slice(start), payload, kind: 'drop'};
+    annotationInput = {origin: 'pasted'};
+    setTimeout(() => { annotationPaste = null; }, 0);
+  }, true);
+  doc.addEventListener('paste', e => {
+    if (!annotations || doc.classList.contains('ro')) return;
+    annotations.sync({silent: true});
+    const selection = annotations.selectionFromDOM(), offset = selection ? selection.start : annotations.getCaretOffset();
+    if (offset == null) return;
+    let payload = null;
+    try { payload = JSON.parse(e.clipboardData?.getData(ANNOTATION_CLIPBOARD) || 'null'); } catch (_) {}
+    const text = annotations.getState().text;
+    annotationPaste = {start: offset, after: text.slice(selection ? selection.end : offset), payload};
+    annotationInput = {origin: 'pasted'};
+    // Do not let a cancelled paste carry attribution into the next keystroke.
+    setTimeout(() => { annotationPaste = null; }, 0);
+  }, true);
   doc.addEventListener('paste', (e) => {
     const text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
     const s = getSelection();
@@ -782,11 +897,11 @@
   const rangeLive = (r) => r && !r.collapsed && doc.contains(r.startContainer) && doc.contains(r.endContainer);
 
   // ----- the "Ask" chip on selections -----
-  function hideChip() { chip.style.display = 'none'; chipFor = null; }
+  function hideChip() { chip.style.display = 'none'; if ($('#commentchip')) $('#commentchip').style.display = 'none'; chipFor = null; }
   function syncChip() {
     clearTimeout(chipTimer);
     chipTimer = setTimeout(() => {
-      const i = threadOpen() ? null : selInfo();
+      const i = threadOpen() || ($('#annotation-card') && !$('#annotation-card').hidden) ? null : selInfo();
       if (!i) { hideChip(); return; }
       chipFor = i;
       const rects = i.range.getClientRects();
@@ -795,10 +910,17 @@
       const above = first.top - chip.offsetHeight - 8;
       chip.style.top = (above > 46 ? above : first.bottom + 8) + 'px';
       chip.style.left = Math.max(10, Math.min(window.innerWidth - chip.offsetWidth - 10, first.left)) + 'px';
+      const commentChip = $('#commentchip');
+      if (commentChip) {
+        commentChip.style.display = 'flex';
+        commentChip.style.top = chip.style.top;
+        commentChip.style.left = Math.min(window.innerWidth - commentChip.offsetWidth - 10, parseFloat(chip.style.left) + chip.offsetWidth + 5) + 'px';
+      }
     }, 160);
   }
   document.addEventListener('selectionchange', () => { if (document.activeElement !== tin) syncChip(); });
   chip.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); const i = chipFor || selInfo(); if (i) startThread(i); });
+  window.editorAskAboutSelection = () => { const info = chipFor || selInfo(); if (info) startThread(info); };
 
   // ----- the popover -----
   function startThread(i) {
@@ -1120,7 +1242,7 @@
     all[cur].scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
   document.addEventListener('keydown', (e) => {
-    if (e.target === popin || e.target === lurl || e.target === tin) return;
+    if (e.target === popin || e.target === lurl || e.target === tin || e.target.closest('input,textarea,select,[role="dialog"],[role="menu"]')) return;
     if (e.key === 'Enter' && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && doc.contains(e.target)) {
       e.preventDefault();
       if (e.repeat || e.isComposing || doc.classList.contains('ro')) return;
@@ -1169,12 +1291,14 @@
 
   // ---------- preview of historical versions ----------
   let live = null;
-  function preview(html) {
+  function preview(html, annotationState) {
     flushEdits();
-    if (live === null) live = currentHTML();
+    flushReview();
+    if (live === null) live = {html: currentHTML(), annotations: annotations?.snapshot()};
     doc.innerHTML = html;
     doc.contentEditable = 'false';
     doc.classList.add('ro');
+    annotations?.load(annotationState);
     document.body.classList.add('previewing');
     closeRefine();
     closeThread();
@@ -1185,19 +1309,27 @@
   }
   function endPreview() {
     if (live === null) return;
-    doc.innerHTML = live;
+    const saved = live;
+    doc.innerHTML = saved.html;
     live = null;
     doc.contentEditable = 'true';
     doc.classList.remove('ro');
     document.body.classList.remove('previewing');
     normalize();
+    annotations?.load(saved.annotations);
     emitPending();
   }
 
   // ---------- API for Swift ----------
   window.margins = {
     format,
-    load(html) {
+    load(html, annotationState, session) {
+      if (session != null) nativeSession = session;
+      // Native flushes the outgoing document before switching. A load is a new
+      // document boundary: a delayed event from the old DOM must never save it.
+      clearTimeout(editTimer); editSecs = new Set();
+      clearTimeout(revTimer); rev = {ok: 0, no: 0, secs: new Set()};
+      annotationInput = null; annotationPaste = null;
       live = null;
       formatRange = null;
       closeThread();
@@ -1207,6 +1339,7 @@
       document.body.classList.remove('previewing');
       bumpSeq();
       normalize();
+      annotations?.load(annotationState);
       emitPending();
       return currentHTML();
     },
@@ -1216,6 +1349,7 @@
       drawParagraphRuns();
     },
     flushForSave: () => { flushEdits(); flushReview(); },
+    snapshot: () => { flushEdits(); annotations?.sync({silent: true}); return live ? JSON.parse(JSON.stringify(live)) : {html: currentHTML(), annotations: annotations?.snapshot()}; },
     html: () => { flushEdits(); return currentHTML(); },
     getBlocks() {
       endPreview();
@@ -1230,17 +1364,22 @@
       const blocks = tops().filter((el) => el.dataset.bid)
         .map((el) => ({ id: el.dataset.bid, html: blockHTML(el), pending: isChg(el) }))
         .filter((b) => b.html);
-      return { blocks, focus };
+      return { blocks, focus, revision: annotations?.state.revision || 0 };
     },
-    applyEdits(step, edits, direct) { endPreview(); return applyEdits(step, edits, !!direct); },
+    applyEdits(step, edits, direct, options) { endPreview(); flushEdits(); return applyEdits(step, edits, !!direct, options); },
     accept: (filter) => resolveWhere(filter, true),
     reject: (filter) => resolveWhere(filter, false),
     refineContext(cid) {
       const ch = byCid(cid); if (!ch) return null;
-      return { blockId: ch.dataset.bid, step: +ch.dataset.step, original: clean(delOf(ch)).innerHTML.trim(), proposed: clean(insOf(ch)).innerHTML.trim() };
+      annotations?.sync({silent: true});
+      return { blockId: ch.dataset.bid, step: +ch.dataset.step, original: clean(delOf(ch)).innerHTML.trim(), proposed: clean(insOf(ch)).innerHTML.trim(), revision: annotations?.state.revision || 0 };
     },
-    applyRefinement(cid, html, count) {
+    applyRefinement(cid, html, count, options = {}) {
+      endPreview(); flushEdits();
       const ch = byCid(cid); if (!ch) return null;
+      annotations?.sync({silent: true});
+      if (options.expectedRevision != null && options.expectedRevision !== annotations?.state.revision)
+        return {html: currentHTML(), annotations: annotations?.snapshot(), conflict: true, error: 'revision-conflict'};
       ch.classList.remove('refining');
       const h = sanitize(html);
       insOf(ch).innerHTML = h;
@@ -1249,9 +1388,10 @@
       if (!rb) { rb = document.createElement('span'); rb.className = 'rb'; rb.contentEditable = 'false'; ch.appendChild(rb); }
       rb.textContent = '↻' + count;
       rb.title = `Refined ${count}×`;
+      annotations?.sync({origin: 'agent', runId: options.runId, parentRunId: options.parentRunId, silent: true});
       flash(ch);
       emitPending();
-      return currentHTML();
+      return {html: currentHTML(), annotations: annotations?.snapshot()};
     },
     insertImage: (src, alt) => insertImage(src, alt),
     setOutline: (on) => setOutline(on),
@@ -1267,8 +1407,30 @@
     endPreview,
     setThreads: (list) => setThreads(list),
     openThread: (id) => openThreadId(id),
+    setAnnotationRuns: (runs) => annotations?.setRuns(runs),
   };
 
   normalize();
+  if (window.MarginsAnnotationEngine) {
+    annotations = new window.MarginsAnnotationEngine(doc, {getRevisionHTML: currentHTML, onChange: state => post('annotations', {html: currentHTML(), annotations: state})});
+    window.MarginsAnnotations = annotations;
+    window.editorGetAnnotationState = () => annotations.snapshot();
+    window.editorGetSnapshot = () => window.margins.snapshot();
+    window.editorShowAnnotationIntent = runId => {
+      const run = annotations.state.runs.find(value => value.id === runId || value.runId === runId);
+      if (run) post('showIntent', {intentId: run.intentId, step: run.step});
+    };
+    window.editorAskAboutAnnotation = value => {
+      const id = typeof value === 'string' ? value : value?.id;
+      const comment = annotations.state.comments.find(item => item.id === id);
+      if (!comment || comment.anchor?.detached || doc.classList.contains('ro')) return false;
+      const ranges = annotations.rangesForAnchor(comment.anchor), range = ranges[0];
+      if (!range) return false;
+      const focus = [...new Set([comment.anchor.start.blockId, comment.anchor.end.blockId])];
+      startThread({range, quote: comment.anchor.quote, focus, anchor: focus[0]});
+      if (typeof value === 'object' && value.instruction) sendThread(value.instruction);
+      return true;
+    };
+  }
   post('ready');
 })();

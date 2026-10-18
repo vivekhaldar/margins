@@ -203,3 +203,81 @@ body.previewing .formatbar{display:none}
 article ul[data-task]{list-style:none;padding-left:24px}
 article input[type=checkbox]{margin:0 8px 0 -22px;accent-color:var(--acc);cursor:pointer}
 article.ro input[type=checkbox],.chg>del input[type=checkbox]{pointer-events:none}
+
+/* Persistent annotations: all paint and controls stay outside #doc. */
+:root{--annotation-tint:rgba(112,100,232,.105);--comment-ink:#a66516;--comment-bg:rgba(216,148,30,.12)}
+@media (prefers-color-scheme:dark){:root{--annotation-tint:rgba(155,141,255,.17);--comment-ink:#e9b75e;--comment-bg:rgba(233,183,94,.1)}}
+.annotation-controls{display:inline-flex;align-items:center;flex-wrap:wrap;gap:7px;margin-left:auto;padding-left:10px;border-left:1px solid var(--line)}
+.annotation-toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:650;border:1px solid var(--accline);background:var(--accbg);border-radius:7px;padding:4px 8px;cursor:pointer;white-space:nowrap;color:var(--ink)}
+.annotation-toggle input{width:14px;height:14px;margin:0;accent-color:var(--acc)}
+.annotation-toggle:focus-within{outline:2px solid var(--acc);outline-offset:2px}
+#annotation-count{font-variant-numeric:tabular-nums;color:var(--mute)}
+#annotation-layer,#annotation-highlights,#annotation-markers{position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;z-index:3}
+#annotation-layer[hidden]{display:none}
+.annotation-highlight{position:absolute;pointer-events:none;border-radius:2px}
+.annotation-attribution{background:var(--annotation-tint)}
+.annotation-comment-line{border-bottom:2px solid var(--comment-ink);border-radius:0;background:var(--comment-bg)}
+#annotation-markers .annotation-marker{position:absolute;min-width:52px;height:24px;white-space:nowrap;pointer-events:auto;padding:2px 6px;line-height:18px;font-size:10px;font-weight:700;border-color:var(--accline);background:var(--panel);color:var(--acc);box-shadow:0 1px 4px rgba(0,0,0,.06)}
+#annotation-markers .annotation-marker:hover{background:var(--accbg);border-color:var(--acc)}
+.annotation-card{position:fixed;z-index:28;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);border:1px solid var(--accline);border-radius:12px;box-shadow:0 12px 38px rgba(0,0,0,.19);font-size:13px;line-height:1.45;color:var(--ink)}
+.annotation-card[hidden]{display:none}
+.annotation-card-head{display:flex;align-items:center;gap:10px;padding:11px 12px;border-bottom:1px solid var(--line);flex:none}
+.annotation-card h2{font-size:13px;margin:0;font-weight:700;flex:1}
+.annotation-close{font:inherit;border:0;background:none;border-radius:5px;padding:2px 6px;color:var(--mute);cursor:pointer}
+.annotation-close:hover{background:var(--bg);color:var(--ink)}
+#annotation-card-content{overflow:auto;padding:12px;min-height:0;overscroll-behavior:contain}
+.annotation-card p{margin:7px 0}
+.annotation-card h3{font-size:11px;font-weight:700;letter-spacing:.025em;margin:0 0 6px;color:var(--mute)}
+.annotation-section{padding-top:12px;margin-top:10px;border-top:1px solid var(--line)}
+.annotation-section:first-child{padding-top:0;margin-top:0;border-top:0}
+.annotation-meta{display:flex;align-items:center;flex-wrap:wrap;gap:5px 9px;color:var(--mute);font-size:11px;margin-bottom:8px}
+.annotation-meta strong{color:var(--ink);font-weight:600}
+.annotation-badge{display:inline-block;line-height:1.5;font-size:10px;border:1px solid var(--line);border-radius:5px;padding:0 5px;color:var(--mute);background:var(--bg)}
+.annotation-hint,.annotation-empty{font-size:12px;color:var(--mute)}
+.annotation-preserve{white-space:pre-wrap;overflow-wrap:anywhere}
+.annotation-quote{font-size:12px;line-height:1.5;margin:5px 0 12px;padding:2px 0 2px 9px;border-left:3px solid var(--comment-ink);color:var(--mute);max-height:120px;overflow:auto}
+.annotation-section ul,.annotation-section ol{padding-left:20px;margin:5px 0}
+.annotation-section li{margin:6px 0;overflow-wrap:anywhere}
+.annotation-date{display:block;color:var(--mute);font-size:11px;margin-top:2px}
+.annotation-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
+.annotation-actions .btn{font-size:11px;padding:3px 8px}
+.annotation-thread-actions{border-top:1px solid var(--line);padding-top:10px;margin-top:12px}
+.annotation-editor{margin-top:13px;padding-top:11px;border-top:1px solid var(--line)}
+.annotation-editor label{display:block;font-size:12px;font-weight:600;margin-bottom:5px}
+.annotation-editor textarea{width:100%;display:block;resize:vertical;min-height:65px;max-height:240px;font:inherit;line-height:1.5;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
+.annotation-editor textarea:focus,.annotation-filters input:focus,.annotation-filters select:focus{outline:2px solid var(--acc);outline-offset:1px}
+.annotation-editor .annotation-actions{justify-content:flex-end}
+.annotation-message{padding:9px 10px;background:var(--bg);border:1px solid var(--line);border-radius:9px;overflow-wrap:anywhere}
+.annotation-message>strong{font-size:11px}
+.annotation-message p{margin:5px 0 0}
+.annotation-reply{margin-top:10px;margin-left:14px}
+.annotation-tool{border:1px solid var(--line);border-radius:7px;margin-top:7px;overflow:hidden}
+.annotation-tool summary{display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;font-size:12px}
+.annotation-tool summary:before{content:'▸';color:var(--mute)}
+.annotation-tool[open] summary:before{content:'▾'}
+.annotation-tool-title{flex:1;min-width:0;overflow-wrap:anywhere}
+.annotation-tool>p{padding:0 8px}
+.annotation-tool pre{font:11px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:var(--bg);border-top:1px solid var(--line);padding:8px;margin:0}
+.annotation-files{font:11px/1.5 ui-monospace,Menlo,monospace}
+.annotation-filters{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.annotation-filters input,.annotation-filters select{width:100%;font:inherit;font-size:12px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:6px 8px}
+.annotation-items{display:flex;flex-direction:column;gap:7px}
+.annotation-list-item.btn{display:flex;flex-direction:column;align-items:flex-start;text-align:left;width:100%;gap:4px;white-space:normal;padding:9px 10px;font-size:12px;line-height:1.4;overflow-wrap:anywhere}
+.annotation-list-item:hover{border-color:var(--acc);background:var(--accbg)}
+.annotation-list-label{font-size:10px;font-weight:700;color:var(--acc)}
+.annotation-list-detail{font-size:10px;color:var(--mute)}
+.commentchip{position:fixed;display:none;z-index:22;font:600 12px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--panel);background:var(--ink);border:0;border-radius:99px;padding:4px 10px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.2)}
+.commentchip:hover{background:var(--acc)}
+.annotation-context{position:fixed;z-index:35;min-width:210px;display:flex;flex-direction:column;gap:2px;padding:5px;border:1px solid var(--line);border-radius:9px;background:var(--panel);box-shadow:0 6px 24px rgba(0,0,0,.17)}
+.annotation-context .btn{border:0;text-align:left;border-radius:5px;padding:6px 9px}
+.annotation-context .btn:hover,.annotation-context .btn:focus{background:var(--accbg);color:var(--acc)}
+.annotation-card button:focus-visible,.annotation-marker:focus-visible,.commentchip:focus-visible,.annotation-context button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media (max-width:760px){.annotation-controls{margin-left:0;padding-left:0;border-left:0}.annotation-toggle{font-size:11px}}
+/* Historical attribution remains inspectable while document editing is disabled. */
+body.previewing .formatbar{display:flex}
+body.previewing .formatbar [data-format]{display:none}
+body.previewing .annotation-controls{border-left:0;padding-left:0;margin-left:0}
+.annotation-menu-separator{height:1px;background:var(--line);margin:3px 4px}
+.annotation-uncertain{border-top:1px dashed var(--acc)}
+.annotation-uncertain-label{padding:7px 9px;border:1px dashed var(--acc);border-radius:7px;background:var(--accbg);font-size:12px}

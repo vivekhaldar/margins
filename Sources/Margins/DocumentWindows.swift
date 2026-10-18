@@ -17,6 +17,9 @@ final class DocumentWindows {
     private var activeRestoreURL: URL?
     private var pendingRegistrations = 0
     private var terminating = false
+    /// Closed windows leave the restoration session immediately, while their last
+    /// editor snapshot drains asynchronously. Quit waits for these saves too.
+    private var closingSaves: [ObjectIdentifier: Task<Void, Never>] = [:]
     private static let sessionKey = "openDocumentWindows"
 
     init(defaults: UserDefaults = .standard) {
@@ -143,11 +146,11 @@ final class DocumentWindows {
 
     /// Snapshot before AppKit starts closing windows during Quit.
     func prepareToQuit() async {
+        for task in Array(closingSaves.values) { await task.value }
         let openStates = Array(states.values)
         for state in openStates { state.stopAll() }
         for state in openStates {
-            await state.editor.flushForSave()
-            state.saveNow(includeEmpty: true)
+            await state.flushAndSave(includeEmpty: true)
         }
         persistSession()
         terminating = true
@@ -157,9 +160,12 @@ final class DocumentWindows {
         let id = ObjectIdentifier(window)
         guard let state = states.removeValue(forKey: id) else { return }
         windows[id] = nil
-        state.saveNow()
         state.stopAll()
-        state.shutdownProviders()
+        closingSaves[id] = Task { [weak self] in
+            await state.flushAndSave(includeEmpty: true)
+            state.shutdownProviders()
+            self?.closingSaves[id] = nil
+        }
         persistSession()
     }
 

@@ -4,7 +4,7 @@ import Foundation
 /// the instruction log, and the full version history.
 public struct MarginsDocument: Codable, Equatable, Sendable {
     public static let fileExtension = "margins"
-    public static let currentFormat = 1
+    public static let currentFormat = 2
 
     public var format: Int = MarginsDocument.currentFormat
     /// Stable identity; keys the agent's per-document workspace folder.
@@ -17,6 +17,8 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
     public var assets: [String: Asset] = [:]
     /// The author's project (e.g. a code repo) the agent works in. Nil = a private per-document workspace.
     public var projectFolder: String?
+    public var annotations = DocumentAnnotations()
+    public var annotationRuns: [AnnotationRun] = []
 
     public init(html: String = "", intents: [Intent] = [], versions: [Version] = [], nextStep: Int = 1) {
         self.html = html
@@ -25,7 +27,7 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
         self.nextStep = nextStep
     }
 
-    enum CodingKeys: String, CodingKey { case format, id, html, intents, versions, nextStep, assets, projectFolder }
+    enum CodingKeys: String, CodingKey { case format, id, html, intents, versions, nextStep, assets, projectFolder, annotations, annotationRuns }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -37,6 +39,8 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
         nextStep = try c.decode(Int.self, forKey: .nextStep)
         assets = try c.decodeIfPresent([String: Asset].self, forKey: .assets) ?? [:]
         projectFolder = try c.decodeIfPresent(String.self, forKey: .projectFolder)
+        annotations = try c.decodeIfPresent(DocumentAnnotations.self, forKey: .annotations) ?? DocumentAnnotations()
+        annotationRuns = try c.decodeIfPresent([AnnotationRun].self, forKey: .annotationRuns) ?? []
     }
 
     /// Title = text of the first <h1>, else "Untitled".
@@ -51,10 +55,13 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
 
     @discardableResult
     public mutating func snapshot(html: String, slug: String, author: Version.Author, detail: String = "",
+                                  annotations: DocumentAnnotations? = nil,
                                   at date: Date = Date()) -> Version {
         self.html = html
+        if let annotations { self.annotations = annotations }
         let v = Version(number: (versions.last?.number ?? 0) + 1, html: html, slug: slug,
-                        author: author, detail: detail, createdAt: date)
+                        author: author, detail: detail, createdAt: date,
+                        annotations: self.annotations, annotationRuns: annotationRuns)
         versions.append(v)
         return v
     }
@@ -63,7 +70,9 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         enc.dateEncodingStrategy = .iso8601
-        return try enc.encode(self)
+        var document = self
+        document.format = max(document.format, Self.currentFormat)
+        return try enc.encode(document)
     }
 
     public static func decode(_ data: Data) throws -> MarginsDocument {
@@ -133,4 +142,28 @@ public struct Version: Codable, Equatable, Identifiable, Sendable {
     public var author: Author
     public var detail: String
     public var createdAt: Date
+    public var annotations: DocumentAnnotations = DocumentAnnotations()
+    public var annotationRuns: [AnnotationRun] = []
+
+    enum CodingKeys: String, CodingKey { case id, number, html, slug, author, detail, createdAt, annotations, annotationRuns }
+
+    public init(id: UUID = UUID(), number: Int, html: String, slug: String, author: Author, detail: String,
+                createdAt: Date, annotations: DocumentAnnotations = DocumentAnnotations(), annotationRuns: [AnnotationRun] = []) {
+        self.id = id; self.number = number; self.html = html; self.slug = slug
+        self.author = author; self.detail = detail; self.createdAt = createdAt
+        self.annotations = annotations; self.annotationRuns = annotationRuns
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        number = try c.decode(Int.self, forKey: .number)
+        html = try c.decode(String.self, forKey: .html)
+        slug = try c.decode(String.self, forKey: .slug)
+        author = try c.decode(Author.self, forKey: .author)
+        detail = try c.decode(String.self, forKey: .detail)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        annotations = try c.decodeIfPresent(DocumentAnnotations.self, forKey: .annotations) ?? DocumentAnnotations()
+        annotationRuns = try c.decodeIfPresent([AnnotationRun].self, forKey: .annotationRuns) ?? []
+    }
 }

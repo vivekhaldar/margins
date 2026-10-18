@@ -34,6 +34,9 @@ final class AppState: ObservableObject {
         }
     }
     @Published var hoveredStep: Int?
+    /// A provenance inspector can reveal the exact instruction that produced a range.
+    @Published var revealedIntentID: UUID?
+    @Published var instructionRevealRequest = UUID()
     /// What the backend agent may do (web, commands, files). Persisted.
     @Published var toolPolicy: AgentToolPolicy = .research {
         didSet { defaults.set(toolPolicy.rawValue, forKey: "toolPolicy") }
@@ -45,6 +48,9 @@ final class AppState: ObservableObject {
     private var threadsPush: Task<Void, Never>?
     private var lastThreadsJSON = ""
     private var running: [Int: Task<Void, Never>] = [:]
+    private var documentSessionID = UUID()
+    private var activeRunIDs: [Int: UUID] = [:]
+    private var lastRunsJSON = ""
     /// Steps whose next thought starts a fresh paragraph (a tool call happened since the last one).
     private var thoughtBreak: Set<Int> = []
     @Published var lastError: String?
@@ -185,16 +191,20 @@ final class AppState: ObservableObject {
         let step = doc.nextStep
         doc.nextStep += 1
         doc.intents.append(Intent(step: step, text: text, provider: label(config)))
+        let documentID = documentSessionID
+        let runID = beginRun(step: step, config: config)
         inFlight += 1
         running[step] = Task {
-            defer { finish(step) }
+            defer { finish(step, documentID: documentID) }
             if let paragraphBlockID { await editor.setParagraphWorking(step: step, blockID: paragraphBlockID) }
             do {
                 try Task.checkCancellation()
                 let provider = try provider(for: config)
                 let sources = await fetchSources(for: text, step: step)
                 try Task.checkCancellation()
+                guard documentSessionID == documentID else { return }
                 let snapshot = try await editor.blocks()
+                guard documentSessionID == documentID else { return }
                 if let paragraphBlockID, !snapshot.blocks.contains(where: { $0.id == paragraphBlockID }) {
                     throw ProviderError.protocolError("The prompt paragraph is no longer in the document. Try again from its current location.")
                 }
@@ -213,14 +223,18 @@ final class AppState: ObservableObject {
                     model: config.model.isEmpty ? nil : config.model, agent: agent, reasoningEffort: config.reasoningEffort)
                 let before = await projectSnapshot(agent)
                 let plan: EditPlan
-                do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step); throw error }
-                await recordProjectChanges(before, step: step)
+                do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step, session: documentID); throw error }
+                await recordProjectChanges(before, step: step, session: documentID)
+                try Task.checkCancellation()
+                guard documentSessionID == documentID else { return }
                 if paragraphBlockID != nil && plan.edits.isEmpty {
                     throw ProviderError.protocolError("The agent returned no document update. Retry the paragraph prompt.")
                 }
                 let direct = snapshot.blocks.isEmpty
                 let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
-                let result = try await editor.apply(step: step, edits: edits, direct: direct)
+                let result = try await editor.apply(step: step, edits: edits, direct: direct,
+                                                    runID: runID, expectedRevision: snapshot.revision)
+                guard documentSessionID == documentID else { return }
                 updateIntent(step) {
                     $0.summary = plan.summary
                     let reply = plan.reply.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -235,12 +249,15 @@ final class AppState: ObservableObject {
                     }
                 }
                 let slug = plan.slug.isEmpty ? String(text.prefix(48)) : plan.slug
-                doc.snapshot(html: result.html, slug: slug, author: .agent, detail: text)
+                finishRun(runID, summary: plan.summary, notes: plan.notes)
+                doc.snapshot(html: result.html, slug: slug, author: .agent, detail: text, annotations: result.annotations)
                 scheduleSave()
             } catch is CancellationError {
+                guard documentSessionID == documentID else { return }
                 updateIntent(step) { $0.status = .failed; $0.error = "Stopped." }
                 scheduleSave()
             } catch {
+                guard documentSessionID == documentID else { return }
                 updateIntent(step) { $0.status = .failed; $0.error = Task.isCancelled ? "Stopped." : error.localizedDescription }
                 scheduleSave()
             }
@@ -274,14 +291,18 @@ final class AppState: ObservableObject {
         intent.focus = focus
         intent.anchor = anchor
         doc.intents.append(intent)
+        let documentID = documentSessionID
+        let runID = beginRun(step: step, config: config)
         inFlight += 1
         running[step] = Task {
-            defer { finish(step) }
+            defer { finish(step, documentID: documentID) }
             do {
                 let provider = try provider(for: config)
                 let sources = await fetchSources(for: text, step: step)
                 try Task.checkCancellation()
+                guard documentSessionID == documentID else { return }
                 let snapshot = try await editor.blocks()
+                guard documentSessionID == documentID else { return }
                 let live = focus.filter { id in snapshot.blocks.contains { $0.id == id } }
                 let agent = agentContext(step: step, kind: config.kind)
                 let request = GenerationRequest(
@@ -291,12 +312,16 @@ final class AppState: ObservableObject {
                     model: config.model.isEmpty ? nil : config.model, agent: agent, reasoningEffort: config.reasoningEffort)
                 let before = await projectSnapshot(agent)
                 let plan: EditPlan
-                do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step); throw error }
-                await recordProjectChanges(before, step: step)
+                do { plan = try await provider.editPlan(request) } catch { await recordProjectChanges(before, step: step, session: documentID); throw error }
+                await recordProjectChanges(before, step: step, session: documentID)
+                try Task.checkCancellation()
+                guard documentSessionID == documentID else { return }
                 var result: EditorBridge.ApplyResult?
                 if !plan.edits.isEmpty {
                     let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
-                    result = try await editor.apply(step: step, edits: edits, direct: false)
+                    result = try await editor.apply(step: step, edits: edits, direct: false,
+                                                    runID: runID, expectedRevision: snapshot.revision)
+                    guard documentSessionID == documentID else { return }
                 }
                 let changed = (result?.changes ?? 0) > 0
                 updateIntent(step) {
@@ -311,15 +336,18 @@ final class AppState: ObservableObject {
                     }
                     $0.status = changed ? .pending : .done
                 }
+                finishRun(runID, summary: plan.summary, notes: plan.notes)
                 if let result, changed {
                     let slug = plan.slug.isEmpty ? String(text.prefix(48)) : plan.slug
-                    doc.snapshot(html: result.html, slug: slug, author: .agent, detail: "On “\(quote.prefix(60))”: \(text)")
+                    doc.snapshot(html: result.html, slug: slug, author: .agent, detail: "On “\(quote.prefix(60))”: \(text)", annotations: result.annotations)
                 }
                 scheduleSave()
             } catch is CancellationError {
+                guard documentSessionID == documentID else { return }
                 updateIntent(step) { $0.status = .failed; $0.error = "Stopped." }
                 scheduleSave()
             } catch {
+                guard documentSessionID == documentID else { return }
                 updateIntent(step) { $0.status = .failed; $0.error = Task.isCancelled ? "Stopped." : error.localizedDescription }
                 scheduleSave()
             }
@@ -347,6 +375,17 @@ final class AppState: ObservableObject {
     }
 
     private func pushThreads() async {
+        await editor.ready()
+        let session = documentSessionID
+        let runs = previewing?.annotationRuns ?? doc.annotationRuns
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = [.sortedKeys]
+        if let data = try? enc.encode(runs), let json = String(data: data, encoding: .utf8), json != lastRunsJSON {
+            lastRunsJSON = json
+            await editor.setAnnotationRuns(runs, availableIntentIDs: Set(doc.intents.map(\.id)))
+        }
+        guard documentSessionID == session else { return }
         let list = threadPayload()
         guard let data = try? JSONSerialization.data(withJSONObject: list, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8), json != lastThreadsJSON else { return }
@@ -403,8 +442,10 @@ final class AppState: ObservableObject {
     /// Fetch what agents can't reliably get themselves (YouTube transcripts), shown as steps on the card.
     /// Failures are recorded on the step; the agent still runs and may find another way.
     private func fetchSources(for text: String, step: Int) async -> [SourceMaterial] {
+        let session = documentSessionID
         var out: [SourceMaterial] = []
         for id in YouTube.videoIDs(in: text) {
+            guard documentSessionID == session else { return out }
             let url = "https://www.youtube.com/watch?v=\(id)"
             var s = AgentStep(id: "yt-\(id)", kind: .fetch, title: "Fetching YouTube transcript", detail: url)
             apply(.step(s), step: step)
@@ -419,6 +460,7 @@ final class AppState: ObservableObject {
                 s.detail = error.localizedDescription
                 s.status = .failed
             }
+            guard documentSessionID == session else { return out }
             apply(.step(s), step: step)
             if Task.isCancelled { break }
         }
@@ -431,18 +473,23 @@ final class AppState: ObservableObject {
         guard toolPolicy != .off, kind.supportsTools else { return nil }
         updateIntent(step) { if $0.steps == nil { $0.steps = [] } }
         let project = projectURL
+        let documentID = documentSessionID
+        let runID = activeRunIDs[step]
         return AgentContext(
             policy: toolPolicy,
             workspace: project ?? AgentContext.workspace(for: doc.id),
             project: project != nil,
             onEvent: { [weak self] event in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(event, step: step) } }
+                DispatchQueue.main.async { MainActor.assumeIsolated {
+                    guard let self, self.documentSessionID == documentID, self.activeRunIDs[step] == runID else { return }
+                    self.apply(event, step: step)
+                } }
             },
             askPermission: { [weak self] request in
                 await withCheckedContinuation { cont in
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated {
-                            guard let self, self.running[step] != nil else { cont.resume(returning: .deny); return }
+                            guard let self, self.documentSessionID == documentID, self.activeRunIDs[step] == runID, self.running[step] != nil else { cont.resume(returning: .deny); return }
                             self.permissionAsks[step] = PermissionAsk(request: request, step: step) { d in cont.resume(returning: d) }
                         }
                     }
@@ -473,6 +520,11 @@ final class AppState: ObservableObject {
                 }
                 intent.steps = steps
             }
+            if let runID = activeRunIDs[step], let index = doc.annotationRuns.firstIndex(where: { $0.id == runID }) {
+                if let i = doc.annotationRuns[index].steps.firstIndex(where: { $0.id == s.id }) {
+                    doc.annotationRuns[index].steps[i] = s
+                } else { doc.annotationRuns[index].steps.append(s) }
+            }
         }
     }
 
@@ -485,20 +537,110 @@ final class AppState: ObservableObject {
     func stop(step: Int) {
         answerPermission(step: step, .deny)
         running[step]?.cancel()
+        guard let runID = activeRunIDs[step], let index = doc.annotationRuns.firstIndex(where: { $0.id == runID }) else { return }
+        doc.annotationRuns[index].status = "failed"
+        if !doc.annotationRuns[index].notes.contains("Stopped.") { doc.annotationRuns[index].notes.append("Stopped.") }
+        doc.annotationRuns[index].steps = doc.annotationRuns[index].steps.map { var step = $0; if step.status == .running { step.status = .failed }; return step }
+        let refining = doc.annotationRuns[index].refinement != nil
+        updateIntent(step) { intent in
+            intent.status = refining ? .pending : .failed
+            if !refining { intent.error = "Stopped." }
+            intent.steps = intent.steps?.map { var step = $0; if step.status == .running { step.status = .failed }; return step }
+        }
+        scheduleSave()
     }
 
     func stopAll() { running.keys.forEach(stop(step:)) }
 
-    private func finish(_ step: Int) {
+    private func finish(_ step: Int, documentID: UUID) {
+        guard documentSessionID == documentID else { return }
         answerPermission(step: step, .deny)
         running[step] = nil
         liveThought[step] = nil
         thoughtBreak.remove(step)
+        let failed = activeRunIDs[step].flatMap { id in doc.annotationRuns.first { $0.id == id }?.status } == "failed"
+            || doc.intents.first(where: { $0.kind == .instruction && $0.step == step })?.status == .failed
         updateIntent(step) { intent in
             // Anything still "running" when the agent finished didn't report completion.
-            intent.steps = intent.steps?.map { var s = $0; if s.status == .running { s.status = .done }; return s }
+            intent.steps = intent.steps?.map { var s = $0; if s.status == .running { s.status = failed ? .failed : .done }; return s }
         }
-        inFlight -= 1
+        if let runID = activeRunIDs.removeValue(forKey: step),
+           let index = doc.annotationRuns.firstIndex(where: { $0.id == runID }) {
+            let intent = doc.intents.first { $0.kind == .instruction && $0.step == step }
+            if doc.annotationRuns[index].status == "working" { doc.annotationRuns[index].status = intent?.status.rawValue ?? "done" }
+            doc.annotationRuns[index].refinements = intent?.refinements ?? []
+            if let error = intent?.error, !doc.annotationRuns[index].notes.contains(error) { doc.annotationRuns[index].notes.append(error) }
+            doc.annotationRuns[index].steps = doc.annotationRuns[index].steps.map { var s = $0; if s.status == .running { s.status = failed ? .failed : .done }; return s }
+        }
+        inFlight = max(0, inFlight - 1)
+        scheduleSave()
+    }
+
+    private func beginRun(step: Int, config: ProviderConfig, refinement: String? = nil) -> UUID {
+        let intent = doc.intents.first { $0.kind == .instruction && $0.step == step }!
+        let parent = refinement == nil ? nil : doc.annotationRuns.last(where: { $0.intentId == intent.id && $0.status != "failed" })?.id
+        let run = AnnotationRun(intentId: intent.id, step: step, provider: config.name, model: config.model,
+                                instruction: intent.text, refinement: refinement, parentRunId: parent,
+                                refinements: intent.refinements)
+        doc.annotationRuns.append(run)
+        activeRunIDs[step] = run.id
+        scheduleSave()
+        return run.id
+    }
+
+    private func finishRun(_ id: UUID, summary: String, notes: [String]) {
+        guard let index = doc.annotationRuns.firstIndex(where: { $0.id == id }) else { return }
+        let intent = doc.intents.first { $0.id == doc.annotationRuns[index].intentId }
+        doc.annotationRuns[index].summary = summary
+        doc.annotationRuns[index].notes = notes
+        doc.annotationRuns[index].status = intent?.status.rawValue ?? "done"
+        doc.annotationRuns[index].refinements = intent?.refinements ?? []
+        doc.annotationRuns[index].steps = doc.annotationRuns[index].steps.map { var s = $0; if s.status == .running { s.status = .done }; return s }
+    }
+
+    /// A trusted internal clipboard may bring its original invocation records with it.
+    /// Keep those records so subsequent native pushes and version previews preserve them.
+    private func mergeAnnotationRuns(_ annotations: DocumentAnnotations) {
+        guard case .array(let records) = annotations.fields["runs"] else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text) { return date }
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid annotation date"))
+        }
+        let encoder = JSONEncoder()
+        for record in records {
+            guard let data = try? encoder.encode(record), let run = try? decoder.decode(AnnotationRun.self, from: data),
+                  !doc.annotationRuns.contains(where: { $0.id == run.id }) else { continue }
+            doc.annotationRuns.append(run)
+        }
+    }
+
+    private func captureAnnotations(in body: [String: Any]) -> DocumentAnnotations? {
+        guard let annotations = EditorBridge.annotations(in: body) else { return nil }
+        mergeAnnotationRuns(annotations)
+        return annotations
+    }
+
+    private func cancelDocumentRuns() {
+        documentSessionID = UUID()
+        let interrupted = Set(running.keys)
+        stopAll()
+        for index in doc.intents.indices where interrupted.contains(doc.intents[index].step) && doc.intents[index].status == .working {
+            doc.intents[index].status = .failed
+            doc.intents[index].error = "Stopped because the document changed."
+        }
+        for index in doc.annotationRuns.indices where activeRunIDs.values.contains(doc.annotationRuns[index].id) {
+            doc.annotationRuns[index].status = "failed"
+            doc.annotationRuns[index].notes.append("Stopped because the document changed.")
+        }
+        running.removeAll()
+        activeRunIDs.removeAll()
+        inFlight = 0
+        liveThought.removeAll()
+        thoughtBreak.removeAll()
     }
 
     var workspaceURL: URL { projectURL ?? AgentContext.workspace(for: doc.id) }
@@ -569,49 +711,84 @@ final class AppState: ObservableObject {
     }
 
     /// Records which project files the run touched on the intent.
-    private func recordProjectChanges(_ before: (URL, ProjectChanges.Snapshot)?, step: Int) async {
+    private func recordProjectChanges(_ before: (URL, ProjectChanges.Snapshot)?, step: Int, session: UUID) async {
+        guard documentSessionID == session else { return }
         guard let (dir, snap) = before else { return }
         let files = await Task.detached { ProjectChanges.snapshot(dir).map { ProjectChanges.changed(from: snap, to: $0) } }.value ?? []
-        if !files.isEmpty { updateIntent(step) { $0.files = files } }
+        guard documentSessionID == session else { return }
+        if let runID = activeRunIDs[step], let index = doc.annotationRuns.firstIndex(where: { $0.id == runID }) {
+            // Invocation evidence is independent of earlier invocations of this intent.
+            doc.annotationRuns[index].files = files
+        }
+        if !files.isEmpty { updateIntent(step) { $0.files = Array(Set(($0.files ?? []) + files)).sorted() } }
     }
 
     private func refine(cid: String, instruction: String) {
         guard let config = activeProvider else { return }
+        let documentID = documentSessionID
         Task {
             guard let ctx = await editor.refineContext(cid: cid) else { return }
+            guard documentSessionID == documentID else { return }
             // One agent run per instruction card at a time.
             guard running[ctx.step] == nil else { await editor.refineFailed(cid: cid); return }
             inFlight += 1
             let prior = doc.intents.first { $0.step == ctx.step }
             updateIntent(ctx.step) { $0.refinements.append(.init(text: instruction)); $0.status = .working; $0.error = nil }
+            let runID = beginRun(step: ctx.step, config: config, refinement: instruction)
             running[ctx.step] = Task {
                 defer {
-                    finish(ctx.step)
-                    updateIntent(ctx.step) { if $0.status == .working { $0.status = prior?.status ?? .pending } }
+                    if documentSessionID == documentID {
+                        updateIntent(ctx.step) { if $0.status == .working { $0.status = prior?.status ?? .pending } }
+                    }
+                    finish(ctx.step, documentID: documentID)
                 }
                 do {
                     let provider = try provider(for: config)
-                    let blocks = forPrompt(try await editor.blocks().blocks)
+                    let blockSnapshot = try await editor.blocks()
+                    guard documentSessionID == documentID else { return }
+                    guard blockSnapshot.revision == ctx.revision else {
+                        throw ProviderError.protocolError("The document changed before refinement started. Try the refinement again.")
+                    }
+                    let blocks = forPrompt(blockSnapshot.blocks)
                     let agent = agentContext(step: ctx.step, kind: config.kind)
-                    let plan = try await provider.editPlan(GenerationRequest(
+                    let request = GenerationRequest(
                         system: PromptBuilder.system(tools: agent),
                         prompt: PromptBuilder.refinePrompt(blocks: blocks, blockId: ctx.blockId, original: ctx.original,
                                                            proposed: ctx.proposed, originalInstruction: prior?.text ?? "",
                                                            refinement: instruction),
-                        model: config.model.isEmpty ? nil : config.model, agent: agent, reasoningEffort: config.reasoningEffort))
+                        model: config.model.isEmpty ? nil : config.model, agent: agent, reasoningEffort: config.reasoningEffort)
+                    let before = await projectSnapshot(agent)
+                    let plan: EditPlan
+                    do { plan = try await provider.editPlan(request) }
+                    catch { await recordProjectChanges(before, step: ctx.step, session: documentID); throw error }
+                    await recordProjectChanges(before, step: ctx.step, session: documentID)
+                    try Task.checkCancellation()
+                    guard documentSessionID == documentID else { return }
                     guard let edit = plan.edits.first(where: { $0.blockId == ctx.blockId }) ?? plan.edits.first else {
                         throw ProviderError.protocolError("The model returned no refinement.")
                     }
                     let count = doc.intents.first { $0.step == ctx.step }?.refinements.count ?? 1
-                    if let html = await editor.applyRefinement(cid: cid, html: doc.internalizeImages(edit.html), count: count) {
-                        doc.snapshot(html: html, slug: "refined: \(instruction.lowercased().prefix(40))", author: .agent,
-                                     detail: prior.map { "Change from “\($0.text)”" } ?? "")
-                        scheduleSave()
+                    guard let result = try await editor.applyRefinement(cid: cid, html: doc.internalizeImages(edit.html), count: count,
+                                                                        runID: runID, expectedRevision: ctx.revision,
+                                                                        parentRunID: doc.annotationRuns.first(where: { $0.id == runID })?.parentRunId) else {
+                        throw ProviderError.protocolError("The proposed change is no longer available. Retry from the current change.")
                     }
+                    guard documentSessionID == documentID else { return }
+                    updateIntent(ctx.step) { $0.status = .pending }
+                    finishRun(runID, summary: plan.summary, notes: plan.notes)
+                    doc.snapshot(html: result.html, slug: "refined: \(instruction.lowercased().prefix(40))", author: .agent,
+                                 detail: prior.map { "Change from “\($0.text)”" } ?? "", annotations: result.annotations)
+                    scheduleSave()
                 } catch {
+                    guard documentSessionID == documentID else { return }
                     await editor.refineFailed(cid: cid)
+                    guard documentSessionID == documentID else { return }
                     let msg = (error is CancellationError || Task.isCancelled) ? "Stopped." : error.localizedDescription
                     updateIntent(ctx.step) { $0.notes.append("Refine failed: \(msg)") }
+                    if let index = doc.annotationRuns.firstIndex(where: { $0.id == runID }) {
+                        doc.annotationRuns[index].status = "failed"
+                        doc.annotationRuns[index].notes.append(msg)
+                    }
                 }
             }
         }
@@ -644,13 +821,17 @@ final class AppState: ObservableObject {
     // MARK: - messages from the editor
 
     private func handle(_ type: String, _ body: [String: Any]) {
+        if let session = body["documentSession"] as? String,
+           session.lowercased() != documentSessionID.uuidString.lowercased() { return }
         switch type {
         case "ready":
             lastThreadsJSON = ""
+            lastRunsJSON = ""
             scheduleThreads()
+            let session = documentSessionID
             Task {
                 await editor.setOutline(showOutline)
-                await editor.load(doc.html)
+                await loadEditorDocument(session: session)
             }
         case "outline":
             if (body["visible"] as? Bool) == false, showOutline { showOutline = false }
@@ -677,7 +858,8 @@ final class AppState: ObservableObject {
             } else {
                 doc.intents.append(Intent(kind: .edit, step: 0, text: text, status: .done))
             }
-            doc.snapshot(html: html, slug: "edited \(sections.first ?? "document")".lowercased(), author: .you, detail: where_)
+            let annotations = captureAnnotations(in: body)
+            doc.snapshot(html: html, slug: "edited \(sections.first ?? "document")".lowercased(), author: .you, detail: where_, annotations: annotations)
             scheduleSave()
         case "reviewed":
             let a = (body["accepted"] as? NSNumber)?.intValue ?? 0
@@ -685,9 +867,28 @@ final class AppState: ObservableObject {
             let sections = body["sections"] as? [String] ?? []
             let parts = [a > 0 ? "accepted \(a)" : nil, r > 0 ? "rejected \(r)" : nil].compactMap { $0 }
             let slug = parts.joined(separator: " · ") + " change\(a + r == 1 ? "" : "s")"
+            let annotations = captureAnnotations(in: body)
             doc.snapshot(html: body["html"] as? String ?? doc.html, slug: slug, author: .review,
-                         detail: sections.map { "§\($0)" }.joined(separator: ", "))
+                         detail: sections.map { "§\($0)" }.joined(separator: ", "), annotations: annotations)
             scheduleSave()
+        case "annotations":
+            guard previewing == nil, let annotations = captureAnnotations(in: body),
+                  let html = body["html"] as? String else { return }
+            guard annotations != doc.annotations || html != doc.html else { return }
+            doc.snapshot(html: doc.internalizeImages(html), slug: "updated annotations", author: .you,
+                         detail: "Local comments and provenance", annotations: annotations)
+            scheduleSave()
+        case "showAnnotationInstruction", "showIntent":
+            let run = (body["runId"] as? String).flatMap(UUID.init(uuidString:)).flatMap { id in
+                (previewing?.annotationRuns ?? doc.annotationRuns).first { $0.id == id }
+            }
+            let id = run?.intentId ?? (body["intentId"] as? String).flatMap(UUID.init(uuidString:))
+            if let intent = doc.intents.first(where: {
+                $0.id == id || (id == nil && $0.kind == .instruction && $0.step == (body["step"] as? NSNumber)?.intValue)
+            }) {
+                revealedIntentID = intent.id
+                instructionRevealRequest = UUID()
+            }
         case "submitParagraph":
             if previewing == nil, let text = body["text"] as? String,
                let blockId = body["blockId"] as? String, !blockId.isEmpty {
@@ -712,19 +913,46 @@ final class AppState: ObservableObject {
     func preview(_ v: Version) {
         if v.id == doc.versions.last?.id { returnToLatest(); return }
         previewing = v
-        Task { await editor.preview(v.html) }
+        let session = documentSessionID
+        Task {
+            guard documentSessionID == session else { return }
+            await editor.preview(v.html, annotations: v.annotations)
+            guard documentSessionID == session else { return }
+            await editor.setAnnotationRuns(v.annotationRuns, availableIntentIDs: Set(doc.intents.map(\.id)))
+        }
     }
 
     func returnToLatest() {
         previewing = nil
-        Task { await editor.endPreview() }
+        Task {
+            await editor.endPreview()
+            await editor.setAnnotationRuns(doc.annotationRuns, availableIntentIDs: Set(doc.intents.map(\.id)))
+            lastRunsJSON = ""
+        }
     }
 
     func restore(_ v: Version) {
+        cancelDocumentRuns()
         previewing = nil
+        let session = documentSessionID
         Task {
-            await editor.load(v.html)
-            doc.snapshot(html: v.html, slug: "restored v\(v.number)", author: .you, detail: v.slug)
+            guard documentSessionID == session else { return }
+            // Preserve the final live edits in history before replacing them.
+            await flushAndSave()
+            guard documentSessionID == session else { return }
+            cancelDocumentRuns()
+            saveNow()
+            let installedSession = documentSessionID
+            await editor.load(v.html, annotations: v.annotations, session: installedSession.uuidString.lowercased())
+            guard documentSessionID == installedSession else { return }
+            // Keep every historical run resolvable after a restore; current ranges refer only
+            // to the restored snapshot. The snapshot's own inspector metadata stays immutable.
+            for run in v.annotationRuns where !doc.annotationRuns.contains(where: { $0.id == run.id }) { doc.annotationRuns.append(run) }
+            let snapshot = await editor.snapshot()
+            guard documentSessionID == installedSession else { return }
+            doc.snapshot(html: snapshot?.html ?? v.html, slug: "restored v\(v.number)", author: .you, detail: v.slug,
+                         annotations: snapshot?.annotations ?? v.annotations)
+            await editor.setAnnotationRuns(doc.annotationRuns, availableIntentIDs: Set(doc.intents.map(\.id)))
             scheduleSave()
         }
     }
@@ -750,13 +978,31 @@ final class AppState: ObservableObject {
     }
 
     func newDocument() {
-        saveNow()
-        doc = MarginsDocument()
-        fileURL = Self.newUntitledURL()
-        previewing = nil
-        pending = PendingInfo()
-        defaults.removeObject(forKey: "lastDocument")
-        Task { await editor.load("") }
+        cancelDocumentRuns()
+        let session = documentSessionID
+        let replace = {
+            // Work submitted while the outgoing WebKit snapshot was draining
+            // belongs to that outgoing document too.
+            self.cancelDocumentRuns()
+            self.saveNow()
+            self.doc = MarginsDocument()
+            self.fileURL = Self.newUntitledURL()
+            self.previewing = nil
+            self.pending = PendingInfo()
+            self.defaults.removeObject(forKey: "lastDocument")
+            let installedSession = self.documentSessionID
+            Task { await self.loadEditorDocument(session: installedSession) }
+        }
+        if editor.isReadyForSnapshot {
+            Task {
+                await flushAndSave()
+                guard documentSessionID == session else { return }
+                replace()
+            }
+        } else {
+            saveNow()
+            replace()
+        }
     }
 
     func open(_ url: URL) {
@@ -765,18 +1011,85 @@ final class AppState: ObservableObject {
             var d = try MarginsDocument.decode(data)
             let hadID = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] != nil
             d.pruneAssets()
-            saveNow()
-            doc = d
-            fileURL = url
-            previewing = nil
-            defaults.set(url, forKey: "lastDocument")
-            NSDocumentController.shared.noteNewRecentDocumentURL(url)
-            Task { await editor.load(d.html) }
-            if !d.versions.isEmpty { writeMarkdown() }
-            if !hadID { scheduleSave() }
+            cancelDocumentRuns()
+            let session = documentSessionID
+            let replace = { (document: MarginsDocument) in
+                let reopeningCurrent = self.fileURL.standardizedFileURL == url.standardizedFileURL
+                self.cancelDocumentRuns()
+                self.saveNow()
+                let incoming = reopeningCurrent ? ((try? MarginsDocument.decode(Data(contentsOf: url))) ?? document) : document
+                self.doc = incoming
+                self.fileURL = url
+                self.previewing = nil
+                self.pending = PendingInfo()
+                self.defaults.set(url, forKey: "lastDocument")
+                NSDocumentController.shared.noteNewRecentDocumentURL(url)
+                let installedSession = self.documentSessionID
+                Task { await self.loadEditorDocument(session: installedSession) }
+                if !incoming.versions.isEmpty { self.writeMarkdown() }
+                if !hadID { self.scheduleSave() }
+            }
+            if editor.isReadyForSnapshot {
+                Task {
+                    await flushAndSave()
+                    guard documentSessionID == session else { return }
+                    do {
+                        // Reopening the same file must include edits just drained above.
+                        var current = try MarginsDocument.decode(Data(contentsOf: url))
+                        current.pruneAssets()
+                        replace(current)
+                    } catch { lastError = "Couldn't open \(url.lastPathComponent): \(error.localizedDescription)" }
+                }
+            } else {
+                saveNow()
+                replace(d)
+            }
         } catch {
             lastError = "Couldn't open \(url.lastPathComponent): \(error.localizedDescription)"
         }
+    }
+
+    /// Load HTML and its matching annotation state together, then persist any conservative
+    /// legacy migration performed by the editor (old text starts unattributed).
+    private func loadEditorDocument(session: UUID) async {
+        guard documentSessionID == session else { return }
+        let html = doc.html
+        let annotations = doc.annotations
+        await editor.ready()
+        guard documentSessionID == session else { return }
+        await editor.load(html, annotations: annotations, session: session.uuidString.lowercased())
+        guard documentSessionID == session else { return }
+        if let snapshot = await editor.snapshot(), documentSessionID == session {
+            doc.html = snapshot.html
+            doc.annotations = snapshot.annotations
+            mergeAnnotationRuns(snapshot.annotations)
+            if !html.isEmpty { scheduleSave() }
+        }
+        await editor.setAnnotationRuns(doc.annotationRuns, availableIntentIDs: Set(doc.intents.map(\.id)))
+        lastRunsJSON = ""
+    }
+
+    /// Drain author edits, review timers, and local comments as one HTML/metadata pair.
+    /// This also works while history is open: the editor returns its saved live state.
+    func flushAndSave(includeEmpty: Bool = false) async {
+        let session = documentSessionID
+        if editor.isReadyForSnapshot {
+            await editor.flushForSave()
+            guard documentSessionID == session else { return }
+            if let snapshot = await editor.snapshot(), documentSessionID == session {
+                let html = doc.internalizeImages(snapshot.html)
+                mergeAnnotationRuns(snapshot.annotations)
+                var currentFields = doc.annotations.fields
+                var snapshotFields = snapshot.annotations.fields
+                currentFields.removeValue(forKey: "runs")
+                snapshotFields.removeValue(forKey: "runs")
+                if html != doc.html || snapshotFields != currentFields {
+                    doc.snapshot(html: html, slug: "saved edits", author: .you, annotations: snapshot.annotations)
+                } else { doc.annotations = snapshot.annotations }
+            }
+        }
+        guard documentSessionID == session else { return }
+        saveNow(includeEmpty: includeEmpty)
     }
 
     func showOpenPanel() {
@@ -792,12 +1105,17 @@ final class AppState: ObservableObject {
         panel.directoryURL = fileURL.deletingLastPathComponent()
         panel.nameFieldStringValue = fileURL.lastPathComponent
         if panel.runModal() == .OK, let url = panel.url {
-            let old = fileURL
-            fileURL = url
-            saveNow()
-            if old != url, isUntitled(old) {
-                try? FileManager.default.removeItem(at: old)
-                try? FileManager.default.removeItem(at: old.deletingPathExtension().appendingPathExtension("md"))
+            let session = documentSessionID
+            Task {
+                await flushAndSave()
+                guard documentSessionID == session else { return }
+                let old = fileURL
+                fileURL = url
+                saveNow()
+                if old != url, isUntitled(old) {
+                    try? FileManager.default.removeItem(at: old)
+                    try? FileManager.default.removeItem(at: old.deletingPathExtension().appendingPathExtension("md"))
+                }
             }
         }
     }
@@ -911,7 +1229,9 @@ final class AppState: ObservableObject {
     func editLink() { Task { await editor.editLink() } }
 
     func revealMarkdown() {
-        saveNow()
-        NSWorkspace.shared.activateFileViewerSelecting([markdownURL])
+        Task {
+            await flushAndSave()
+            NSWorkspace.shared.activateFileViewerSelecting([markdownURL])
+        }
     }
 }

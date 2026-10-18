@@ -18,7 +18,7 @@
   <button class="btn" id="rejAll" data-act="rej-all" disabled>Reject all</button>
   <button class="btn p" id="accAll" data-act="acc-all" disabled>Accept all</button>
 </div>
-<div class="formatbar" id="formatbar" role="toolbar" aria-label="Text formatting">
+<div class="formatbar" id="formatbar" role="toolbar" aria-label="Text formatting and annotations">
   <button class="btn" data-format="bold" title="Bold (⌘B)" aria-label="Bold"><strong>B</strong></button>
   <button class="btn" data-format="italic" title="Italic (⌘I)" aria-label="Italic"><em>I</em></button>
   <button class="btn" data-format="underline" title="Underline (⌘U)" aria-label="Underline">Underline</button>
@@ -27,6 +27,10 @@
   <button class="btn" data-format="checklist" title="Checklist (⌘⇧9)">☐ Checklist</button>
   <button class="btn" data-format="toggleCheck" title="Toggle checked (⌘⇧X)">✓ Toggle checked</button>
   <button class="btn" data-format="removeFormat" title="Clear inline formatting (⌘⌥0)">Clear formatting</button>
+  <span class="annotation-controls">
+    <label class="annotation-toggle" for="annotation-toggle"><input type="checkbox" id="annotation-toggle" aria-controls="annotation-layer annotation-card">Attribution &amp; comments</label>
+    <button class="btn" id="annotation-list-button" title="Browse attribution and local comments" aria-haspopup="dialog" aria-expanded="false">Browse <span id="annotation-count"></span></button>
+  </span>
 </div>
 <div class="findbar" id="findbar" role="search" hidden>
   <input id="findin" type="search" aria-label="Find in document" placeholder="Find in document" spellcheck="false" autocomplete="off">
@@ -37,6 +41,7 @@
 </div>
 <div class="scroll" id="scroll">
   <div id="findmarks" aria-hidden="true"></div>
+  <div id="annotation-layer" hidden><div id="annotation-highlights" aria-hidden="true"></div><div id="annotation-markers" role="group" aria-label="Attribution and comment markers"></div></div>
   <article id="doc" contenteditable="true" spellcheck="true"
            data-placeholder="Your document will appear here. Describe what you want to write in the panel on the left — or just start typing."></article>
   <div id="tmarks"></div>
@@ -70,6 +75,12 @@
   </div>
 </div>
 <button class="askchip" id="askchip" title="Discuss this passage with the agent (⌘J)"><svg class="bubsvg" viewBox="0 0 20 18" aria-hidden="true"><path d="M10 1.5C5.03 1.5 1.5 4.6 1.5 8.3c0 2.1 1.1 3.9 2.9 5.1-.2 1.3-.9 2.4-1.9 3.1 2.1 0 3.8-.8 4.9-1.9.8.2 1.7.3 2.6.3 4.97 0 8.5-3.1 8.5-6.8S14.97 1.5 10 1.5z"/></svg>Ask</button>
+<button class="commentchip" id="commentchip" title="Add a local comment to this selection">Comment</button>
+<aside id="annotation-card" class="annotation-card" role="dialog" aria-modal="false" aria-labelledby="annotation-card-title" hidden>
+  <header class="annotation-card-head"><h2 id="annotation-card-title">Attribution &amp; comments</h2><button type="button" class="annotation-close" id="annotation-close" aria-label="Close attribution and comments" title="Close (Esc)">✕</button></header>
+  <div id="annotation-card-content"></div>
+</aside>
+<div class="visually-hidden" id="annotation-status" role="status" aria-live="polite"></div>
 <div class="tpop" id="tpop">
   <div class="thd"><span class="tq" id="tquote"></span><button id="tclose" title="Close (Esc)">✕</button></div>
   <div class="tmsgs" id="tmsgs"></div>
@@ -82,6 +93,8 @@
   <textarea id="tin" rows="1" placeholder="Ask about this, or say how to change it…"></textarea>
   <div class="pf">↩ send · ⇧↩ new line · Esc close · edits arrive as tracked changes</div>
 </div>
+<script src="annotations.js"></script>
 <script src="editor.js"></script>
+<script src="annotations-ui.js"></script>
 </body>
 </html>

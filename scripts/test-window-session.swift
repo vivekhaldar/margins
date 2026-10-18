@@ -27,6 +27,7 @@ final class MemoryDefaults: UserDefaults {
     init(untitledURL: URL? = nil) { fileURL = untitledURL ?? Self.newUntitledURL() }
     func open(_ url: URL) { fileURL = url }
     func saveNow(includeEmpty: Bool = false) { saved = true }
+    func flushAndSave(includeEmpty: Bool = false) async { await editor.flushForSave(); saveNow(includeEmpty: includeEmpty) }
     func stopAll() { stopped = true }
     func shutdownProviders() {}
 }

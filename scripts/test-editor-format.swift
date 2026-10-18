@@ -3,11 +3,14 @@ import AppKit
 import WebKit
 
 let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+app.activate(ignoringOtherApps: true)
 let configuration = WKWebViewConfiguration()
 configuration.websiteDataStore = .nonPersistent()
 let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 800), configuration: configuration)
 let window = NSWindow(contentRect: webView.frame, styleMask: [.titled], backing: .buffered, defer: false)
 window.contentView = webView
+window.makeKeyAndOrderFront(nil)
 var finished = false
 var failure: String?
 
@@ -47,7 +50,7 @@ final class Delegate: NSObject, WKNavigationDelegate {
           assert(doc.querySelector('input').checked, 'Keyboard action checks task');
           const html = api.html(); api.load(html);
           assert(doc.querySelector('input').checked, 'Checked state survives reload');
-          assert(api.getBlocks().blocks[0].html.includes('checked'), 'Checked state survives agent context');
+          assert(api.getBlocks().blocks.some(block => block.html.includes('checked')), 'Checked state survives agent context');
           const input = doc.querySelector('input'); input.click();
           assert(!input.checked && !api.html().includes(' checked'), 'Click unchecks and saves task');
           caret(doc.querySelector('li')); api.format('checklist');
@@ -76,6 +79,8 @@ final class Delegate: NSObject, WKNavigationDelegate {
             if result as? String != "Editor formatting checks passed" { failure = "Unexpected result: \(String(describing: result))" }
           } catch { failure = error.localizedDescription }
           finished = true
+          if let failure { print("FAIL: \(failure)"); exit(1) }
+          print("Editor formatting checks passed"); exit(0)
         }
 
     }
@@ -84,8 +89,5 @@ let delegate = Delegate()
 webView.navigationDelegate = delegate
 let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Sources/Margins/Resources/Editor")
 webView.loadFileURL(directory.appendingPathComponent("editor.html"), allowingReadAccessTo: directory)
-let deadline = Date().addingTimeInterval(20)
-while !finished && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
-if !finished { failure = "Timed out loading editor" }
-if let failure { print("FAIL: \(failure)"); exit(1) }
-print("Editor formatting checks passed")
+DispatchQueue.main.asyncAfter(deadline: .now() + 25) { print("FAIL: Timed out loading editor"); exit(1) }
+app.run()

@@ -33,6 +33,7 @@ The output isn't a reply. It's the document.
   - all at once.
 - **💬 Refine a single change.** Ask the agent to redo just that hunk ("shorter", "more formal"…) without touching the rest of the document.
 - **Discuss a selection inline.** Select some text and click **Ask** (or press ⌘J) to open a comment thread beside that passage. Ask questions ("is this accurate?", "explain this") and the agent answers in the thread without touching the text. Ask for a change ("tighten this") and it edits just that passage as tracked changes, with a one-line note in the thread. Threads stay as 💬 markers in the margin, so you can reopen and continue them, and each message also appears as a card in the left panel.
+- **Attribution and local comments.** Enable **Attribution & comments** to inspect the instruction and recorded activity behind agent text. Select text to add a personal comment without calling an agent; reply, resolve, or reattach it later. Mixed origins and comments survive review, saving, reopening, and version history. The overlay starts hidden; capture continues. [Usage and verification](docs/07-annotations.md).
 - **Edit inline.** The document is plain editable rich text. Your edits are respected and recorded.
 - **Images and diagrams.** Ask for one ("add a diagram of the request flow"), and the agent draws it as SVG; it can revise it later like any other text. Paste or drag in images, or use Insert → Image… (⇧⌘I). Images are stored inside the `.margins` file, once each, no matter how many versions reference them.
 - **Links.** ⌘K links the selection (or edits the link under the caret), and pasting a URL over selected text links it. Click a link for Open ↗ / Edit / Remove; ⌘-click opens it in your browser.
@@ -121,6 +122,7 @@ Command-line equivalent: `swift run margins-cli edit copilot --tools research --
 3. [Model providers](docs/03-model-providers.md): using Copilot, ChatGPT and Claude subscriptions, and agent mode.
 4. [Architecture](docs/04-architecture.md): code layout, edit plans, block model, file format.
 5. [Roadmap](docs/05-roadmap.md).
+6. [Attribution and comments](docs/07-annotations.md): usage, storage rules, and verification.
 
 
 ## Contributing

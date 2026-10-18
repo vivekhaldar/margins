@@ -112,6 +112,45 @@ test("document round trip and title") {
     check(back.html == d.html && back.versions.map(\.slug) == d.versions.map(\.slug) && back.intents.map(\.id) == d.intents.map(\.id), "round trip")
 }
 
+test("annotation storage, history, and legacy documents") {
+    var document = MarginsDocument(html: "<p data-bid=\"b1\">A 🧭 mixed passage</p>")
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+    let intent = Intent(step: 1, text: "Explain the passage", createdAt: date, provider: "Test provider")
+    document.intents = [intent]
+    let run = AnnotationRun(intentId: intent.id, step: 1, provider: "Test provider", model: "test-model", createdAt: date,
+                            instruction: intent.text, summary: "Added an explanation", status: "done")
+    document.annotationRuns = [run]
+    let annotations = DocumentAnnotations(fields: [
+        "schema": .number(1), "revision": .number(7),
+        "spans": .array([.object(["blockId": .string("b1"), "start": .number(2), "end": .number(4),
+                                  "origin": .string("agent"), "runId": .string(run.id.uuidString.lowercased())])]),
+        "comments": .array([.object(["id": .string("local-comment"), "body": .string("Private editorial note"),
+                                     "resolved": .bool(false), "detached": .bool(false), "extra": .null])]),
+        "futureField": .object(["retainUnknown": .bool(true)])
+    ])
+    document.annotations = annotations
+    document.snapshot(html: document.html, slug: "explained", author: .agent, at: date)
+    document.annotations.fields["revision"] = .number(8)
+    document.snapshot(html: document.html + "<p>Later revision</p>", slug: "revised", author: .you, at: date)
+    let decoded = try MarginsDocument.decode(try document.encoded())
+    check(decoded == document, "annotation document and both version snapshots round trip without losing unknown fields")
+    check(decoded.annotations.revision == 8, "live annotation revision persists")
+    check(decoded.versions[0].annotations == annotations, "historical annotation state stays immutable")
+    check(decoded.versions[0].annotationRuns == [run], "version keeps provider, model and stable run identity")
+    var legacy = try JSONSerialization.jsonObject(with: document.encoded()) as! [String: Any]
+    legacy["format"] = 1
+    legacy.removeValue(forKey: "annotations"); legacy.removeValue(forKey: "annotationRuns")
+    legacy["versions"] = (legacy["versions"] as! [[String: Any]]).map { v in
+        var old = v; old.removeValue(forKey: "annotations"); old.removeValue(forKey: "annotationRuns"); return old
+    }
+    let old = try MarginsDocument.decode(try JSONSerialization.data(withJSONObject: legacy))
+    check(old.annotations.fields.isEmpty && old.annotationRuns.isEmpty, "old files open without invented provenance")
+    check(old.versions.allSatisfy { $0.annotations.fields.isEmpty && $0.annotationRuns.isEmpty }, "legacy versions open with empty annotation state")
+    let blocks = [Block(id: "b1", html: "<p>A mixed passage</p>")]
+    let prompt = PromptBuilder.editPrompt(blocks: blocks, instruction: "Tighten")
+    check(!prompt.contains("Private editorial note") && !prompt.contains(run.id.uuidString), "ordinary prompts contain prose without local annotation metadata")
+}
+
 test("reasoning effort settings and Codex overrides") {
     let config = ProviderConfig(kind: .codex, model: "gpt-6.1-sol", reasoningEffort: .high)
     let encoded = try JSONEncoder().encode(config)
