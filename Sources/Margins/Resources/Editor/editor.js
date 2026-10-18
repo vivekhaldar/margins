@@ -107,18 +107,42 @@
 
   function normalize() {
     syncChecklists();
+    // Reparenting a live text node makes WebKit move the caret out to #doc.
+    // Keep the actual endpoints so the next keystroke stays in this paragraph.
+    const selection = getSelection();
+    const points = selection?.rangeCount && doc.contains(selection.anchorNode) && doc.contains(selection.focusNode)
+      ? [{node: selection.anchorNode, offset: selection.anchorOffset}, {node: selection.focusNode, offset: selection.focusOffset}] : [];
+    let moved = false;
+    const remove = node => {
+      const index = [...doc.childNodes].indexOf(node);
+      points.forEach(point => {
+        if (point.node === node) { point.node = doc; point.offset = index; }
+        else if (point.node === doc && point.offset > index) point.offset--;
+      });
+      node.remove(); moved = true;
+    };
     [...doc.childNodes].forEach((n) => {
-      if (n.nodeType === 8) { n.remove(); return; }
-      if (n.nodeType === 3 && !n.textContent.trim()) { n.remove(); return; }
+      if (n.nodeType === 8) { remove(n); return; }
+      if (n.nodeType === 3 && !n.textContent.trim() && !points.some(point => point.node === n)) { remove(n); return; }
       if (n.nodeType === 3 || (n.nodeType === 1 && INLINE.has(n.tagName) && n.tagName !== 'BR')) {
+        const index = [...doc.childNodes].indexOf(n);
         const p = document.createElement('p'); doc.insertBefore(p, n); p.appendChild(n);
+        points.forEach(point => {
+          if (point.node === doc && (point.offset === index || point.offset === index + 1)) {
+            point.node = p; point.offset -= index;
+          }
+        });
+        moved = true;
       } else if (n.nodeType === 1 && n.tagName === 'DIV' && !isChg(n)) {
-        const p = document.createElement('p'); p.innerHTML = n.innerHTML; if (n.dataset.bid) p.dataset.bid = n.dataset.bid; n.replaceWith(p);
+        const p = document.createElement('p'); p.append(...n.childNodes); if (n.dataset.bid) p.dataset.bid = n.dataset.bid; n.replaceWith(p);
+        points.forEach(point => { if (point.node === n) point.node = p; });
+        moved = true;
       }
     });
     if (!doc.textContent.trim() && !doc.querySelector('img,hr,table,.chg')) {
-      doc.querySelectorAll(':scope > br').forEach((b) => b.remove());
+      doc.querySelectorAll(':scope > br').forEach(remove);
     }
+    if (moved && points.length) selection.setBaseAndExtent(points[0].node, points[0].offset, points[1].node, points[1].offset);
     const seen = new Set();
     tops().forEach((el) => {
       if (el.tagName === 'BR') return;
@@ -302,6 +326,17 @@
   // ---------- inline edits ----------
   let editSecs = new Set(), editTimer = null;
   let annotationInput = null, annotationPaste = null;
+  function prepareTypingParagraph() {
+    // Give the first native edit a stable parent before WebKit records its undo.
+    // By beforeinput, WebKit has already chosen its target range.
+    const nativeSelection = getSelection();
+    if (!doc.firstChild && !doc.classList.contains('ro') && nativeSelection?.isCollapsed && nativeSelection.anchorNode === doc) {
+      const p = document.createElement('p'); p.append(document.createElement('br')); doc.append(p);
+      nativeSelection.setPosition(p, 0);
+      normalize();
+    }
+  }
+  doc.addEventListener('compositionstart', prepareTypingParagraph);
   function captureAnnotationInput(e) {
     annotations?.sync({silent: true});
     const selection = annotations?.selectionFromDOM(), caret = annotations?.getCaretOffset();
@@ -446,6 +481,7 @@
     noteEdit(e.target);
   });
   doc.addEventListener('keydown', e => {
+    if (!e.metaKey && !e.ctrlKey && (e.key.length === 1 || e.key === 'Enter')) prepareTypingParagraph();
     if ((e.metaKey || e.ctrlKey) && !e.altKey) {
       const key = e.key.toLowerCase();
       const command = e.shiftKey ? ({'7':'numbers', '&':'numbers', '8':'bullets', '*':'bullets',

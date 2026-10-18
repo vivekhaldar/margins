@@ -37,10 +37,13 @@ swift scripts/test-editor-annotations.swift 1100 dark
 swift scripts/test-editor-annotations.swift 720 light
 swift scripts/test-editor-format.swift
 swift scripts/test-editor-paragraph.swift
+swift scripts/test-editor-typing.swift
 swift scripts/test-editor-find.swift 1000
 ```
 
 The WebKit suite drives the real editor and produces `build/verification/annotations-test-results.json`, a reusable demo document, and screenshots. It covers range origins, pending edits, acceptance/rejection, refinements, comment lifecycle, Unicode/list/table anchors, copying/pasting, undo/redo, stale responses, history, and the visible controls. The randomized alignment suite independently checks match validity, monotonicity, Unicode boundaries, and large-document bounds.
+
+The typing regression checks character-by-character input into a blank document at 50%, 100%, 150%, and 300% page zoom, plus spaces, Return, deleting all content, save/reload, attribution, and selection preservation. It also sends native keyboard events and checks undo/redo. Pass an editor resource directory to run against a packaged app instead of source resources.
 
 The visual suite requires an unoccluded macOS window. It waits for rendered animation frames and reports window visibility when rendering is suspended. Stale-response checks cover formatting and image changes as well as text edits; formatting preserves attribution while still invalidating an older agent response.
 
