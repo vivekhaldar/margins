@@ -105,6 +105,28 @@
     return clean(el).outerHTML.trim();
   }
 
+  // Compare only the blocks an operation touches. Include both sides and the
+  // identity of a pending change so accepting/rejecting it cannot go unnoticed.
+  // Transient highlights, controls, and comments do not invalidate agent work.
+  function blockState(el) {
+    return JSON.stringify([blockHTML(el), isChg(el) ?
+      [el.dataset.cid, el.dataset.step, el.dataset.kind, clean(delOf(el)).innerHTML.trim()] : null]);
+  }
+  function editConflict(options, blockIds, direct = false) {
+    let conflict = false;
+    if (options.blockStates && !direct) {
+      conflict = blockIds.some(id => {
+        const el = byBid(id);
+        return !el || !Object.hasOwn(options.blockStates, id) || options.blockStates[id] !== blockState(el);
+      });
+    } else {
+      // Legacy callers and first drafts still require an unchanged document.
+      conflict = options.expectedRevision != null && options.expectedRevision !== annotations?.state.revision;
+    }
+    return conflict ? {html: currentHTML(), annotations: annotations?.snapshot(), missing: [], changes: 0,
+      conflict: true, error: 'revision-conflict'} : null;
+  }
+
   function normalize() {
     syncChecklists();
     // Reparenting a live text node makes WebKit move the caret out to #doc.
@@ -208,8 +230,14 @@
   function applyEdits(step, edits, direct, options = {}) {
     normalize();
     annotations?.sync({silent: true});
-    if (options.expectedRevision != null && options.expectedRevision !== annotations?.state.revision)
-      return {html: currentHTML(), annotations: annotations?.snapshot(), missing: [], changes: 0, conflict: true, error: 'revision-conflict'};
+    // Validate the complete plan before mutating anything. A conflict in one
+    // target must not leave the other operations partly applied.
+    const targets = (edits || []).filter(e => !(e.op === 'insertAfter' && (!e.blockId || e.blockId === '^'))).map(e => e.blockId);
+    const conflict = edits?.length ? editConflict(options, targets, direct) : null;
+    if (conflict) return conflict;
+    const selection = getSelection();
+    const editingElsewhere = document.activeElement === doc && selection?.rangeCount && doc.contains(selection.anchorNode) &&
+      targets.every(id => { const el = byBid(id); return !el || !selection.getRangeAt(0).intersectsNode(el); });
     const missing = [], touched = [], lastAfter = {};
     for (const e of edits || []) {
       const html = sanitize(e.html || '');
@@ -257,7 +285,7 @@
     annotations?.sync({origin: 'agent', runId: options.runId, parentRunId: options.parentRunId, silent: true});
     const els = touched.filter((n) => n.nodeType === 1 && n.isConnected);
     els.forEach(flash);
-    if (els[0]) els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (els[0] && !editingElsewhere) els[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
     emitPending();
     return { html: currentHTML(), annotations: annotations?.snapshot(), missing, changes: els.filter(isChg).length };
   }
@@ -1391,6 +1419,7 @@
       endPreview();
       flushEdits();
       normalize();
+      annotations?.sync({silent: true});
       const s = getSelection();
       let focus = [];
       if (s && s.rangeCount && !s.isCollapsed) {
@@ -1400,7 +1429,8 @@
       const blocks = tops().filter((el) => el.dataset.bid)
         .map((el) => ({ id: el.dataset.bid, html: blockHTML(el), pending: isChg(el) }))
         .filter((b) => b.html);
-      return { blocks, focus, revision: annotations?.state.revision || 0 };
+      const blockStates = Object.fromEntries(tops().filter(el => el.dataset.bid).map(el => [el.dataset.bid, blockState(el)]));
+      return { blocks, focus, blockStates, revision: annotations?.state.revision || 0 };
     },
     applyEdits(step, edits, direct, options) { endPreview(); flushEdits(); return applyEdits(step, edits, !!direct, options); },
     accept: (filter) => resolveWhere(filter, true),
@@ -1408,14 +1438,14 @@
     refineContext(cid) {
       const ch = byCid(cid); if (!ch) return null;
       annotations?.sync({silent: true});
-      return { blockId: ch.dataset.bid, step: +ch.dataset.step, original: clean(delOf(ch)).innerHTML.trim(), proposed: clean(insOf(ch)).innerHTML.trim(), revision: annotations?.state.revision || 0 };
+      return { blockId: ch.dataset.bid, step: +ch.dataset.step, original: clean(delOf(ch)).innerHTML.trim(), proposed: clean(insOf(ch)).innerHTML.trim(), blockStates: {[ch.dataset.bid]: blockState(ch)}, revision: annotations?.state.revision || 0 };
     },
     applyRefinement(cid, html, count, options = {}) {
       endPreview(); flushEdits();
       const ch = byCid(cid); if (!ch) return null;
       annotations?.sync({silent: true});
-      if (options.expectedRevision != null && options.expectedRevision !== annotations?.state.revision)
-        return {html: currentHTML(), annotations: annotations?.snapshot(), conflict: true, error: 'revision-conflict'};
+      const conflict = editConflict(options, [ch.dataset.bid]);
+      if (conflict) return conflict;
       ch.classList.remove('refining');
       const h = sanitize(html);
       insOf(ch).innerHTML = h;

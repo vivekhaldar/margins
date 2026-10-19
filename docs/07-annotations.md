@@ -24,7 +24,7 @@ New typing is author-origin; external paste is marked as pasted with unknown ori
 
 Coordinates use JavaScript UTF-16 code units in the text nodes of each top-level block. Lists and tables share their top-level block's space; markup, checkbox controls, and `<br>` contribute no code units. Literal text-node line breaks count. Pending original/proposed sides have separate spaces. Global UI coordinates join the active blocks with one newline. Quotation and surrounding context are recovery information; ambiguous matches detach rather than guessing.
 
-Local comments and provenance stay out of ordinary agent prompts, copied prose, search, and Markdown output. The inspector retains the author's instruction and exposed tool activity, not a full assembled document prompt, hidden reasoning, or an execution transcript. Changing documents, closing windows, and quitting flush pending edits; a stale agent response is refused rather than overwriting a newer document revision.
+Local comments and provenance stay out of ordinary agent prompts, copied prose, search, and Markdown output. The inspector retains the author's instruction and exposed tool activity, not a full assembled document prompt, hidden reasoning, or an execution transcript. Changing documents, closing windows, and quitting flush pending edits. Agent results validate the blocks they replace or delete and their insertion anchors against the original snapshot, including formatting, images, and both sides of pending changes. A conflict rejects the complete plan. Changes elsewhere do not invalidate the result: Command-Enter agents can run on separate paragraphs while the author continues editing. Refinements use the same target check; first drafts retain whole-document revision protection.
 
 ## Verification
 
@@ -37,6 +37,7 @@ swift scripts/test-editor-annotations.swift 1100 dark
 swift scripts/test-editor-annotations.swift 720 light
 swift scripts/test-editor-format.swift
 swift scripts/test-editor-paragraph.swift
+swift scripts/test-editor-concurrency.swift
 swift scripts/test-editor-typing.swift
 swift scripts/test-editor-find.swift 1000
 ```
@@ -45,7 +46,9 @@ The WebKit suite drives the real editor and produces `build/verification/annotat
 
 The typing regression checks character-by-character input into a blank document at 50%, 100%, 150%, and 300% page zoom, plus spaces, Return, deleting all content, save/reload, attribution, and selection preservation. It also sends native keyboard events and checks undo/redo. Pass an editor resource directory to run against a packaged app instead of source resources.
 
-The visual suite requires an unoccluded macOS window. It waits for rendered animation frames and reports window visibility when rendering is suspended. Stale-response checks cover formatting and image changes as well as text edits; formatting preserves attribution while still invalidating an older agent response.
+The concurrency regression checks independent paragraph results in either completion order, continued typing, caret and focus preservation, background scrolling, distinct run attribution, review, refinements, local comments, and atomic rejection of overlapping or stale operations. It covers text, formatting, images, deleted targets, and insertion anchors. Pass an editor resource directory to verify the packaged resources. The native integration harness also starts two real Command-Enter flows through the deterministic provider, sends native keyboard input while they run and after they finish, and checks saving of their results and run records.
+
+The visual suite requires an unoccluded macOS window. It waits for rendered animation frames and reports window visibility when rendering is suspended. Stale-response checks cover formatting and image changes as well as text edits; formatting preserves attribution while still invalidating an older agent response targeting that block.
 
 The native integration harness runs the real AppState, EditorBridge, WebKit editor, parser, provider subprocess adapter, and file saving against `scripts/fixtures/annotation-provider.py`. The fixture makes no network calls and writes only three text files inside its isolated verification repository. It checks all four agent edit flows, saved run metadata, local comments, Markdown isolation, reopening, stale-response protection, per-run changed-file attribution, and saving across preview, switching, closing, and cancellation.
 

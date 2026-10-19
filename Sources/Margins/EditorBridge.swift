@@ -103,7 +103,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         try? await call("return window.margins.html()") as? String
     }
 
-    struct BlocksResult { var blocks: [Block]; var focus: [String]; var revision: Int }
+    struct BlocksResult { var blocks: [Block]; var focus: [String]; var revision: Int; var blockStates: [String: String] }
 
     func blocks() async throws -> BlocksResult {
         let r = try await call("return window.margins.getBlocks()") as? [String: Any] ?? [:]
@@ -111,7 +111,8 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             guard let id = d["id"] as? String, let html = d["html"] as? String else { return nil }
             return Block(id: id, html: html, pending: d["pending"] as? Bool ?? false)
         }
-        return BlocksResult(blocks: blocks, focus: r["focus"] as? [String] ?? [], revision: (r["revision"] as? NSNumber)?.intValue ?? 0)
+        return BlocksResult(blocks: blocks, focus: r["focus"] as? [String] ?? [], revision: (r["revision"] as? NSNumber)?.intValue ?? 0,
+                            blockStates: r["blockStates"] as? [String: String] ?? [:])
     }
 
     struct Snapshot { var html: String; var annotations: DocumentAnnotations }
@@ -123,9 +124,9 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         return Snapshot(html: html, annotations: Self.annotations(in: r) ?? DocumentAnnotations())
     }
 
-    func apply(step: Int, edits: [EditOp], direct: Bool, runID: UUID, expectedRevision: Int, parentRunID: UUID? = nil) async throws -> ApplyResult {
+    func apply(step: Int, edits: [EditOp], direct: Bool, runID: UUID, expectedRevision: Int, blockStates: [String: String], parentRunID: UUID? = nil) async throws -> ApplyResult {
         let payload = edits.map { ["op": $0.op.rawValue, "blockId": $0.blockId, "html": $0.html] }
-        var options: [String: Any] = ["runId": runID.uuidString.lowercased(), "expectedRevision": expectedRevision]
+        var options: [String: Any] = ["runId": runID.uuidString.lowercased(), "expectedRevision": expectedRevision, "blockStates": blockStates]
         if let parentRunID { options["parentRunId"] = parentRunID.uuidString.lowercased() }
         let r = try await call("return window.margins.applyEdits(step, edits, direct, options)",
                                ["step": step, "edits": payload, "direct": direct,
@@ -148,18 +149,19 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("return window.margins.\(accept ? "accept" : "reject")(filter)", ["filter": filter])
     }
 
-    struct RefineContext { var blockId: String; var step: Int; var original: String; var proposed: String; var revision: Int }
+    struct RefineContext { var blockId: String; var step: Int; var original: String; var proposed: String; var revision: Int; var blockStates: [String: String] }
 
     func refineContext(cid: String) async -> RefineContext? {
         guard let r = try? await call("return window.margins.refineContext(cid)", ["cid": cid]) as? [String: Any],
               let bid = r["blockId"] as? String else { return nil }
         return RefineContext(blockId: bid, step: (r["step"] as? NSNumber)?.intValue ?? 0,
                              original: r["original"] as? String ?? "", proposed: r["proposed"] as? String ?? "",
-                             revision: (r["revision"] as? NSNumber)?.intValue ?? 0)
+                             revision: (r["revision"] as? NSNumber)?.intValue ?? 0,
+                             blockStates: r["blockStates"] as? [String: String] ?? [:])
     }
 
-    func applyRefinement(cid: String, html: String, count: Int, runID: UUID, expectedRevision: Int, parentRunID: UUID? = nil) async throws -> Snapshot? {
-        var options: [String: Any] = ["runId": runID.uuidString.lowercased(), "expectedRevision": expectedRevision]
+    func applyRefinement(cid: String, html: String, count: Int, runID: UUID, expectedRevision: Int, blockStates: [String: String], parentRunID: UUID? = nil) async throws -> Snapshot? {
+        var options: [String: Any] = ["runId": runID.uuidString.lowercased(), "expectedRevision": expectedRevision, "blockStates": blockStates]
         if let parentRunID { options["parentRunId"] = parentRunID.uuidString.lowercased() }
         guard let r = try await call("return window.margins.applyRefinement(cid, html, count, options)",
                         ["cid": cid, "html": html, "count": count,
@@ -209,7 +211,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     private static func validateRevision(_ body: [String: Any]) throws {
         if (body["conflict"] as? Bool) == true || body["error"] as? String == "revision-conflict" {
-            throw ProviderError.protocolError("The document changed while the agent was working. Your edits were kept; retry the instruction on the current document.")
+            throw ProviderError.protocolError("A passage the agent was editing changed while it was working. Your edits were kept; retry the instruction on the current document.")
         }
     }
     func openThread(_ id: UUID) async {

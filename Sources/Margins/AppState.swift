@@ -234,7 +234,7 @@ final class AppState: ObservableObject {
                 let direct = snapshot.blocks.isEmpty
                 let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
                 let result = try await editor.apply(step: step, edits: edits, direct: direct,
-                                                    runID: runID, expectedRevision: snapshot.revision)
+                                                    runID: runID, expectedRevision: snapshot.revision, blockStates: snapshot.blockStates)
                 guard documentSessionID == documentID else { return }
                 updateIntent(step) {
                     $0.summary = plan.summary
@@ -321,7 +321,7 @@ final class AppState: ObservableObject {
                 if !plan.edits.isEmpty {
                     let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
                     result = try await editor.apply(step: step, edits: edits, direct: false,
-                                                    runID: runID, expectedRevision: snapshot.revision)
+                                                    runID: runID, expectedRevision: snapshot.revision, blockStates: snapshot.blockStates)
                     guard documentSessionID == documentID else { return }
                 }
                 let changed = (result?.changes ?? 0) > 0
@@ -747,8 +747,8 @@ final class AppState: ObservableObject {
                     let provider = try provider(for: config)
                     let blockSnapshot = try await editor.blocks()
                     guard documentSessionID == documentID else { return }
-                    guard blockSnapshot.revision == ctx.revision else {
-                        throw ProviderError.protocolError("The document changed before refinement started. Try the refinement again.")
+                    guard blockSnapshot.blockStates[ctx.blockId] == ctx.blockStates[ctx.blockId] else {
+                        throw ProviderError.protocolError("The passage changed before refinement started. Try the refinement again.")
                     }
                     let blocks = forPrompt(blockSnapshot.blocks)
                     let agent = agentContext(step: ctx.step, kind: config.kind)
@@ -770,7 +770,7 @@ final class AppState: ObservableObject {
                     }
                     let count = doc.intents.first { $0.step == ctx.step }?.refinements.count ?? 1
                     guard let result = try await editor.applyRefinement(cid: cid, html: doc.internalizeImages(edit.html), count: count,
-                                                                        runID: runID, expectedRevision: ctx.revision,
+                                                                        runID: runID, expectedRevision: ctx.revision, blockStates: ctx.blockStates,
                                                                         parentRunID: doc.annotationRuns.first(where: { $0.id == runID })?.parentRunId) else {
                         throw ProviderError.protocolError("The proposed change is no longer available. Retry from the current change.")
                     }

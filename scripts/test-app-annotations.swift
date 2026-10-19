@@ -32,7 +32,10 @@ struct ContentView: View { var body: some View { Text("Annotation integration") 
         let git = try await ProcessRunner.run(URL(fileURLWithPath: "/usr/bin/git"), arguments: ["init", "--quiet", project.path])
         guard git.status == 0 else { throw NSError(domain: "Annotations", code: 1, userInfo: [NSLocalizedDescriptionKey: "Fixture git init failed"]) }
         let url = dir.appendingPathComponent("session.margins")
-        let state = AppState(untitledURL: url)
+        let suite = "MarginsAnnotationIntegration-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = AppState(untitledURL: url, defaults: defaults)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = state.editor.webView
         window.makeKeyAndOrderFront(nil)
@@ -46,10 +49,10 @@ struct ContentView: View { var body: some View { Text("Annotation integration") 
             guard value else { throw NSError(domain: "Annotations", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
             passes += 1; checks.append(message); print("✓ \(message)")
         }
-        func wait(_ condition: () -> Bool) async throws {
+        func wait(_ message: String = "Native run completes", _ condition: () -> Bool) async throws {
             let deadline = Date().addingTimeInterval(12)
             while !condition(), Date() < deadline { try await Task.sleep(nanoseconds: 30_000_000) }
-            try check(condition(), "Native run completes")
+            try check(condition(), message)
         }
         func evaluate(_ body: String) async throws -> Any? { try await state.editor.call(body) }
         state.submit("DRAFT_FIXTURE")
@@ -96,9 +99,53 @@ struct ContentView: View { var body: some View { Text("Annotation integration") 
         try await Task.sleep(nanoseconds: 150_000_000)
         let restored = await state.editor.snapshot()
         try check(restored?.annotations.fields["comments"] != nil, "Reopening restores structured annotation metadata")
+        // Start through the actual Command-Enter event path, then type with
+        // native keyboard events while both provider subprocesses are working.
+        let parallelTexts = ["SLOW_FIXTURE parallel first", "SLOW_FIXTURE parallel second"]
+        _ = try await evaluate("const doc=document.querySelector('#doc');doc.insertAdjacentHTML('beforeend','<p>SLOW_FIXTURE parallel first</p><p>SLOW_FIXTURE parallel second</p><p>Concurrent writing.</p>');doc.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'}));return true")
+        for text in parallelTexts {
+            _ = try await state.editor.call("const doc=document.querySelector('#doc'),p=[...doc.children].find(p=>p.textContent===text);doc.focus();getSelection().setPosition(p,p.childNodes.length);doc.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',metaKey:true,bubbles:true,cancelable:true}));return true", ["text": text])
+            try await wait("Command-Enter provider started for \(text)") {
+                state.doc.intents.first(where: { $0.text == text })?.steps?.contains(where: { $0.id == "fixture-read" }) == true
+            }
+        }
+        try check(state.inFlight == 2, "Two Command-Enter agents run concurrently")
+        _ = try await evaluate("const doc=document.querySelector('#doc'),p=doc.lastElementChild;doc.focus();getSelection().setPosition(p,p.childNodes.length);return true")
+        window.makeFirstResponder(state.editor.webView)
+        func nativeType(_ text: String) async throws {
+            for character in text {
+                let key = String(character)
+                let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: key, charactersIgnoringModifiers: key,
+                    isARepeat: false, keyCode: character == " " ? 49 : 0)!
+                window.sendEvent(event)
+                _ = try await evaluate("return document.querySelector('#doc').lastElementChild.textContent")
+            }
+        }
+        try await nativeType(" Before replies.")
+        try await wait { !state.busy }
+        try check(parallelTexts.allSatisfy { text in state.doc.intents.first(where: { $0.text == text })?.status == .pending },
+                  "Both parallel Command-Enter results apply despite unrelated native typing")
+        let parallelRuns = state.doc.annotationRuns.filter { parallelTexts.contains($0.instruction) }
+        let attributedRuns = try await evaluate("return [...new Set(window.MarginsAnnotations.getState().spans.filter(s=>s.origin==='agent').map(s=>s.runId))]") as? [String] ?? []
+        if parallelRuns.count != 2 || !parallelRuns.allSatisfy({ attributedRuns.contains($0.id.uuidString.lowercased()) }) {
+            print("Parallel expected runs: \(parallelRuns.map { $0.id.uuidString.lowercased() }); attributed: \(attributedRuns)")
+        }
+        try check(parallelRuns.count == 2 && parallelRuns.allSatisfy { attributedRuns.contains($0.id.uuidString.lowercased()) },
+                  "Parallel native results retain their separate run attribution")
+        let writingCaret = try await evaluate("return document.querySelector('#doc').lastElementChild.contains(getSelection().anchorNode)") as? Bool ?? false
+        try check(writingCaret, "Parallel native completions preserve the author's caret")
+        try await nativeType(" After replies.")
+        let writing = try await evaluate("return document.querySelector('#doc').lastElementChild.textContent") as? String
+        try check(writing == "Concurrent writing. Before replies. After replies.", "Native typing continues in the same paragraph after parallel completions")
+        await state.editor.resolve(accept: true, all: true); await state.editor.flushForSave()
+        await state.flushAndSave()
+        let parallelSaved = try MarginsDocument.decode(Data(contentsOf: state.fileURL))
+        try check(parallelSaved.html.contains("Concurrent writing. Before replies. After replies.") && parallelSaved.annotationRuns.filter { parallelTexts.contains($0.instruction) }.count == 2,
+                  "Saving preserves both parallel results, run records, and concurrent typing")
         state.submit("SLOW_FIXTURE")
-        try await Task.sleep(nanoseconds: 250_000_000)
-        _ = try await evaluate("const p=document.querySelector('#doc p');p.textContent+=' Manual revision.';p.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'}));return true")
+        try await wait("Conflicting provider started") { state.doc.intents.last(where: { $0.text == "SLOW_FIXTURE" })?.steps?.contains(where: { $0.id == "fixture-read" }) == true }
+        _ = try await evaluate("const p=document.querySelector('#doc').lastElementChild;p.textContent+=' Manual revision.';p.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'}));return true")
         try await wait { !state.busy }
         try check(state.doc.intents.last(where: { $0.text == "SLOW_FIXTURE" })?.status == .failed, "Native bridge refuses a stale agent response")
         let html = await state.editor.html() ?? ""
@@ -112,7 +159,7 @@ struct ContentView: View { var body: some View { Text("Annotation integration") 
         state.returnToLatest(); try await Task.sleep(nanoseconds: 80_000_000)
         let commentsAfterPreview = try await evaluate("return window.MarginsAnnotations.getState().comments.length") as? Int ?? 0
         try check(commentsAfterPreview == liveComments, "Returning to latest retains the live annotation state")
-        let secondState = AppState(untitledURL: dir.appendingPathComponent("independent-window.margins"))
+        let secondState = AppState(untitledURL: dir.appendingPathComponent("independent-window.margins"), defaults: defaults)
         let secondWindow = NSWindow(contentRect: window.frame, styleMask: [.titled], backing: .buffered, defer: false)
         secondWindow.contentView = secondState.editor.webView
         await secondState.editor.ready()
