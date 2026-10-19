@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Linux orb tooling only: the Swift package requires macOS, including its core target.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+SECONDS=0
+echo '[setup] Checking Node.js (18+; Debian 12 provides 18).'
+if ! command -v node >/dev/null 2>&1; then
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get update
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs
+fi
+node -e 'if (Number(process.versions.node.split(".")[0]) < 18) { console.error("Node.js 18+ is required."); process.exit(1); }'
+node --version
+echo "[setup] Node.js ready (${SECONDS}s). No third-party package dependencies to install."
+
+echo '[setup] Validating the platform-independent editor alignment engine.'
+node scripts/test-annotation-alignment.js
+echo "[setup] Ready (${SECONDS}s total). Swift builds, self-tests, and WKWebView checks require macOS 14+ with Swift 5.10+."

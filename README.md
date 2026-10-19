@@ -132,6 +132,25 @@ Bug reports and focused pull requests are welcome through [GitHub Issues](https:
 
 For code changes, build the app and run `swift run MarginsSelfTest`. Editor changes can also be checked with `swift scripts/test-editor-find.swift` and `swift scripts/test-editor-paragraph.swift`, and `swift scripts/test-editor-format.swift`.
 
+### Linux orbs
+
+Amp runs `.agents/setup` when preparing an orb snapshot. It ensures Node.js 18+ is
+available and runs the dependency-free editor alignment checks. A warm setup reuses
+the installed toolchain without package downloads; exact snapshot matches skip setup.
+`.agents/resume` only checks Node.js on activation and wake-up. There are no package
+dependencies, databases, required secrets, or provider logins for these checks.
+
+```sh
+node scripts/test-annotation-alignment.js
+```
+
+Linux orbs are useful for editor JavaScript, documentation, and static-site work.
+The Swift package cannot build on Linux: the app uses SwiftUI/AppKit/WebKit, and even
+`MarginsCore` uses Apple's Security and CryptoKit frameworks. Setup deliberately does
+not download a Linux Swift compiler. App builds, `MarginsSelfTest`, packaging, and the
+Swift-based editor integration checks still require a Mac with macOS 14+ and Swift
+5.10+. Chromium editor inspection in an orb is not a substitute for WKWebView tests.
+
 ## Packaging a release
 
 ```sh

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Nothing needs authentication or restarting. Fail clearly if the snapshot lacks tooling;
+# dependency installation belongs in setup, never in this fast wake-up hook.
+node -e 'if (Number(process.versions.node.split(".")[0]) < 18) process.exit(1)'
+echo '[resume] Node.js ready. Native Swift/WKWebView checks require a Mac; see README.md.'
