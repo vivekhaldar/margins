@@ -54,7 +54,7 @@ A pending change is a wrapper element:
 
 - **Accept** unwraps `<ins>` (its first block inherits the original `data-bid`) and drops `<del>`. **Reject** does the reverse.
 - If a later instruction edits a block that already has a pending change, the `<ins>` is updated, but the original `<del>` is kept, so rejecting still restores what you actually had.
-- The first draft of an empty document is applied directly, with no tracked changes.
+- The first draft of an empty document is a pending insertion. Accept keeps the generated blocks; reject returns to an empty document. Pending first drafts survive saving and reopening, and stay out of the Markdown mirror until accepted.
 - `normalize()` keeps the DOM honest after user edits: it wraps stray text in `<p>`, turns `contenteditable` `<div>`s into `<p>`, and de-duplicates ids cloned by pressing Enter.
 
 ## Swift ⇄ editor bridge
@@ -79,7 +79,7 @@ Two more channels serve images. `webkit.messageHandlers.assets` is a reply handl
    - `fetchSources` fetches material Margins can get more reliably than an agent: for every YouTube link in the instruction, `YouTube.fetch` (in `MarginsCore`) reads the watch page, calls the innertube `player` endpoint, picks a caption track (human captions in your language first, then auto-captions) and turns the caption XML into paragraphs. Each fetch shows as a step on the card. The result goes into the prompt as a `SOURCE MATERIAL` section (capped at 150k characters per source). A failed fetch is recorded on the step, and the agent still runs.
 2. `editor.getBlocks()` → blocks + focus; `PromptBuilder.editPrompt` builds the prompt.
 3. The active `ModelProvider` returns text; `EditPlanParser` extracts the plan, with one retry on invalid JSON.
-4. `editor.applyEdits(step, edits, direct: isEmptyDoc)` renders the changes; the intent gets its summary/notes and status *N pending* or *applied*.
+4. `editor.applyEdits(step, edits, direct: false)` renders tracked changes, including the first draft; the intent gets its summary/notes and status *N pending*, or *done* when there are no changes. An empty block snapshot retains whole-document revision protection; other edits validate their target blocks and insertion anchors.
 5. A `Version` (author *agent*, slug from the plan) is snapshotted, and the document autosaves.
 6. Review or user edits produce further versions (author *review* / *you*) with generated slugs.
 

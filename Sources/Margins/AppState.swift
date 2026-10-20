@@ -231,9 +231,8 @@ final class AppState: ObservableObject {
                 if paragraphBlockID != nil && plan.edits.isEmpty {
                     throw ProviderError.protocolError("The agent returned no document update. Retry the paragraph prompt.")
                 }
-                let direct = snapshot.blocks.isEmpty
                 let edits = plan.edits.map { e -> EditOp in var e = e; e.html = doc.internalizeImages(e.html); return e }
-                let result = try await editor.apply(step: step, edits: edits, direct: direct,
+                let result = try await editor.apply(step: step, edits: edits, direct: false,
                                                     runID: runID, expectedRevision: snapshot.revision, blockStates: snapshot.blockStates)
                 guard documentSessionID == documentID else { return }
                 updateIntent(step) {
@@ -244,7 +243,7 @@ final class AppState: ObservableObject {
                     if !result.missing.isEmpty {
                         $0.notes.append("Ignored edits to unknown blocks: \(result.missing.joined(separator: ", "))")
                     }
-                    $0.status = (direct || result.changes == 0) ? .done : .pending
+                    $0.status = result.changes == 0 ? .done : .pending
                     if plan.edits.isEmpty && $0.notes.isEmpty && ($0.reply ?? "").isEmpty && ($0.files ?? []).isEmpty {
                         $0.notes = ["No changes were needed."]
                     }

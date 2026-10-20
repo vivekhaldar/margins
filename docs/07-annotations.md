@@ -20,6 +20,8 @@ Annotations are structured metadata in the `.margins` file, stored with the exac
 
 Each agent invocation has a UUID. First drafts, ordinary instructions, Command-Enter, discussion edits, and refinements all use the same capture path. Refinements retain a link to the preceding contributing run. Pending changes retain original and proposed metadata separately: accepting preserves the proposed origin; rejecting restores the original.
 
+First drafts are pending insertions with the same accept/reject controls as later revisions. Accept keeps the generated text and its attribution; reject returns to an empty document. Saving and reopening preserves the pending draft. The Markdown mirror excludes it until accepted.
+
 New typing is author-origin; external paste is marked as pasted with unknown origin. Internal copy and paste carry separate provenance metadata, while copied HTML and plain text remain clean. Unchanged text keeps its previous origin through revisions, formatting, and paragraph splits/merges. Older documents start unattributed. Bounded alignment marks uncertain agent ranges explicitly instead of asserting exact authorship.
 
 Coordinates use JavaScript UTF-16 code units in the text nodes of each top-level block. Lists and tables share their top-level block's space; markup, checkbox controls, and `<br>` contribute no code units. Literal text-node line breaks count. Pending original/proposed sides have separate spaces. Global UI coordinates join the active blocks with one newline. Quotation and surrounding context are recovery information; ambiguous matches detach rather than guessing.

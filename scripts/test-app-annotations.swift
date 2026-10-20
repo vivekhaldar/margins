@@ -57,13 +57,39 @@ struct ContentView: View { var body: some View { Text("Annotation integration") 
         func evaluate(_ body: String) async throws -> Any? { try await state.editor.call(body) }
         state.submit("DRAFT_FIXTURE")
         try await wait { !state.busy }
-        try check(state.doc.intents.last?.status == .done, "First draft applies directly")
+        try check(state.doc.intents.last?.status == .pending && state.pending.total == 1, "First draft is a pending insertion")
         try check(state.doc.annotationRuns.count == 1 && state.doc.annotationRuns[0].model == "fixture-model", "Native run records model and stable identity")
         let origins = try await evaluate("return window.MarginsAnnotations.getState().spans.map(s=>s.origin)") as? [String] ?? []
         try check(origins.contains("agent"), "Swift first draft reaches editor provenance engine")
         try check(state.doc.annotationRuns[0].steps.contains { $0.status == .done }, "Provider tool activity is retained in run")
         try check(state.doc.annotationRuns[0].files == ["draft.txt"], "Initial run records only its actual changed project file")
         let firstID = state.doc.annotationRuns[0].id
+        await state.flushAndSave()
+        let savedDraft = try MarginsDocument.decode(Data(contentsOf: state.fileURL))
+        try check(savedDraft.html.contains("data-kind=\"insert\"") && savedDraft.intents.last?.status == .pending,
+                  "Saving preserves the first draft and its pending instruction")
+        try check(String(contentsOf: state.markdownURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  "Unaccepted first draft stays out of the Markdown mirror")
+        state.open(state.fileURL)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        try check(state.pending.total == 1 && state.doc.intents.last?.status == .pending,
+                  "Reopening restores the first draft's pending review state")
+        await state.editor.resolve(accept: false, all: true); await state.flushAndSave()
+        let rejectedDraft = try await state.editor.blocks()
+        try check(rejectedDraft.blocks.isEmpty && state.pending.total == 0 && state.doc.intents.first?.status == .reviewed,
+                  "Rejecting the first draft restores an empty document and reviews the instruction")
+        let rejectedSaved = try MarginsDocument.decode(Data(contentsOf: state.fileURL))
+        try check(!rejectedSaved.html.contains("Agents help authors") && rejectedSaved.annotationRuns.contains { $0.id == firstID },
+                  "Saving a rejected first draft removes live text and retains its run history")
+        state.submit("DRAFT_FIXTURE")
+        try await wait { !state.busy }
+        try check(state.doc.intents.last?.status == .pending, "A new first draft after rejection is also reviewable")
+        await state.editor.resolve(accept: true, all: true); await state.flushAndSave()
+        let acceptedDraft = await state.editor.html() ?? ""
+        try check(state.pending.total == 0 && acceptedDraft.contains("<h1") && acceptedDraft.contains("Agents help authors") && !acceptedDraft.contains("class=\"chg"),
+                  "Accepting the first draft keeps all generated blocks without pending wrappers")
+        try check(String(contentsOf: state.markdownURL, encoding: .utf8).contains("Agents help authors"),
+                  "Accepted first draft appears in the Markdown mirror")
         _ = try await evaluate("const p=document.querySelector('#doc p'),r=document.createRange();r.selectNodeContents(p);getSelection().removeAllRanges();getSelection().addRange(r);window.MarginsAnnotations.addComment('Private local note');return true")
         await state.editor.flushForSave(); try await Task.sleep(nanoseconds: 80_000_000)
         state.saveNow()
@@ -75,11 +101,12 @@ struct ContentView: View { var body: some View { Text("Annotation integration") 
         try await wait { !state.busy }
         try check(state.doc.intents.last?.status == .pending, "Ordinary agent revisions remain tracked changes")
         try check(state.doc.annotationRuns.last?.files == ["revise.txt"], "Revision run records its own changed file")
+        let revisionID = state.doc.annotationRuns.last?.id
         let runCount = state.doc.annotationRuns.count
         _ = try await evaluate("const cid=document.querySelector('#doc > .chg').dataset.cid;webkit.messageHandlers.margins.postMessage({type:'refine',cid,instruction:'Simplify the proposed passage.'});return true")
         try await wait { state.doc.annotationRuns.count > runCount && !state.busy }
         try check(state.doc.annotationRuns.last?.parentRunId != nil && state.doc.annotationRuns.last?.refinement != nil, "Refinement has a distinct linked run")
-        try check(state.doc.annotationRuns.last?.files == ["refine.txt"] && state.doc.annotationRuns[1].files == ["revise.txt"], "Refinement files are distinct from its contributing parent run")
+        try check(state.doc.annotationRuns.last?.files == ["refine.txt"] && state.doc.annotationRuns.first(where: { $0.id == revisionID })?.files == ["revise.txt"], "Refinement files are distinct from its contributing parent run")
         await state.editor.resolve(accept: true, all: true); await state.editor.flushForSave()
         try await Task.sleep(nanoseconds: 80_000_000)
         let blocks = try await state.editor.blocks()
@@ -166,6 +193,14 @@ struct ContentView: View { var body: some View { Text("Annotation integration") 
         let isolatedComments = try await secondState.editor.call("return window.MarginsAnnotations.getState().comments.length") as? Int ?? -1
         let isolatedToggle = try await secondState.editor.call("return document.querySelector('#annotation-toggle').checked") as? Bool ?? true
         try check(isolatedComments == 0 && !isolatedToggle, "Separate document windows keep comments and overlay state independent")
+        secondState.submit("SLOW_FIXTURE first draft")
+        try await wait("Blank-document provider started") { secondState.doc.intents.last?.steps?.contains(where: { $0.id == "fixture-read" }) == true }
+        _ = try await secondState.editor.call("const doc=document.querySelector('#doc');doc.innerHTML='<p>My own first sentence.</p>';doc.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'}));return true")
+        try await wait("Blank-document provider finishes") { !secondState.busy }
+        let staleDraftHTML = await secondState.editor.html() ?? ""
+        try check(secondState.doc.intents.first(where: { $0.text == "SLOW_FIXTURE first draft" })?.status == .failed && staleDraftHTML.contains("My own first sentence.") && !staleDraftHTML.contains("Agents help authors"),
+                  "First draft refuses a stale result when the author types into the blank document")
+        secondState.shutdownProviders(); await secondState.flushAndSave()
         let oldURL = state.fileURL
         let otherURL = dir.appendingPathComponent("other-document.margins")
         var other = MarginsDocument(); other.snapshot(html: "<h1>Other document</h1><p>A separate draft.</p>", slug: "fixture", author: .you)

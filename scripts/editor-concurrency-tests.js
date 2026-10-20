@@ -111,7 +111,7 @@ assert(!api.applyEdits(1, [replace(ids[0], 'First rough prompt. A finished answe
 assert(A.getState().comments.some(c => c.body === 'Keep this evidence.'), 'Applying the result preserves the local comment');
 
 api.load(''); snapshot = api.getBlocks(); caret(doc); type('My new draft.'); before = api.html();
-unchangedAfterConflict(api.applyEdits(1, [{op: 'insertAfter', blockId: '^', html: '<p>Outdated first draft.</p>'}], true,
+unchangedAfterConflict(api.applyEdits(1, [{op: 'insertAfter', blockId: '^', html: '<p>Outdated first draft.</p>'}], false,
   options(snapshot)), before, 'First drafts retain protection when the formerly blank document changes');
 assert(!api.applyEdits(2, [], false, options(snapshot)).conflict, 'A response without edits is safe after document changes');
 

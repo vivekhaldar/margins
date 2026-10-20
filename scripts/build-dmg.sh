@@ -2,7 +2,7 @@
 # Package a release app and an Applications shortcut in a compressed disk image.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export MARGINS_VERSION=${MARGINS_VERSION:-0.1.0}
+export MARGINS_VERSION=${MARGINS_VERSION:-0.2.0}
 scripts/build-app.sh
 ARCH=$(uname -m)
 NAME="Margins-${MARGINS_VERSION}-${ARCH}"

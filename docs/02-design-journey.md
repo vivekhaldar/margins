@@ -42,7 +42,7 @@ The native app keeps Mock A's interaction model almost unchanged. The editor is 
 
 Things that changed on the way from mock to app:
 
-- **The first draft lands directly.** When the document is empty there's nothing to protect, and a screen full of green insertions is noise.
+- **First drafts initially landed directly.** This exception was later removed so authors can review the first draft too. It now appears as pending insertions: accept keeps the generated text, and reject returns to an empty document.
 - **Agent notes.** The edit plan includes a one-line summary and any *assumptions* the agent made ("assumed a Redis-backed limiter"). These show on the instruction card and replace the chat reply you would otherwise get.
 - **Quick chips** under the composer ("Tighten the prose", "Add a summary at the top"…) for common refinements.
 - **Provider/model picker** in the toolbar, because different instructions deserve different models. See [model providers](03-model-providers.md).
@@ -68,4 +68,3 @@ The first real use exposed a gap. The author kept a planning doc for Margins its
 So a document can now have a **project folder**: the repo or directory it's about. The agent runs there, and with Full agent tools it can change code, run the build and tests, and report back. The paradigm stays the same. You still direct work from the document, the agent's report lands in the thread or on the card ("Changed 2 files", each clickable), and the document is edited only when you ask ("mark this done", "describe what you built"). The doc is the plan and the record; the project is where the work happens.
 
 Two choices matter here. Picking a folder offers to switch to Full agent, because with Codex and Claude, Research is read-only and can't prompt mid-run; a "yes" up front beats a silent refusal later. And changed files are detected by Margins itself (a `git status` snapshot plus modification times, before and after each run) rather than trusted from the model's report.
-

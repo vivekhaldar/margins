@@ -114,13 +114,13 @@
   }
   function editConflict(options, blockIds, direct = false) {
     let conflict = false;
-    if (options.blockStates && !direct) {
+    if (options.blockStates && Object.keys(options.blockStates).length > 0 && !direct) {
       conflict = blockIds.some(id => {
         const el = byBid(id);
         return !el || !Object.hasOwn(options.blockStates, id) || options.blockStates[id] !== blockState(el);
       });
     } else {
-      // Legacy callers and first drafts still require an unchanged document.
+      // Legacy callers and empty block snapshots require an unchanged document.
       conflict = options.expectedRevision != null && options.expectedRevision !== annotations?.state.revision;
     }
     return conflict ? {html: currentHTML(), annotations: annotations?.snapshot(), missing: [], changes: 0,

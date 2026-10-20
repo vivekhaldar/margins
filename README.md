@@ -26,7 +26,7 @@ The output isn't a reply. It's the document.
 
 - **Instructions, not turns.** Each instruction becomes a card that shows its status, the agent's one-line summary and any assumptions the agent made. Select some text first to scope an instruction to it.
 - **Send a paragraph as a prompt.** Put the cursor in a document paragraph and press ⌘Enter to turn it from a rough prompt into a clean, synthesized answer that fits the document. The agent replaces the prompt in place as a tracked change, so you can accept the answer or reject it to keep your original prompt. In the instruction pane, Enter or ⌘Enter sends the draft, and Shift-Enter adds a newline.
-- **Tracked changes.** Agent edits show up as inline insertions and deletions. You can review them in several ways:
+- **Tracked changes.** Agent edits show up as inline insertions and deletions, including the first draft. For a first draft, accept keeps the generated text and reject returns to an empty document. You can review changes in several ways:
   - one at a time: ✓ / ✕, or the keys `A` / `R`;
   - by instruction: "Accept these";
   - by selection: ⌘-click or `X`, then accept or reject the selected ones;
@@ -154,7 +154,7 @@ Swift-based editor integration checks still require a Mac with macOS 14+ and Swi
 ## Packaging a release
 
 ```sh
-MARGINS_VERSION=0.1.0 scripts/build-dmg.sh
+MARGINS_VERSION=0.2.0 scripts/build-dmg.sh
 ```
 
 This builds a release app, packages it with an Applications shortcut, README and license, and writes a DMG plus a SHA-256 checksum under `build/`. Set `MARGINS_BUILD_NUMBER` to override the numeric bundle build number. The script builds for the host architecture; it does not notarize or publish the result. Publish the DMG, checksum and matching source snapshot through [GitHub Releases](https://github.com/vivekhaldar/margins/releases).

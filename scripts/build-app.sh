@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG=release
-VERSION=${MARGINS_VERSION:-0.1.0}
+VERSION=${MARGINS_VERSION:-0.2.0}
 BUILD_NUMBER=${MARGINS_BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
   echo "MARGINS_VERSION must be X.Y.Z and MARGINS_BUILD_NUMBER must be numeric" >&2

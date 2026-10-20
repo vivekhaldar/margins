@@ -27,7 +27,7 @@ This is how people already work with *human* collaborators on documents: suggest
 - **Legible.** For any change, I should be able to see *what* changed, *why* (which instruction), and *who* made it (agent or me).
 - **Granular control.** I can accept everything, one instruction's worth, a hand-picked subset, or a single hunk, or send back just one hunk with a note ("shorter").
 - **Reversible.** Every step is a version with a meaningful name, so I can look back at how the document evolved and restore any point.
-- **The agent never touches the document behind my back.** Agent edits are always proposals until I accept them. The one exception is the very first draft of an empty document, since there's nothing to protect yet.
+- **The agent never touches the document behind my back.** Agent edits are always proposals until I accept them, including the first draft of an empty document.
 
 ## Non-goals (for now)
 
