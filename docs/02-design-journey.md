@@ -61,6 +61,8 @@ Not every input is an instruction to change the document. Often you want to *ask
 
 So Margins borrows the comment thread from document editors. Select a passage and click **Ask** (or press ⌘J), and a small thread opens beside it. The agent answers there, attached to the text. If you ask for a change instead, the edit still arrives as tracked changes in the document. The thread holds just a one-line note about it, so the document stays the output, and the thread is only for conversation *about* it. Threads collapse into 💬 markers in the margin, and each message is also recorded as a card in the instruction panel, so nothing lives only in a popover.
 
+Using this for "say more about this" exposed an overly broad rule: explanations were routed to replies even when the author wanted more writing. Content requests now produce tracked edits by default, including explanations and explanatory questions. Expansions preserve the selected passage and add material in its section. Assessments and explicit requests to answer without editing still stay in the thread.
+
 ## Step 8: the document drives real work
 
 The first real use exposed a gap. The author kept a planning doc for Margins itself, selected a TODO and asked "implement this". The agent answered that it only had read-only access to a scratch folder. That was true, and it was useless. The document was a plan for work on a codebase, and the agent couldn't touch the codebase.

@@ -80,6 +80,24 @@ unchangedAfterConflict(api.applyEdits(2, [{op: 'insertAfter', blockId: ids[0], h
 assert(!api.applyEdits(3, [{op: 'insertAfter', blockId: '^', html: '<h1>New heading</h1>'}], false, options(snapshot)).conflict,
   'Insertion at the document start survives unrelated typing');
 
+// An expansion requested on a heading adds reviewable content within that section.
+for (const review of ['accept', 'reject']) {
+  api.load('<h2>Two kinds of competence</h2><p>Technical judgment and organizational skill.</p><h2>Career progress</h2><p>Keep learning.</p>');
+  const expansion = api.getBlocks(), original = api.html(), heading = doc.firstElementChild;
+  const boundary = doc.children[2], anchor = expansion.blocks[1].id;
+  const result = api.applyEdits(12, [{op: 'insertAfter', blockId: anchor,
+    html: '<p>Technical judgment shapes the decision; organizational skill helps a team act on it.</p>'}], false, options(expansion));
+  assert(!result.conflict && result.changes === 1, `Selection expansion is pending before ${review}`);
+  const change = doc.querySelector('.chg');
+  assert(doc.firstElementChild === heading && change.nextElementSibling === boundary,
+    'Selection expansion preserves the heading and stays before the next section');
+  api[review]({all: true}); api.flushForSave();
+  assert(!doc.querySelector('.chg'), `${review} resolves the expansion's tracked change`);
+  if (review === 'reject') assert(api.html() === original, 'Rejecting an expansion restores the entire original document');
+  else assert(boundary.previousElementSibling.textContent.startsWith('Technical judgment shapes the decision;'),
+    'Accepting an expansion keeps the added prose in its section');
+}
+
 for (const review of ['accept', 'reject']) {
   snapshot = setup(); ids = snapshot.blocks.map(b => b.id);
   api.applyEdits(1, [replace(ids[0], 'Pending answer.')], false, options(snapshot));

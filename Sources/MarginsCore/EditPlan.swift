@@ -1,14 +1,14 @@
 import Foundation
 
 /// A structured, minimal set of block-level edits returned by a model.
-/// Models never "reply" in Margins — they return an EditPlan that the editor
-/// renders as tracked changes.
+/// Document content is returned as edits that the editor renders as tracked changes.
+/// An optional reply carries a status note or discussion about the writing.
 public struct EditPlan: Codable, Equatable, Sendable {
     public var slug: String
     public var summary: String
     public var notes: [String]
     public var edits: [EditOp]
-    /// An answer for the author, used only in inline discussions of a selection. Usually empty.
+    /// A short edit/work status or discussion response; requested document content belongs in `edits`.
     public var reply: String
 
     public init(slug: String = "", summary: String = "", notes: [String] = [], edits: [EditOp], reply: String = "") {
@@ -66,7 +66,7 @@ public enum EditPlanSchema {
           "op":{"type":"string","enum":["replace","insertAfter","delete"]},
           "blockId":{"type":"string"},
           "html":{"type":"string"}}}},
-      "reply":{"type":"string","description":"Answer to the author when they are discussing a selection with you; otherwise empty"}}}
+      "reply":{"type":"string","description":"Brief edit/work status or discussion response; requested document content belongs in edits, not here. Otherwise empty."}}}
     """
 
     public static var object: [String: Any] {

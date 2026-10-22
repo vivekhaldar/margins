@@ -352,6 +352,32 @@ check(dp.contains("SELECTED PASSAGE (in [b2])\n«Gamma.»"), "discuss: quote and
 check(dp.contains("Author: Explain\nYou: It is a letter.") && dp.contains("(You edited the document: Trimmed b2)"), "discuss: thread history")
 check(dp.range(of: "EARLIER IN THIS THREAD")!.lowerBound < dp.range(of: "AUTHOR'S MESSAGE\nIs it accurate?")!.lowerBound, "discuss: history precedes message")
 check(!PromptBuilder.discussPrompt(blocks: [], focus: [], quote: "x", history: [], message: "m").contains("EARLIER IN THIS THREAD"), "discuss: no history section when empty")
+test("selection content requests write into the document") {
+    let blocks = [Block(id: "b1", html: "<h2>Executives need two kinds of competence</h2>"),
+                  Block(id: "b2", html: "<p>Leaders need technical judgment and organizational skill.</p>"),
+                  Block(id: "b3", html: "<h2>Career progress</h2>")]
+    let prompt = PromptBuilder.discussPrompt(blocks: blocks, focus: ["b1"], quote: "Executives need two kinds of competence",
+                                            history: [], message: "say more about this")
+    check(prompt.contains("AUTHOR'S MESSAGE\nsay more about this"), "selection expansion preserves the author's request")
+    check(prompt.contains("[b2] <p>Leaders need technical judgment and organizational skill.</p>") &&
+          prompt.contains("[b3] <h2>Career progress</h2>"), "expansion receives existing section content and its boundary")
+    check(prompt.contains("Return document edits; a reply alone") && prompt.contains("use insertAfter"),
+          "content requests require insertions rather than a sidebar-only answer")
+    check(prompt.contains("keep it as a heading") && prompt.contains("nearby existing block in that section"),
+          "selected headings can be expanded after their existing section content")
+    check(prompt.contains("explicitly asks for a reply without editing") && prompt.contains("is this accurate?"),
+          "explicit reply-only requests and assessments retain discussion behavior")
+    check(!prompt.contains("If the message is a question, or asks for an explanation"),
+          "no conflicting rule routes all explanations to replies")
+    let workspace = URL(fileURLWithPath: "/tmp/margins-prompt-test")
+    for policy in AgentToolPolicy.allCases {
+        let system = PromptBuilder.system(tools: AgentContext(policy: policy, workspace: workspace))
+        check(system.contains("document is your primary output") && system.contains("substantive content in edits[].html"),
+              "document output contract applies with tools \(policy.rawValue)")
+    }
+    check(PromptBuilder.system.contains("An explicit request to answer without editing takes precedence"),
+          "one-shot providers also honor reply-only requests")
+}
 var threaded = Intent(step: 3, text: "Explain")
 threaded.thread = UUID(); threaded.quote = "Gamma."; threaded.anchor = "b2"; threaded.focus = ["b2"]; threaded.reply = "A letter."
 var tdoc = MarginsDocument(); tdoc.intents = [threaded]

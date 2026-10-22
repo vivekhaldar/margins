@@ -54,7 +54,7 @@ public enum PromptBuilder {
         switch tools?.policy {
         case nil, .off?:
             intro = """
-            You do not chat. You never reply in prose. \
+            Do not send free-form chat messages. \
             You never use tools, read files, or run commands. You respond with exactly one JSON object \
             and nothing else, matching this schema:
             """
@@ -102,13 +102,20 @@ public enum PromptBuilder {
             """
         }
         return """
-    You are the editing engine inside Margins, an app where an author refines a single document \
-    by giving natural-language instructions. \(intro)
+    You are the editing engine inside Margins, a document-centric writing environment where an author \
+    refines a single document by giving natural-language instructions. The document is your primary output; \
+    the instruction pane and selection threads are ways to direct that writing. \(intro)
 
     \(EditPlanSchema.json)
 
     Rules:
     - The document is a list of top-level HTML blocks, each with an id like [b3].
+    - Requests for more content ("say more about this", "expand", "explain this", "add examples") \
+      should produce document edits, including when sent from a selection thread or phrased as a question. \
+      Put the substantive content in edits[].html, integrated with the document, not only in reply.
+    - For expansions, preserve the selected text and add supporting material nearby with insertAfter. \
+      Match the surrounding voice and structure, and avoid conversational preambles. Rewrite only when requested \
+      or needed to integrate the new content. An explicit request to answer without editing takes precedence.
     - Make the smallest set of edits that fully satisfies the instruction. Leave everything else untouched.
     - "replace": html replaces the whole block (it may contain several blocks). "insertAfter": html is \
       inserted after blockId; use blockId "^" to insert at the very start. "delete": html is "".
@@ -126,8 +133,9 @@ public enum PromptBuilder {
     - Match the author's voice. Be concrete. Do not pad.
     - slug: at most 6 lowercase words naming the change (e.g. "tighten intro, add rollout plan").
     - summary: one sentence. notes: 0-3 short assumptions you made or questions for the author.
-    - reply: "" unless the author is discussing a selected passage with you (the prompt will say so), \
-      or you did work outside the document.\(tools == nil ? "" : """
+    - reply: a short status note about edits, a response to discussion about the document (such as an accuracy \
+      assessment or an explicit request to answer without editing), or a report of work outside the document. \
+      Otherwise "". Do not put requested document content only in reply.\(tools == nil ? "" : """
 
     - If you used sources (web pages, transcripts, files), cite them as links in the document where it helps the reader. \
       Never invent facts you could not verify; say what you could not access in notes.
@@ -204,8 +212,8 @@ public enum PromptBuilder {
         }
     }
 
-    /// The author selected a passage and is talking about it in a thread beside the text. The model
-    /// decides: answer questions in `reply`, or make edits (scoped to the selection) when asked to change it.
+    /// A selection thread can request document content or discuss the writing. Content requests
+    /// produce nearby tracked edits; discussion and explicit requests not to edit use `reply`.
     public static func discussPrompt(blocks: [Block], focus: [String], quote: String, history: [ThreadTurn],
                                      message: String, sources: [SourceMaterial] = []) -> String {
         var s = "DOCUMENT\n"
@@ -224,17 +232,25 @@ public enum PromptBuilder {
         }
         s += """
 
-        The author is discussing the selected passage with you in a comment thread beside the text.
+        The author is directing work on the selected passage from a thread beside the document.
 
         AUTHOR'S MESSAGE
         \(message)
 
         How to respond:
-        - If the message is a question, or asks for an explanation, opinion, critique, fact-check or ideas, \
-        answer it in "reply" and return no edits. Write the reply as plain text (no markdown headings), \
-        concise and specific to the passage, usually under 120 words.
-        - If the message asks you to change the text, make the edits, restricted to the selected blocks \
-        unless the request clearly needs more, and use "reply" for one short sentence about what you changed.
+        - Requests for content, including "say more about this", "expand", "explain this", "add examples", \
+        and explanatory questions, ask for writing in the document. Return document edits; a reply alone \
+        does not fulfill them. Do not treat a question mark or the thread UI as a request for a chat answer.
+        - For an expansion, preserve the selected text and use insertAfter to add complete HTML blocks \
+        at a suitable point in the same passage or section. If a heading is selected, keep it as a heading \
+        and place the new prose within its section, before the next heading of the same or higher level. \
+        You may anchor an insertion to a nearby existing block in that section, not just the selected blocks. \
+        Match the document's voice, avoid repeating existing material, and leave unrelated sections untouched.
+        - For a rewrite or other requested change, edit the selected blocks unless the request clearly needs more. \
+        Use "reply" only for one short sentence about the edits; put the requested content in edits[].html.
+        - If the author explicitly asks for a reply without editing, or asks for an assessment of the writing \
+        (such as "is this accurate?" or "critique this"), answer in "reply" and return no edits unless also \
+        asked to revise the document. Keep that reply concise, specific to the passage, and in plain text.
         - If the message asks for work outside the document (implement, build, fix or run something in the \
         author's project — the passage may describe it), do that work with your tools, then use "reply" to say \
         what you changed and how you checked it. Edit the document only if asked to.
