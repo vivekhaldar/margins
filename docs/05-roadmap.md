@@ -3,7 +3,7 @@
 Roughly in priority order.
 
 ## Editing quality
-- **Word-level diffs inside replaced blocks**, so small wording tweaks don't show as a whole paragraph struck through and re-inserted.
+- **Extend granular diffs to structured blocks** such as lists and tables. Paragraphs, headings, and preformatted prose already highlight changed words and links without repeating unchanged text.
 - **Locked blocks**: mark a section "don't touch" and the agent is told to leave it alone.
 - **Streaming**: show the edit plan as it arrives, especially for long first drafts.
 - **Smarter scoping**: a selection inside a block becomes a sentence-level focus, not just the whole block.

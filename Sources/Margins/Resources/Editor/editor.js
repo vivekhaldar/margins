@@ -6,6 +6,7 @@
   const doc = $('#doc');
   const pop = $('#pop');
   const popin = $('#popin');
+  const trackedDiff = window.MarginsTrackedDiff?.create(doc);
   let annotations = null;
   let nativeSession = null;
 
@@ -95,6 +96,7 @@
 
   function clean(el) {
     const c = el.cloneNode(true);
+    window.MarginsTrackedDiff?.strip(c);
     c.querySelectorAll('.tools,.rb').forEach((x) => x.remove());
     [c, ...c.querySelectorAll('*')].forEach((x) => [...x.attributes].forEach((a) => { if (!keepAttr(x, a.name)) x.removeAttribute(a.name); }));
     return c;
@@ -177,11 +179,13 @@
       const d = delOf(ch); if (d) d.contentEditable = 'false';
     });
     drawParagraphRuns();
+    trackedDiff?.refresh();
     doc.classList.toggle('empty', !doc.textContent.trim() && !doc.querySelector('img,hr,table'));
   }
 
   function currentHTML() {
     const c = doc.cloneNode(true);
+    window.MarginsTrackedDiff?.strip(c);
     c.querySelectorAll('.sel,.cur,.peek,.flash,.refining,.paragraph-working').forEach((x) => {
       x.classList.remove('sel', 'cur', 'peek', 'flash', 'refining', 'paragraph-working');
       if (!x.className) x.removeAttribute('class');
@@ -701,6 +705,7 @@
   const ANNOTATION_CLIPBOARD = 'application/x-margins-attribution+json';
   function cleanSelectionHTML(range) {
     const container = document.createElement('div'); container.appendChild(range.cloneContents());
+    window.MarginsTrackedDiff?.strip(container);
     container.querySelectorAll('.tools,.rb,.chg > del').forEach(el => el.remove());
     container.querySelectorAll('.chg').forEach(el => el.replaceWith(...(el.querySelector(':scope > ins')?.childNodes || [])));
     container.querySelectorAll('ins').forEach(el => el.replaceWith(...el.childNodes));
@@ -936,7 +941,7 @@
       let norm = '', prevSpace = true;
       const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
       for (let n; (n = w.nextNode());) {
-        if (n.parentNode.closest && n.parentNode.closest('.tools,.rb')) continue;
+        if (n.parentNode.closest && (n.parentNode.closest('.tools,.rb,.diff-before') || !n.parentElement.getClientRects().length)) continue;
         const v = n.nodeValue;
         for (let i = 0; i < v.length; i++) {
           const sp = /\s/.test(v[i]);
@@ -1362,6 +1367,7 @@
     doc.innerHTML = html;
     doc.contentEditable = 'false';
     doc.classList.add('ro');
+    trackedDiff?.refresh();
     annotations?.load(annotationState);
     document.body.classList.add('previewing');
     closeRefine();
@@ -1454,6 +1460,7 @@
       if (!rb) { rb = document.createElement('span'); rb.className = 'rb'; rb.contentEditable = 'false'; ch.appendChild(rb); }
       rb.textContent = '↻' + count;
       rb.title = `Refined ${count}×`;
+      trackedDiff?.refresh();
       annotations?.sync({origin: 'agent', runId: options.runId, parentRunId: options.parentRunId, silent: true});
       flash(ch);
       emitPending();

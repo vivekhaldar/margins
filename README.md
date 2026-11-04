@@ -31,6 +31,7 @@ The output isn't a reply. It's the document.
   - by instruction: "Accept these";
   - by selection: ⌘-click or `X`, then accept or reject the selected ones;
   - all at once.
+- **Granular prose diffs.** Small edits show the proposed paragraph once, with just changed words highlighted and removed wording above it. Link and formatting changes are highlighted too. Accept, reject, and refine still apply to the whole change; structural edits and large rewrites keep the full before/after view.
 - **💬 Refine a single change.** Ask the agent to redo just that hunk ("shorter", "more formal"…) without touching the rest of the document.
 - **Direct writing from a selection.** Select some text and click **Ask** (or press ⌘J) to open a thread beside that passage. Requests such as "say more about this", "explain this", and "add examples" put the new content into the document as tracked changes, with a short note in the thread. Expansions preserve the selected text and add material in its section; "tighten this" rewrites the passage. Assessments such as "is this accurate?", or an explicit "answer only in this thread; don't edit", get a thread reply. Threads stay as 💬 markers in the margin, so you can reopen and continue them, and each message also appears as a card in the left panel.
 - **Attribution and local comments.** Enable **Attribution & comments** to inspect the instruction and recorded activity behind agent text. Select text to add a personal comment without calling an agent; reply, resolve, or reattach it later. Mixed origins and comments survive review, saving, reopening, and version history. The overlay starts hidden; capture continues. [Usage and verification](docs/07-annotations.md).
@@ -130,7 +131,7 @@ Command-line equivalent: `swift run margins-cli edit copilot --tools research --
 
 Bug reports and focused pull requests are welcome through [GitHub Issues](https://github.com/vivekhaldar/margins/issues) and pull requests. Include your macOS version, provider, and steps to reproduce a bug; remove private document text and credentials from logs.
 
-For code changes, build the app and run `swift run MarginsSelfTest`. Editor changes can also be checked with `swift scripts/test-editor-find.swift` and `swift scripts/test-editor-paragraph.swift`, and `swift scripts/test-editor-format.swift`.
+For code changes, build the app and run `swift run MarginsSelfTest`. Editor changes can also be checked with `swift scripts/test-editor-find.swift` and `swift scripts/test-editor-paragraph.swift`, and `swift scripts/test-editor-format.swift`. Run `swift scripts/test-editor-diff.swift` for granular tracked changes, review, persistence, and native editing checks; it also saves a preview in `build/verification/diff-preview.png`.
 
 ### Linux orbs
 

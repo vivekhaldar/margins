@@ -38,7 +38,7 @@ flowchart LR
 
 ## The block model
 
-The document is HTML. Every **top-level block** (`p`, `h1–h3`, `ul`, `ol`, `blockquote`, `pre`, `table`…) carries a stable id, `data-bid="bN"`. The agent sees the document as a list of `{id, html}` blocks plus the ids of any blocks the user has selected (`focus`), and answers with block-level edits. Block granularity keeps the agent's output small and makes it easy to apply edits and show them as tracked changes. Finer, word-level diffing *inside* a replaced block is on the roadmap.
+The document is HTML. Every **top-level block** (`p`, `h1–h3`, `ul`, `ol`, `blockquote`, `pre`, `table`…) carries a stable id, `data-bid="bN"`. The agent sees the document as a list of `{id, html}` blocks plus the ids of any blocks the user has selected (`focus`), and answers with block-level edits. Block granularity keeps the agent's output small and makes it easy to apply edits and show them as tracked changes. Prose replacements display a word-level diff while retaining block-level review.
 
 ## Tracked changes in the DOM
 
@@ -56,6 +56,8 @@ A pending change is a wrapper element:
 - If a later instruction edits a block that already has a pending change, the `<ins>` is updated, but the original `<del>` is kept, so rejecting still restores what you actually had.
 - The first draft of an empty document is a pending insertion. Accept keeps the generated blocks; reject returns to an empty document. Pending first drafts survive saving and reopening, and stay out of the Markdown mirror until accepted.
 - `normalize()` keeps the DOM honest after user edits: it wraps stray text in `<p>`, turns `contenteditable` `<div>`s into `<p>`, and de-duplicates ids cloned by pressing Enter.
+
+`tracked-diff.js` derives a compact display for replacements of a single paragraph, heading, or preformatted block with the same structure. Word tokens include inline formatting and link targets, so adding a link is visible even when its label stays the same. A bounded longest-common-subsequence comparison skips identical prefixes/suffixes, hides the original block, highlights changed ranges in the editable proposal with the CSS Custom Highlight API, and renders only removed snippets above it. Neither source side is rewritten. Transient snippets and classes are stripped from snapshots and clipboard HTML, and the display is rebuilt on load, refinement, typing, review, and history preview. Lists, tables, images, structural changes, whitespace-only edits, and large unmatched rewrites retain the full block view. Browsers without Custom Highlights also retain that view.
 
 ## Swift ⇄ editor bridge
 
