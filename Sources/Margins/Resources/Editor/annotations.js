@@ -154,7 +154,7 @@
           const nodes = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
           let text = '';
           for (let node; (node = walker.nextNode());) {
-            if (node.parentElement?.closest('.tools,.rb,script,style')) continue;
+            if (node.parentElement?.closest('.tools,.rb,.diff-removed,script,style')) continue;
             nodes.push({node, start: text.length}); text += node.nodeValue;
           }
           out.push({blockId: block.dataset.bid, ...(side ? {side} : {}), text, el, nodes});
@@ -389,10 +389,10 @@
       if (!this.doc.contains(range.commonAncestorContainer)) return null;
       const toOffset = (node, offset) => {
         const record = this.records.find(value => value.side !== 'original' && (value.el === node || value.el.contains(node)));
-        if (!record || node.parentElement?.closest('.tools,.rb')) return null;
+        if (!record || node.parentElement?.closest('.tools,.rb,.diff-removed')) return null;
         const r = document.createRange(); r.selectNodeContents(record.el);
         try { r.setEnd(node, offset); } catch (_) { return null; }
-        const content = r.cloneContents(); content.querySelectorAll?.('.tools,.rb').forEach(value => value.remove());
+        const content = r.cloneContents(); content.querySelectorAll?.('.tools,.rb,.diff-removed').forEach(value => value.remove());
         return {record, offset: content.textContent.length};
       };
       const a = toOffset(range.startContainer, range.startOffset), b = toOffset(range.endContainer, range.endOffset);
@@ -413,7 +413,7 @@
       if (!record) return null;
       const range = document.createRange(); range.selectNodeContents(record.el);
       try { range.setEnd(node, offset); } catch (_) { return null; }
-      const fragment = range.cloneContents(); fragment.querySelectorAll?.('.tools,.rb').forEach(value => value.remove());
+      const fragment = range.cloneContents(); fragment.querySelectorAll?.('.tools,.rb,.diff-removed').forEach(value => value.remove());
       const flat = flatten(active(this.records));
       return flat.records.find(value => key(value) === key(record)).globalStart + fragment.textContent.length;
     }

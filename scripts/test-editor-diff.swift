@@ -25,6 +25,48 @@ final class Delegate: NSObject, WKNavigationDelegate {
                 guard let result = value as? [String: Any], let passed = result["passed"] as? Int else {
                     throw NSError(domain: "Diff", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing test result"])
                 }
+                // Real keyboard and menu undo exercise WebKit's target ranges and
+                // undo stack, which synthetic beforeinput events cannot validate.
+                _ = try await webView.callAsyncJavaScript(#"""
+                    window.diffPreview = margins.snapshot();
+                    margins.load('<p>It is easier to use every day.</p>');
+                    margins.applyEdits(1, [{op: 'replace', blockId: margins.getBlocks().blocks[0].id,
+                      html: '<p>It is cheaper to use every day.</p>'}], false);
+                    const p = document.querySelector('.chg > ins p'), node = p.lastChild;
+                    const start = node.textContent.indexOf('every');
+                    document.querySelector('#doc').focus();
+                    getSelection().setBaseAndExtent(node, start, node, start + 5);
+                    """#, arguments: [:], in: nil, contentWorld: .page)
+                window.makeFirstResponder(webView)
+                app.activate(ignoringOtherApps: true)
+                webView.undoManager?.removeAllActions()
+                for character in "each" {
+                    let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                        windowNumber: window.windowNumber, context: nil, characters: String(character), charactersIgnoringModifiers: String(character),
+                        isARepeat: false, keyCode: 0)!
+                    window.sendEvent(event)
+                    _ = try await webView.callAsyncJavaScript("return MarginsAnnotations.getState().text", arguments: [:], in: nil, contentWorld: .page)
+                }
+                _ = try await webView.callAsyncJavaScript(#"""
+                    if (MarginsAnnotations.getState().text !== 'It is cheaper to use each day.')
+                      throw new Error('Native typing in inline diff: ' + MarginsAnnotations.getState().text);
+                    """#, arguments: [:], in: nil, contentWorld: .page)
+                webView.undoManager?.undo()
+                _ = try await webView.callAsyncJavaScript(#"""
+                    if (MarginsAnnotations.getState().text !== 'It is cheaper to use every day.')
+                      throw new Error('Native menu undo in inline diff: ' + MarginsAnnotations.getState().text);
+                    """#, arguments: [:], in: nil, contentWorld: .page)
+                webView.undoManager?.redo()
+                _ = try await webView.callAsyncJavaScript(#"""
+                    if (MarginsAnnotations.getState().text !== 'It is cheaper to use each day.')
+                      throw new Error('Native menu redo in inline diff: ' + MarginsAnnotations.getState().text);
+                    margins.load(diffPreview.html, diffPreview.annotations);
+                    document.querySelector('#doc').blur(); getSelection().removeAllRanges();
+                    await new Promise(resolve => setTimeout(resolve, 150));
+                    if (![...CSS.highlights.get('margins-added')].some(r => r.toString() === 'cheaper'))
+                      throw new Error('Preview is missing the cheaper insertion highlight');
+                    """#, arguments: [:], in: nil, contentWorld: .page)
+                print("Native inline typing and menu undo/redo passed")
                 let output = root.appendingPathComponent("build/verification")
                 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
                 try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])

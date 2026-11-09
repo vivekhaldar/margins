@@ -31,7 +31,7 @@ The output isn't a reply. It's the document.
   - by instruction: "Accept these";
   - by selection: ⌘-click or `X`, then accept or reject the selected ones;
   - all at once.
-- **Granular prose diffs.** Small edits show the proposed paragraph once, with just changed words highlighted and removed wording above it. Link and formatting changes are highlighted too. Accept, reject, and refine still apply to the whole change; structural edits and large rewrites keep the full before/after view.
+- **Granular prose diffs.** Small edits show the proposed paragraph once, with red struck-through deletions immediately beside green insertions at the edit location. Link and formatting changes are highlighted too. Accept, reject, and refine still apply to the whole change; structural edits and large rewrites keep the full before/after view.
 - **💬 Refine a single change.** Ask the agent to redo just that hunk ("shorter", "more formal"…) without touching the rest of the document.
 - **Direct writing from a selection.** Select some text and click **Ask** (or press ⌘J) to open a thread beside that passage. Requests such as "say more about this", "explain this", and "add examples" put the new content into the document as tracked changes, with a short note in the thread. Expansions preserve the selected text and add material in its section; "tighten this" rewrites the passage. Assessments such as "is this accurate?", or an explicit "answer only in this thread; don't edit", get a thread reply. Threads stay as 💬 markers in the margin, so you can reopen and continue them, and each message also appears as a card in the left panel.
 - **Attribution and local comments.** Enable **Attribution & comments** to inspect the instruction and recorded activity behind agent text. Select text to add a personal comment without calling an agent; reply, resolve, or reattach it later. Mixed origins and comments survive review, saving, reopening, and version history. The overlay starts hidden; capture continues. [Usage and verification](docs/07-annotations.md).
@@ -155,7 +155,7 @@ Swift-based editor integration checks still require a Mac with macOS 14+ and Swi
 ## Packaging a release
 
 ```sh
-MARGINS_VERSION=0.2.0 scripts/build-dmg.sh
+MARGINS_VERSION=0.2.1 scripts/build-dmg.sh
 ```
 
 This builds a release app, packages it with an Applications shortcut, README and license, and writes a DMG plus a SHA-256 checksum under `build/`. Set `MARGINS_BUILD_NUMBER` to override the numeric bundle build number. The script builds for the host architecture; it does not notarize or publish the result. Publish the DMG, checksum and matching source snapshot through [GitHub Releases](https://github.com/vivekhaldar/margins/releases).

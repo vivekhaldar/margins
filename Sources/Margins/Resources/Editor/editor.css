@@ -42,12 +42,13 @@ article a{color:var(--acc)}
 .chg>ins:empty,.chg>del:empty{display:none}
 .chg>ins>:first-child,.chg>del>:first-child{margin-top:4px}
 .chg>ins>:last-child,.chg>del>:last-child{margin-bottom:4px}
-/* Compact prose replacements: one editable paragraph, with removed snippets. */
+/* Compact prose replacements: deleted wording sits at its position in the text. */
 .chg.diff-compact>del{display:none}
 .chg.diff-compact>ins{background:transparent;border-left-color:var(--insb)}
-.diff-before{padding:4px 0 4px 12px;margin-left:-15px;border-left:3px solid var(--delb);font-size:15px;color:var(--delink)}
-.diff-before del{background:var(--del);text-decoration:line-through;text-decoration-color:var(--delb)}
-.diff-before .diff-gap{color:var(--mute);text-decoration:none}
+.diff-removed{background:var(--del);color:var(--delink);text-decoration:line-through;text-decoration-color:var(--delb);cursor:default}
+.diff-removed *{color:inherit;text-decoration:inherit}
+.diff-space-before{margin-inline-start:.2em}
+.diff-space-after{margin-inline-end:.2em}
 ::highlight(margins-added){background-color:var(--ins);text-decoration:underline;text-decoration-color:var(--insb);text-decoration-thickness:2px}
 .tools{position:absolute;right:-50px;top:2px;display:flex;flex-direction:column;gap:2px;opacity:.55;transition:opacity .15s;user-select:none;-webkit-user-select:none}
 .chg:hover>.tools,.chg.cur>.tools{opacity:1}

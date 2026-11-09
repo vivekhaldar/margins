@@ -200,7 +200,7 @@
     while (el.parentNode !== doc) el = el.parentNode;
     for (let cur = el; cur; cur = cur.previousElementSibling) {
       const h = /^H[12]$/.test(cur.tagName) ? cur : (isChg(cur) ? (insOf(cur) || cur).querySelector('h1,h2') : null);
-      if (h && h.textContent.trim()) return h.textContent.trim();
+      if (h && clean(h).textContent.trim()) return clean(h).textContent.trim();
     }
     return 'Document';
   }
@@ -311,10 +311,12 @@
 
   function resolve(ch, ok) {
     if (!ch || !ch.isConnected || doc.classList.contains('ro')) return;
+    trackedDiff?.suspend();
     annotations?.sync({silent: true});
     annotations?.resolveChange(ch.dataset.bid, ok);
     noteReview(ch, ok);
     const src = ok ? insOf(ch) : delOf(ch);
+    if (src) window.MarginsTrackedDiff?.strip(src);
     const nodes = src ? [...src.childNodes] : [];
     if (ok) {
       let first = true;
@@ -470,6 +472,8 @@
     if (!range || !doc.contains(range.commonAncestorContainer)) range = formatRange;
     if (!editableRange(range) || !range.startContainer.isConnected) return;
     doc.focus(); sel.removeAllRanges(); sel.addRange(range);
+    trackedDiff?.suspend();
+    range = sel.getRangeAt(0);
     const el = n => n.nodeType === 1 ? n : n.parentElement;
     const lists = () => [...doc.querySelectorAll('ul,ol')].filter(list =>
       list.contains(sel.anchorNode) || (!sel.isCollapsed && sel.getRangeAt(0).intersectsNode(list)));
@@ -636,6 +640,7 @@
 
   function editLink() {
     if (doc.classList.contains('ro')) return;
+    trackedDiff?.suspend();
     const s = getSelection();
     if (!s || !s.rangeCount || !doc.contains(s.anchorNode)) return;
     const a = linkAtSelection();
@@ -794,6 +799,7 @@
     s.removeAllRanges();
     if (lastRange && doc.contains(lastRange.startContainer)) s.addRange(lastRange);
     else { const r = document.createRange(); r.selectNodeContents(doc); r.collapse(false); s.addRange(r); }
+    trackedDiff?.suspend();
     const marker = 'margins-img-' + Math.random().toString(36).slice(2);
     document.execCommand('insertImage', false, src + '#' + marker);
     const img = [...doc.querySelectorAll('img')].find((i) => i.getAttribute('src').endsWith('#' + marker));
@@ -840,7 +846,7 @@
     let cur = null;
     tops().forEach((el) => {
       const hs = /^H[1-3]$/.test(el.tagName) ? [el] : isChg(el) ? [...(insOf(el) || el).querySelectorAll('h1,h2,h3')] : [];
-      hs.forEach((h) => { cur = { el: h, level: +h.tagName[1], text: h.textContent.trim(), proposed: isChg(el), ins: false, del: false }; out.push(cur); });
+      hs.forEach((h) => { cur = { el: h, level: +h.tagName[1], text: clean(h).textContent.trim(), proposed: isChg(el), ins: false, del: false }; out.push(cur); });
       if (isChg(el) && cur) { if (el.dataset.kind === 'delete') cur.del = true; else cur.ins = true; }
     });
     return out.filter((h) => h.text);
@@ -923,7 +929,9 @@
     if (!s || !s.rangeCount || s.isCollapsed) return null;
     const r = s.getRangeAt(0);
     if (!doc.contains(r.commonAncestorContainer)) return null;
-    const quote = plain(s.toString());
+    const fragment = r.cloneContents();
+    window.MarginsTrackedDiff?.strip(fragment);
+    const quote = plain(fragment.textContent);
     if (quote.length < 2) return null;
     const focus = tops().filter((el) => el.dataset.bid && r.intersectsNode(el)).map((el) => el.dataset.bid);
     if (!focus.length) return null;
@@ -941,7 +949,7 @@
       let norm = '', prevSpace = true;
       const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
       for (let n; (n = w.nextNode());) {
-        if (n.parentNode.closest && (n.parentNode.closest('.tools,.rb,.diff-before') || !n.parentElement.getClientRects().length)) continue;
+        if (n.parentNode.closest && (n.parentNode.closest('.tools,.rb,.diff-removed') || !n.parentElement.getClientRects().length)) continue;
         const v = n.nodeValue;
         for (let i = 0; i < v.length; i++) {
           const sp = /\s/.test(v[i]);
@@ -1213,6 +1221,7 @@
     if (!findbar.hidden && findin.value) {
       // Keep inline formatting searchable; separate paragraphs, cells, and line breaks.
       const groups = [];
+      const removalGroups = new Map();
       let group = null, lastBlock = null;
       const walker = document.createTreeWalker(doc, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
       for (let node; (node = walker.nextNode());) {
@@ -1221,6 +1230,13 @@
           continue;
         }
         if (node.parentElement.closest('.tools,.rb,script,style,[hidden]') || !node.parentElement.getClientRects().length) continue;
+        const removal = node.parentElement.closest('.diff-removed');
+        if (removal) {
+          if (!removalGroups.has(removal)) { const value = {text: '', nodes: []}; removalGroups.set(removal, value); groups.push(value); }
+          const value = removalGroups.get(removal);
+          value.nodes.push({node, start: value.text.length}); value.text += node.nodeValue;
+          continue;
+        }
         const block = node.parentElement.closest('p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,td,th,figcaption,ins,del') || node.parentElement;
         if (!group || block !== lastBlock) { group = { text: '', nodes: [] }; groups.push(group); }
         lastBlock = block;
