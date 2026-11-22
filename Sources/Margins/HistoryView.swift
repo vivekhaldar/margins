@@ -8,15 +8,15 @@ struct HistoryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                Text("History").font(.headline)
-                Text("\(state.doc.versions.count) versions").font(.caption).foregroundStyle(.secondary)
+                Text("History").uiFont(.headline)
+                Text("\(state.doc.versions.count) versions").uiFont(.caption).foregroundStyle(.secondary)
                 Spacer()
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             Divider()
             if state.doc.versions.isEmpty {
                 Text("Versions appear here as the document changes.")
-                    .font(.callout).foregroundStyle(.secondary).padding(14)
+                    .uiFont(.callout).foregroundStyle(.secondary).padding(14)
                 Spacer()
             } else {
                 ScrollView {
@@ -41,6 +41,7 @@ struct HistoryView: View {
 }
 
 private struct VersionRow: View {
+    @Environment(\.interfaceZoom) private var zoom
     let version: Version
     let isLatest: Bool
     let isViewing: Bool
@@ -63,20 +64,22 @@ private struct VersionRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Circle().strokeBorder(color, lineWidth: 2).frame(width: 10, height: 10).padding(.top, 4)
+            Circle().strokeBorder(color, lineWidth: 2)
+                .frame(width: 10 * zoom, height: 10 * zoom)
+                .padding(.top, 4 * zoom)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text("v\(version.number)").font(.caption.monospaced().weight(.semibold))
-                    Text(who).font(.caption2.weight(.semibold))
+                    Text("v\(version.number)").uiFont(.caption, weight: .semibold, design: .monospaced)
+                    Text(who).uiFont(.caption2, weight: .semibold)
                         .padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Capsule().fill(color.opacity(0.15))).foregroundStyle(color)
-                    Text(version.createdAt, style: .relative).font(.caption2).foregroundStyle(.secondary)
+                    Text(version.createdAt, style: .relative).uiFont(.caption2).foregroundStyle(.secondary)
                     Spacer()
-                    if isLatest { Text("current").font(.caption2.weight(.semibold)) }
+                    if isLatest { Text("current").uiFont(.caption2, weight: .semibold) }
                 }
-                Text(version.slug).font(.callout.weight(.medium))
+                Text(version.slug).uiFont(.callout, weight: .medium)
                 if !version.detail.isEmpty {
-                    Text(version.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Text(version.detail).uiFont(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
         }

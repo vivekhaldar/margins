@@ -5,6 +5,7 @@ import SwiftUI
 /// lives in the document) plus the composer.
 struct IntentPane: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.interfaceZoom) private var zoom
     @StateObject private var draftBox = Local("")
     @FocusState private var composerFocused: Bool
 
@@ -13,11 +14,11 @@ struct IntentPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("INSTRUCTIONS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("INSTRUCTIONS").uiFont(.caption, weight: .semibold).foregroundStyle(.secondary)
                 Spacer()
                 if state.pending.total > 0 {
                     Text("\(state.pending.total) pending")
-                        .font(.caption.weight(.semibold))
+                        .uiFont(.caption, weight: .semibold)
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                         .foregroundStyle(Color.accentColor)
@@ -64,7 +65,7 @@ struct IntentPane: View {
                         ForEach(suggestions, id: \.self) { s in
                             Button(s) { draftBox.value = s; send() }
                                 .buttonStyle(.plain)
-                                .font(.caption)
+                                .uiFont(.caption)
                                 .padding(.horizontal, 8).padding(.vertical, 3)
                                 .overlay(Capsule().strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3])).foregroundStyle(.tertiary))
                                 .foregroundStyle(.secondary)
@@ -74,10 +75,10 @@ struct IntentPane: View {
             }
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $draftBox.value)
-                    .font(.body)
+                    .uiFont(.body)
                     .scrollContentBackground(.hidden)
                     .focused($composerFocused)
-                    .frame(minHeight: 64, maxHeight: 140)
+                    .frame(minHeight: 64 * zoom, maxHeight: 140 * zoom)
                     .fixedSize(horizontal: false, vertical: true)
                     .onKeyPress(.return, phases: .down) { press in
                         if press.modifiers.contains(.shift) { return .ignored }
@@ -87,6 +88,7 @@ struct IntentPane: View {
                 if draftBox.value.isEmpty {
                     Text(state.doc.intents.isEmpty ? "What do you want to write? e.g. “A design doc for rate limiting our public API”"
                                                    : "Refine the document… (select text first to scope it)")
+                        .uiFont(.body)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .allowsHitTesting(false)
@@ -96,11 +98,12 @@ struct IntentPane: View {
             .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(composerFocused ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.25)))
             HStack {
-                Text("↩ send · ⇧↩ newline").font(.caption2).foregroundStyle(.tertiary)
+                Text("↩ send · ⇧↩ newline").uiFont(.caption2).foregroundStyle(.tertiary)
                 Spacer()
                 // Return (including ⌘Return) is handled by the focused composer above.
                 // A window-wide shortcut here would steal ⌘Return from the document.
                 Button("Send") { send() }
+                    .uiFont(.body)
                     .disabled(draftBox.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -117,9 +120,9 @@ struct IntentPane: View {
 private struct EmptyIntro: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Write by refining, not chatting.").font(.headline)
+            Text("Write by refining, not chatting.").uiFont(.headline)
             Text("Describe the document you want. The agent drafts it on the right. Every instruction after that shows up as tracked changes you can accept, reject, or refine — and you can always edit the text yourself.")
-                .font(.callout).foregroundStyle(.secondary)
+                .uiFont(.callout).foregroundStyle(.secondary)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.06)))
@@ -135,13 +138,14 @@ private struct EditRow: View {
             Spacer()
             Text(intent.createdAt, style: .time)
         }
-        .font(.caption).foregroundStyle(.secondary)
+        .uiFont(.caption).foregroundStyle(.secondary)
         .padding(.horizontal, 6)
     }
 }
 
 struct IntentCard: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.interfaceZoom) private var zoom
     let intent: Intent
     @StateObject private var hoverBox = Local(false)
 
@@ -156,7 +160,7 @@ struct IntentCard: View {
                         Image(systemName: "text.bubble").foregroundStyle(Color.accentColor)
                         Text("“\(quote)”").italic().lineLimit(2).foregroundStyle(.secondary)
                     }
-                    .font(.caption)
+                    .uiFont(.caption)
                     .padding(.leading, 6)
                     .overlay(Rectangle().fill(Color.yellow.opacity(0.7)).frame(width: 2), alignment: .leading)
                     .contentShape(Rectangle())
@@ -164,7 +168,7 @@ struct IntentCard: View {
                 .buttonStyle(.plain)
                 .help("Open this thread in the document")
             }
-            Text(intent.text).font(.body.weight(.medium)).textSelection(.enabled)
+            Text(intent.text).uiFont(.body, weight: .medium).textSelection(.enabled)
             status
             if intent.steps != nil || state.liveThought[intent.step] != nil {
                 AgentActivity(intent: intent)
@@ -173,7 +177,7 @@ struct IntentCard: View {
                 PermissionPrompt(ask: ask)
             }
             if let reply = intent.reply, !reply.isEmpty {
-                Text(reply).font(.callout).textSelection(.enabled)
+                Text(reply).uiFont(.callout).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
@@ -182,11 +186,11 @@ struct IntentCard: View {
                 ChangedFiles(files: files)
             }
             if !intent.summary.isEmpty {
-                Text(intent.summary).font(.callout).foregroundStyle(.secondary)
+                Text(intent.summary).uiFont(.callout).foregroundStyle(.secondary)
             }
             ForEach(intent.notes, id: \.self) { n in
                 Label { Text(n) } icon: { Image(systemName: "info.circle") }
-                    .font(.caption).foregroundStyle(.secondary)
+                    .uiFont(.caption).foregroundStyle(.secondary)
                     .padding(.leading, 6)
                     .overlay(Rectangle().fill(Color.accentColor.opacity(0.4)).frame(width: 2), alignment: .leading)
             }
@@ -195,7 +199,7 @@ struct IntentCard: View {
                     Text("↳ 💬").foregroundStyle(Color.accentColor)
                     Text(r.text).italic()
                 }
-                .font(.caption)
+                .uiFont(.caption)
             }
             if pendingCount > 0 {
                 HStack(spacing: 6) {
@@ -205,7 +209,8 @@ struct IntentCard: View {
                     Button { state.reveal(step: intent.step) } label: { Image(systemName: "arrow.right.circle") }
                         .buttonStyle(.borderless).help("Show in document")
                 }
-                .controlSize(.small)
+                .uiFont(.caption)
+                .controlSize(UITypography.controlSize(for: zoom))
             }
         }
         .padding(10)
@@ -230,7 +235,7 @@ struct IntentCard: View {
         HStack(spacing: 6) {
             switch intent.status {
             case .working:
-                ProgressView().controlSize(.mini)
+                ProgressView().controlSize(UITypography.controlSize(for: zoom, compact: true))
                 Text(state.permissionAsks[intent.step] != nil ? "Waiting for you…" : "Working…")
             case .pending:
                 chip("\(pendingCount) pending", .orange)
@@ -245,18 +250,18 @@ struct IntentCard: View {
             if intent.status == .working {
                 Spacer()
                 Button("Stop") { state.stop(step: intent.step) }
-                    .buttonStyle(.borderless).controlSize(.small)
+                    .buttonStyle(.borderless).controlSize(UITypography.controlSize(for: zoom))
                     .help("Stop the agent")
             }
         }
-        .font(.caption).foregroundStyle(.secondary)
+        .uiFont(.caption).foregroundStyle(.secondary)
         if let e = intent.error {
-            Text(e).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            Text(e).uiFont(.caption).foregroundStyle(.red).textSelection(.enabled)
         }
     }
 
     private func chip(_ s: String, _ c: Color) -> some View {
-        Text(s).font(.caption2.weight(.semibold))
+        Text(s).uiFont(.caption2, weight: .semibold)
             .padding(.horizontal, 6).padding(.vertical, 1)
             .background(Capsule().fill(c.opacity(0.15)))
             .foregroundStyle(c)
@@ -277,10 +282,10 @@ private struct AgentActivity: View {
             if working {
                 ForEach(steps.suffix(6)) { StepRow(step: $0) }
                 if steps.count > 6 {
-                    Text("+ \(steps.count - 6) earlier").font(.caption2).foregroundStyle(.tertiary)
+                    Text("+ \(steps.count - 6) earlier").uiFont(.caption2).foregroundStyle(.tertiary)
                 }
                 if let t = state.liveThought[intent.step]?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
-                    Text(t).font(.caption).italic().foregroundStyle(.secondary).lineLimit(3)
+                    Text(t).uiFont(.caption).italic().foregroundStyle(.secondary).lineLimit(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else if !steps.isEmpty {
@@ -288,10 +293,10 @@ private struct AgentActivity: View {
                     withAnimation(.easeOut(duration: 0.15)) { expanded.value.toggle() }
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: expanded.value ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .bold))
+                        Image(systemName: expanded.value ? "chevron.down" : "chevron.right").uiFont(size: 8, weight: .bold)
                         Text(summary)
                     }
-                    .font(.caption).foregroundStyle(.secondary)
+                    .uiFont(.caption).foregroundStyle(.secondary)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -317,23 +322,24 @@ private struct AgentActivity: View {
 }
 
 private struct StepRow: View {
+    @Environment(\.interfaceZoom) private var zoom
     let step: AgentStep
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Group {
                 switch step.status {
-                case .running: ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+                case .running: ProgressView().controlSize(UITypography.controlSize(for: zoom, compact: true)).frame(width: 10 * zoom, height: 10 * zoom)
                 case .done: Image(systemName: step.kind.symbol).foregroundStyle(.secondary)
                 case .failed: Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                 case .denied: Image(systemName: "hand.raised").foregroundStyle(.red)
                 }
             }
-            .font(.system(size: 9)).frame(width: 12)
+            .uiFont(size: 9).frame(width: 12 * zoom)
             Text(label).lineLimit(1).truncationMode(.middle)
                 .foregroundStyle(step.status == .denied ? .tertiary : .secondary)
                 .strikethrough(step.status == .denied)
         }
-        .font(.caption)
+        .uiFont(.caption)
         .help(step.detail.isEmpty ? step.title : step.detail)
     }
 
@@ -342,7 +348,7 @@ private struct StepRow: View {
         var a = AttributedString(step.title.isEmpty ? step.kind.rawValue.capitalized : step.title)
         if !firstLine.isEmpty, !step.title.contains(firstLine) {
             var d = AttributedString("  " + firstLine)
-            d.font = .system(.caption, design: .monospaced)
+            d.font = UITypography.font(.caption, scale: zoom, design: .monospaced)
             a += d
         }
         return a
@@ -352,20 +358,21 @@ private struct StepRow: View {
 /// Inline approval for a side-effecting tool call (Research mode).
 private struct PermissionPrompt: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.interfaceZoom) private var zoom
     let ask: PermissionAsk
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label(ask.request.title, systemImage: ask.request.kind.symbol)
-                .font(.caption.weight(.semibold))
+                .uiFont(.caption, weight: .semibold)
             if !ask.request.detail.isEmpty {
                 ScrollView {
                     Text(ask.request.detail)
-                        .font(.system(.caption, design: .monospaced))
+                        .uiFont(.caption, design: .monospaced)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 90)
+                .frame(maxHeight: 90 * zoom)
                 .padding(6)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
             }
@@ -375,9 +382,10 @@ private struct PermissionPrompt: View {
                     .help("Allow this and similar actions for the rest of this instruction")
                 Button("Deny") { state.answerPermission(step: ask.step, .deny) }
             }
-            .controlSize(.small)
+            .uiFont(.caption)
+            .controlSize(UITypography.controlSize(for: zoom))
             Text("The agent works in this document's workspace folder.")
-                .font(.caption2).foregroundStyle(.tertiary)
+                .uiFont(.caption2).foregroundStyle(.tertiary)
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.08)))
@@ -395,7 +403,7 @@ private struct ChangedFiles: View {
         VStack(alignment: .leading, spacing: 3) {
             Button { open.value.toggle() } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: open.value ? "chevron.down" : "chevron.right").font(.caption2)
+                    Image(systemName: open.value ? "chevron.down" : "chevron.right").uiFont(.caption2)
                     Image(systemName: "doc.badge.gearshape")
                     Text("Changed \(files.count) file\(files.count == 1 ? "" : "s") in \(state.projectName ?? "project")")
                 }
@@ -405,7 +413,7 @@ private struct ChangedFiles: View {
             if open.value {
                 ForEach(files, id: \.self) { f in
                     Button { state.openProjectFile(f) } label: {
-                        Text(f).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                        Text(f).uiFont(.caption, design: .monospaced).lineLimit(1).truncationMode(.middle)
                     }
                     .buttonStyle(.link)
                     .padding(.leading, 18)
@@ -413,6 +421,6 @@ private struct ChangedFiles: View {
                 }
             }
         }
-        .font(.caption).foregroundStyle(.secondary)
+        .uiFont(.caption).foregroundStyle(.secondary)
     }
 }

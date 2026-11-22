@@ -7,10 +7,14 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             IntentPane()
-                .interfaceZoom(state.zoom)
+                .environment(\.interfaceZoom, state.zoom)
+                .uiFont(.body)
                 .frame(minWidth: 220, idealWidth: 340, maxWidth: .infinity)
             VStack(spacing: 0) {
-                if let v = state.previewing { PreviewBanner(version: v).interfaceZoom(state.zoom) }
+                if let v = state.previewing {
+                    PreviewBanner(version: v)
+                        .environment(\.interfaceZoom, state.zoom)
+                }
                 EditorView(bridge: state.editor)
             }
             .frame(minWidth: 360, maxWidth: .infinity)
@@ -18,7 +22,8 @@ struct ContentView: View {
         }
         .inspector(isPresented: $state.showHistory) {
             HistoryView()
-                .interfaceZoom(state.zoom)
+                .environment(\.interfaceZoom, state.zoom)
+                .uiFont(.body)
                 .inspectorColumnWidth(min: 260, ideal: 320, max: 720)
         }
         .navigationTitle(state.doc.title)
@@ -204,7 +209,7 @@ struct PreviewBanner: View {
             Button("Restore this version") { state.restore(version) }
                 .buttonStyle(.borderedProminent)
         }
-        .font(.callout)
+        .uiFont(.callout)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.yellow.opacity(0.18))
