@@ -1,7 +1,22 @@
+import AppKit
 import MarginsCore
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        TabView {
+            ProvidersSettingsTab()
+                .tabItem { Label("Providers", systemImage: "cpu") }
+            AppearanceSettingsTab()
+                .tabItem { Label("Appearance", systemImage: "textformat") }
+        }
+        .frame(width: 720, height: 480)
+    }
+}
+
+private struct ProvidersSettingsTab: View {
     @EnvironmentObject var state: AppState
     @StateObject private var sel = Local<UUID?>(nil)
 
@@ -48,8 +63,84 @@ struct SettingsView: View {
                 Text("Select a provider").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 720, height: 460)
         .onAppear { sel.value = sel.value ?? state.activeProviderID }
+    }
+}
+
+private struct AppearanceSettingsTab: View {
+    @EnvironmentObject var state: AppState
+    private let installedFamilies = NSFontManager.shared.availableFontFamilies.sorted()
+
+    var body: some View {
+        Form {
+            Section("Document Font") {
+                FontPicker(label: "Font family", selection: $state.fontPreferences.documentFont, families: installedFamilies)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("The Quick Brown Fox")
+                        .font(UITypography.font(size: 18, scale: 1.0, weight: .semibold, family: state.fontPreferences.documentFont))
+                    Text("Margins keeps your prose readable while tracked changes stay clear and scannable.")
+                        .font(UITypography.font(size: 14, scale: 1.0, family: state.fontPreferences.documentFont))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+            Section("Interface Font") {
+                FontPicker(label: "Font family", selection: $state.fontPreferences.uiFont, families: installedFamilies)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("INSTRUCTIONS · 2 pending")
+                        .font(UITypography.font(.caption, scale: 1.0, weight: .semibold, family: state.fontPreferences.uiFont))
+                        .foregroundStyle(.secondary)
+                    Text("Tighten the opening paragraph and add a concrete example.")
+                        .font(UITypography.font(.body, scale: 1.0, weight: .medium, family: state.fontPreferences.uiFont))
+                }
+                .padding(.vertical, 4)
+            }
+            Section {
+                HStack {
+                    Text("Font changes apply immediately to all open windows.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Reset to Defaults") {
+                        state.fontPreferences = FontPreferences()
+                    }
+                    .disabled(state.fontPreferences == FontPreferences())
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct FontPicker: View {
+    let label: String
+    @Binding var selection: String
+    let families: [String]
+
+    private var isCustomUnlisted: Bool {
+        let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed != FontPreferences.systemSerif,
+              trimmed != FontPreferences.systemRounded,
+              trimmed != FontPreferences.systemMonospace else { return false }
+        return !families.contains(trimmed)
+    }
+
+    var body: some View {
+        Picker(label, selection: $selection) {
+            Text("System Default").tag(FontPreferences.systemDefault)
+            Text("System Serif").tag(FontPreferences.systemSerif)
+            Text("System Rounded").tag(FontPreferences.systemRounded)
+            Text("System Monospace").tag(FontPreferences.systemMonospace)
+            Divider()
+            if isCustomUnlisted {
+                Text(selection).tag(selection)
+                Divider()
+            }
+            ForEach(families, id: \.self) { family in
+                Text(family).tag(family)
+            }
+        }
     }
 }
 

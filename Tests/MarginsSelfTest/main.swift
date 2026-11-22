@@ -534,5 +534,19 @@ Task {
 }
 sem.wait()
 
+test("font preferences round trip and CSS stacks") {
+    let defaults = FontPreferences()
+    check(defaults.documentFontCSS == FontPreferences.defaultCSSStack, "default document font stack")
+    check(defaults.uiFontCSS == FontPreferences.defaultCSSStack, "default UI font stack")
+    check(FontPreferences.cssFontFamily(for: FontPreferences.systemSerif).contains("ui-serif"), "serif stack")
+    check(FontPreferences.cssFontFamily(for: FontPreferences.systemRounded).contains("ui-rounded"), "rounded stack")
+    check(FontPreferences.cssFontFamily(for: FontPreferences.systemMonospace).contains("ui-monospace"), "monospace stack")
+    let custom = FontPreferences(documentFont: "Charter", uiFont: "Helvetica \"Neue\"")
+    let decoded = try JSONDecoder().decode(FontPreferences.self, from: JSONEncoder().encode(custom))
+    check(decoded == custom, "font preferences round trip")
+    check(custom.documentFontCSS.hasPrefix("\"Charter\","), "custom document font quoted")
+    check(custom.uiFontCSS.hasPrefix("\"Helvetica \\\"Neue\\\"\","), "quotes escaped in CSS font family")
+}
+
 print(failures == 0 ? "✓ \(passes) checks passed" : "\(failures) failed, \(passes) passed")
 exit(failures == 0 ? 0 : 1)

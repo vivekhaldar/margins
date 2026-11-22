@@ -8,12 +8,14 @@ struct ContentView: View {
         HSplitView {
             IntentPane()
                 .environment(\.interfaceZoom, state.zoom)
+                .environment(\.uiFontFamily, state.fontPreferences.uiFont)
                 .uiFont(.body)
                 .frame(minWidth: 220, idealWidth: 340, maxWidth: .infinity)
             VStack(spacing: 0) {
                 if let v = state.previewing {
                     PreviewBanner(version: v)
                         .environment(\.interfaceZoom, state.zoom)
+                        .environment(\.uiFontFamily, state.fontPreferences.uiFont)
                 }
                 EditorView(bridge: state.editor)
             }
@@ -23,6 +25,7 @@ struct ContentView: View {
         .inspector(isPresented: $state.showHistory) {
             HistoryView()
                 .environment(\.interfaceZoom, state.zoom)
+                .environment(\.uiFontFamily, state.fontPreferences.uiFont)
                 .uiFont(.body)
                 .inspectorColumnWidth(min: 260, ideal: 320, max: 720)
         }

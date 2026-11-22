@@ -59,6 +59,13 @@ final class AppState: ObservableObject {
     @Published var activeProviderID: UUID { didSet { defaults.set(activeProviderID.uuidString, forKey: "activeProvider") } }
     @Published var models: [UUID: [ModelInfo]] = [:]
     @Published private(set) var zoom: Double = 1.0
+    @Published var fontPreferences: FontPreferences {
+        didSet {
+            guard fontPreferences != oldValue else { return }
+            persistFontPreferences()
+            applyFontsToEditor()
+        }
+    }
 
     let editor = EditorBridge()
     private var instances: [UUID: (config: ProviderConfig, provider: ModelProvider)] = [:]
@@ -77,6 +84,12 @@ final class AppState: ObservableObject {
         let saved = ud.string(forKey: "activeProvider").flatMap(UUID.init(uuidString:))
         providers = list
         activeProviderID = list.first { $0.id == saved }?.id ?? list.first { $0.enabled }?.id ?? list[0].id
+        if let data = ud.data(forKey: "fontPreferences"),
+           let storedFonts = try? JSONDecoder().decode(FontPreferences.self, from: data) {
+            fontPreferences = storedFonts
+        } else {
+            fontPreferences = FontPreferences()
+        }
         fileURL = untitledURL ?? Self.newUntitledURL()
 
         editor.onMessage = { [weak self] type, body in self?.handle(type, body) }
@@ -90,7 +103,10 @@ final class AppState: ObservableObject {
         settingsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: ud, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.reloadProviderSettings() }
+            Task { @MainActor in
+                self?.reloadProviderSettings()
+                self?.reloadFontPreferences()
+            }
         }
 
         if restoreLastDocument, let last = defaults.url(forKey: "lastDocument"), FileManager.default.fileExists(atPath: last.path) {
@@ -146,6 +162,24 @@ final class AppState: ObservableObject {
 
     private func persistProviders() {
         if let d = try? JSONEncoder().encode(providers) { defaults.set(d, forKey: "providers") }
+    }
+
+    private func reloadFontPreferences() {
+        guard let data = defaults.data(forKey: "fontPreferences"),
+              let stored = try? JSONDecoder().decode(FontPreferences.self, from: data) else { return }
+        if fontPreferences != stored {
+            fontPreferences = stored
+        }
+    }
+
+    private func persistFontPreferences() {
+        if let d = try? JSONEncoder().encode(fontPreferences) { defaults.set(d, forKey: "fontPreferences") }
+    }
+
+    private func applyFontsToEditor() {
+        let docFont = fontPreferences.documentFontCSS
+        let uiFont = fontPreferences.uiFontCSS
+        Task { await editor.setFonts(document: docFont, ui: uiFont) }
     }
 
     func provider(for config: ProviderConfig) throws -> ModelProvider {
@@ -831,6 +865,7 @@ final class AppState: ObservableObject {
             let session = documentSessionID
             Task {
                 await editor.setOutline(showOutline)
+                await editor.setFonts(document: fontPreferences.documentFontCSS, ui: fontPreferences.uiFontCSS)
                 await loadEditorDocument(session: session)
             }
         case "outline":

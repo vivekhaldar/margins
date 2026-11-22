@@ -1,13 +1,23 @@
+import MarginsCore
 import SwiftUI
 
 private struct InterfaceZoomKey: EnvironmentKey {
     static let defaultValue: Double = 1.0
 }
 
+private struct UIFontFamilyKey: EnvironmentKey {
+    static let defaultValue: String = FontPreferences.systemDefault
+}
+
 extension EnvironmentValues {
     var interfaceZoom: Double {
         get { self[InterfaceZoomKey.self] }
         set { self[InterfaceZoomKey.self] = newValue }
+    }
+
+    var uiFontFamily: String {
+        get { self[UIFontFamilyKey.self] }
+        set { self[UIFontFamilyKey.self] = newValue }
     }
 }
 
@@ -37,12 +47,29 @@ enum UITextStyle {
 }
 
 enum UITypography {
-    static func font(_ style: UITextStyle, scale: Double, weight: Font.Weight? = nil, design: Font.Design = .default) -> Font {
-        font(size: style.baseSize, scale: scale, weight: weight ?? style.defaultWeight, design: design)
+    static func font(_ style: UITextStyle, scale: Double, weight: Font.Weight? = nil, design: Font.Design = .default, family: String = FontPreferences.systemDefault) -> Font {
+        font(size: style.baseSize, scale: scale, weight: weight ?? style.defaultWeight, design: design, family: family)
     }
 
-    static func font(size: CGFloat, scale: Double, weight: Font.Weight? = nil, design: Font.Design = .default) -> Font {
-        .system(size: max(6, size * CGFloat(scale)), weight: weight ?? .regular, design: design)
+    static func font(size: CGFloat, scale: Double, weight: Font.Weight? = nil, design: Font.Design = .default, family: String = FontPreferences.systemDefault) -> Font {
+        let pts = max(6, size * CGFloat(scale))
+        let w = weight ?? .regular
+        if design == .monospaced {
+            return .system(size: pts, weight: w, design: .monospaced)
+        }
+        let trimmed = family.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch trimmed {
+        case "", FontPreferences.systemDefault:
+            return .system(size: pts, weight: w, design: design)
+        case FontPreferences.systemSerif:
+            return .system(size: pts, weight: w, design: .serif)
+        case FontPreferences.systemRounded:
+            return .system(size: pts, weight: w, design: .rounded)
+        case FontPreferences.systemMonospace:
+            return .system(size: pts, weight: w, design: .monospaced)
+        default:
+            return .custom(trimmed, fixedSize: pts).weight(w)
+        }
     }
 
     static func controlSize(for scale: Double, compact: Bool = false) -> ControlSize {
@@ -55,12 +82,13 @@ enum UITypography {
 
 private struct ScaledFontModifier: ViewModifier {
     @Environment(\.interfaceZoom) private var zoom
+    @Environment(\.uiFontFamily) private var fontFamily
     let size: CGFloat
     let weight: Font.Weight?
     let design: Font.Design
 
     func body(content: Content) -> some View {
-        content.font(UITypography.font(size: size, scale: zoom, weight: weight, design: design))
+        content.font(UITypography.font(size: size, scale: zoom, weight: weight, design: design, family: fontFamily))
     }
 }
 

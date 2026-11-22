@@ -1484,6 +1484,13 @@
     },
     insertImage: (src, alt) => insertImage(src, alt),
     setOutline: (on) => setOutline(on),
+    setFonts(docFont, uiFont) {
+      const root = document.documentElement.style;
+      if (docFont) root.setProperty('--doc-font', docFont);
+      else root.removeProperty('--doc-font');
+      if (uiFont) root.setProperty('--ui-font', uiFont);
+      else root.removeProperty('--ui-font');
+    },
     showFind,
     findNext,
     editLink: () => editLink(),

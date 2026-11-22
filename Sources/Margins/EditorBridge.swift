@@ -184,6 +184,9 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("window.margins.insertImage(src, alt)", ["src": src, "alt": alt])
     }
     func setOutline(_ on: Bool) async { _ = try? await call("window.margins.setOutline(on)", ["on": on]) }
+    func setFonts(document: String, ui: String) async {
+        _ = try? await call("window.margins.setFonts(docFont, uiFont)", ["docFont": document, "uiFont": ui])
+    }
     func setThreads(_ list: [[String: Any]]) async { _ = try? await call("window.margins.setThreads(list)", ["list": list]) }
     func setAnnotationRuns(_ runs: [AnnotationRun], availableIntentIDs: Set<UUID>? = nil) async {
         var payload = Self.jsonObject(runs) as? [[String: Any]] ?? []
