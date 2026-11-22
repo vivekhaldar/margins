@@ -1,18 +1,20 @@
 import Foundation
 
-/// Finds CLI binaries. Apps launched from Finder get a minimal PATH, so we search
-/// common install locations and fall back to asking a login shell.
+/// Finds CLI binaries. Apps launched from Finder get a minimal PATH, so we merge the
+/// user's login shell PATH with common install locations and fall back to a shell lookup.
 public enum BinaryLocator {
     private static var cache: [String: URL] = [:]
     private static let lock = NSLock()
+    private static let minimalSystemPath: Set<String> = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    private static let supportedShellNames: Set<String> = ["zsh", "bash", "sh", "ksh", "dash", "fish"]
+    private static let cachedLoginShellPath: [String] = loadLoginShellPath()
 
     public static var searchDirectories: [String] {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        var dirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        dirs += ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.npm-global/bin",
-                 "\(home)/.bun/bin", "\(home)/.volta/bin", "/usr/bin"]
-        var seen = Set<String>()
-        return dirs.filter { seen.insert($0).inserted }
+        mergedSearchDirectories(
+            inheritedPath: ProcessInfo.processInfo.environment["PATH"],
+            loginShellDirectories: cachedLoginShellPath,
+            home: FileManager.default.homeDirectoryForCurrentUser.path
+        )
     }
 
     public static func locate(_ name: String, override: String = "") -> URL? {
@@ -22,45 +24,216 @@ public enum BinaryLocator {
             return fm.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
         }
         guard !name.isEmpty else { return nil }
-        lock.lock(); defer { lock.unlock() }
-        if let hit = cache[name], fm.isExecutableFile(atPath: hit.path) { return hit }
+        lock.lock()
+        let cached = cache[name]
+        lock.unlock()
+        if let hit = cached, fm.isExecutableFile(atPath: hit.path) { return hit }
         for dir in searchDirectories {
             let p = (dir as NSString).appendingPathComponent(name)
             if fm.isExecutableFile(atPath: p) {
                 let u = URL(fileURLWithPath: p)
-                cache[name] = u
+                lock.lock(); cache[name] = u; lock.unlock()
                 return u
             }
         }
         if let p = loginShellLookup(name), fm.isExecutableFile(atPath: p) {
             let u = URL(fileURLWithPath: p)
-            cache[name] = u
+            lock.lock(); cache[name] = u; lock.unlock()
             return u
         }
         return nil
     }
 
-    private static func loginShellLookup(_ name: String) -> String? {
-        guard name.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil else { return nil }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-lc", "command -v \(name)"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return nil }
-        p.waitUntilExit()
-        let s = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (s?.hasPrefix("/") == true) ? s : nil
+    /// Environment for child processes: inherit, with PATH augmented from the user's login shell
+    /// and common install locations (CLIs like `copilot` and `codex` are node scripts that need
+    /// `node` on PATH).
+    public static var childEnvironment: [String: String] {
+        childEnvironment(for: nil)
     }
 
-    /// Environment for child processes: inherit, but make sure PATH includes the usual dirs
-    /// (CLIs like `codex` are node scripts that need `node` on PATH).
-    public static var childEnvironment: [String: String] {
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = searchDirectories.joined(separator: ":")
+    public static func childEnvironment(for executable: URL?) -> [String: String] {
+        let extra = executable.map { [$0.deletingLastPathComponent().path] } ?? []
+        return childEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            loginShellDirectories: cachedLoginShellPath,
+            home: FileManager.default.homeDirectoryForCurrentUser.path,
+            extraDirectories: extra
+        )
+    }
+
+    static func childEnvironment(
+        base: [String: String],
+        loginShellDirectories: [String],
+        home: String,
+        extraDirectories: [String] = []
+    ) -> [String: String] {
+        var env = base
+        env["PATH"] = mergedSearchDirectories(
+            inheritedPath: base["PATH"],
+            loginShellDirectories: loginShellDirectories,
+            home: home,
+            extraDirectories: extraDirectories
+        ).joined(separator: ":")
         return env
+    }
+
+    static func fallbackDirectories(home: String) -> [String] {
+        [
+            "\(home)/bin",
+            "\(home)/.local/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "\(home)/.npm-global/bin",
+            "\(home)/.bun/bin",
+            "\(home)/.volta/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+    }
+
+    static func splitPath(_ path: String?) -> [String] {
+        guard let path, !path.isEmpty else { return [] }
+        return path.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+    }
+
+    static func mergedSearchDirectories(
+        inheritedPath: String?,
+        loginShellDirectories: [String],
+        home: String,
+        extraDirectories: [String] = []
+    ) -> [String] {
+        let inherited = splitPath(inheritedPath)
+        let fallbacks = fallbackDirectories(home: home)
+        let hasMinimalInheritedPath = inherited.isEmpty || inherited.allSatisfy { minimalSystemPath.contains($0) }
+
+        var dirs: [String] = []
+        if hasMinimalInheritedPath {
+            // GUI launches inherit only minimal system dirs; prefer the user's login shell PATH
+            // and user/Homebrew locations ahead of /usr/bin.
+            dirs += loginShellDirectories
+            dirs += fallbacks
+            dirs += inherited
+        } else {
+            dirs += inherited
+            dirs += loginShellDirectories
+            dirs += fallbacks
+        }
+        dirs += extraDirectories
+
+        var seen = Set<String>()
+        return dirs.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    static func loginShellURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> URL {
+        if let shell = environment["SHELL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           shell.hasPrefix("/"),
+           isExecutable(shell) {
+            let name = URL(fileURLWithPath: shell).lastPathComponent
+            if supportedShellNames.contains(name) {
+                return URL(fileURLWithPath: shell)
+            }
+        }
+        return URL(fileURLWithPath: "/bin/zsh")
+    }
+
+    static func loginShellPathCommand(for shell: URL, startMarker: String, endMarker: String) -> String {
+        if shell.lastPathComponent == "fish" {
+            return "printf '%s' '\(startMarker)'; /usr/bin/printenv PATH; printf '%s' '\(endMarker)'"
+        }
+        return "printf '%s%s%s' '\(startMarker)' \"$PATH\" '\(endMarker)'"
+    }
+
+    static func extractMarkedOutput(_ output: String, startMarker: String, endMarker: String) -> String? {
+        guard let startRange = output.range(of: startMarker),
+              let endRange = output.range(of: endMarker, range: startRange.upperBound..<output.endIndex) else {
+            return nil
+        }
+        return String(output[startRange.upperBound..<endRange.lowerBound])
+            .trimmingCharacters(in: .newlines)
+    }
+
+    static func loadLoginShellPath(
+        shell: URL? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        timeout: TimeInterval = 5.0
+    ) -> [String] {
+        let shellURL = shell ?? loginShellURL(environment: environment)
+        let id = UUID().uuidString
+        let start = "__MARGINS_PATH_START_\(id)__"
+        let end = "__MARGINS_PATH_END_\(id)__"
+        let cmd = loginShellPathCommand(for: shellURL, startMarker: start, endMarker: end)
+        guard let raw = runShellCommand(shell: shellURL, arguments: ["-l", "-c", cmd], environment: environment, timeout: timeout),
+              let extracted = extractMarkedOutput(raw, startMarker: start, endMarker: end) else {
+            return []
+        }
+        return splitPath(extracted)
+    }
+
+    private static func loginShellLookup(_ name: String) -> String? {
+        guard name.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil else { return nil }
+        let shellURL = loginShellURL()
+        let id = UUID().uuidString
+        let start = "__MARGINS_WHICH_START_\(id)__"
+        let end = "__MARGINS_WHICH_END_\(id)__"
+        let cmd = "printf '%s' '\(start)'; command -v '\(name)'; printf '%s' '\(end)'"
+        guard let raw = runShellCommand(shell: shellURL, arguments: ["-l", "-c", cmd]),
+              let extracted = extractMarkedOutput(raw, startMarker: start, endMarker: end) else {
+            return nil
+        }
+        let path = extracted.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.hasPrefix("/") ? path : nil
+    }
+
+    static func runShellCommand(
+        shell: URL,
+        arguments: [String],
+        environment: [String: String]? = nil,
+        timeout: TimeInterval = 5.0
+    ) -> String? {
+        let p = Process()
+        p.executableURL = shell
+        p.arguments = arguments
+        if let environment { p.environment = environment }
+        let out = Pipe()
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+
+        let exited = DispatchSemaphore(value: 0)
+        let readDone = DispatchSemaphore(value: 0)
+        let box = DataBox()
+
+        p.terminationHandler = { _ in exited.signal() }
+
+        do {
+            try p.run()
+        } catch {
+            return nil
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.data = out.fileHandleForReading.readDataToEndOfFile()
+            readDone.signal()
+        }
+
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
+            if p.isRunning { p.terminate() }
+            if exited.wait(timeout: .now() + 0.5) == .timedOut {
+                let pid = p.processIdentifier
+                if pid > 0, p.isRunning { kill(pid, SIGKILL) }
+                _ = exited.wait(timeout: .now() + 0.5)
+            }
+            return nil
+        }
+
+        guard readDone.wait(timeout: .now() + 1.0) == .success else { return nil }
+        guard p.terminationStatus == 0 else { return nil }
+        return String(decoding: box.data, as: UTF8.self)
     }
 }
 
@@ -79,7 +252,7 @@ public enum ProcessRunner {
         let p = Process()
         p.executableURL = executable
         p.arguments = arguments
-        p.environment = environment ?? BinaryLocator.childEnvironment
+        p.environment = environment ?? BinaryLocator.childEnvironment(for: executable)
         if let cwd { p.currentDirectoryURL = cwd }
         let outPipe = Pipe(), errPipe = Pipe(), inPipe = Pipe()
         p.standardOutput = outPipe

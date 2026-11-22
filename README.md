@@ -155,7 +155,7 @@ Swift-based editor integration checks still require a Mac with macOS 14+ and Swi
 ## Packaging a release
 
 ```sh
-MARGINS_VERSION=0.2.1 scripts/build-dmg.sh
+MARGINS_VERSION=0.2.2 scripts/build-dmg.sh
 ```
 
 This builds a release app, packages it with an Applications shortcut, README and license, and writes a DMG plus a SHA-256 checksum under `build/`. Set `MARGINS_BUILD_NUMBER` to override the numeric bundle build number. The script builds for the host architecture; it does not notarize or publish the result. Publish the DMG, checksum and matching source snapshot through [GitHub Releases](https://github.com/vivekhaldar/margins/releases).

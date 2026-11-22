@@ -41,6 +41,7 @@ public enum ProjectChanges {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         p.arguments = ["git", "-C", dir.path] + args
+        p.environment = BinaryLocator.childEnvironment
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice

@@ -25,7 +25,7 @@ public final class ACPClient: @unchecked Sendable {
         process.executableURL = executable
         process.arguments = arguments
         process.currentDirectoryURL = cwd
-        process.environment = BinaryLocator.childEnvironment
+        process.environment = BinaryLocator.childEnvironment(for: executable)
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         let errPipe = Pipe()

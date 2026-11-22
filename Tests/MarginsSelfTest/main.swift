@@ -250,6 +250,79 @@ test("binary locator") {
     check(BinaryLocator.locate("sh") != nil, "finds sh")
     check(BinaryLocator.locate("definitely-not-a-binary-xyz") == nil, "missing")
     check(BinaryLocator.locate("x", override: "/bin/sh")?.path == "/bin/sh", "override")
+
+    // GUI launch inherits only minimal system PATH: login shell PATH and ~/bin come before /usr/bin.
+    let guiEnv = BinaryLocator.childEnvironment(
+        base: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/Users/test", "CUSTOM": "1"],
+        loginShellDirectories: ["/Users/test/bin", "/Users/test/.nvm/versions/node/v22/bin", "/usr/bin", "/bin"],
+        home: "/Users/test",
+        extraDirectories: ["/Users/test/custom/bin"]
+    )
+    let guiDirs = BinaryLocator.splitPath(guiEnv["PATH"])
+    check(guiEnv["CUSTOM"] == "1", "preserves inherited env vars")
+    check(guiDirs.first == "/Users/test/bin", "login shell PATH precedes minimal GUI PATH")
+    check(guiDirs.contains("/Users/test/.nvm/versions/node/v22/bin"), "includes login shell node dir")
+    check(guiDirs.contains("/Users/test/custom/bin"), "includes executable parent dir")
+    check(guiDirs.firstIndex(of: "/Users/test/bin")! < guiDirs.firstIndex(of: "/usr/bin")!, "~/bin precedes /usr/bin")
+    check(Set(guiDirs).count == guiDirs.count, "deduplicates PATH entries")
+
+    // Even if login shell PATH is empty, ~/bin and common dirs still precede minimal GUI /usr/bin.
+    let fallbackDirs = BinaryLocator.mergedSearchDirectories(
+        inheritedPath: "/usr/bin:/bin:/usr/sbin:/sbin",
+        loginShellDirectories: [],
+        home: "/Users/test"
+    )
+    check(fallbackDirs.first == "/Users/test/bin", "fallback includes ~/bin first on minimal GUI PATH")
+    check(fallbackDirs.contains("/Users/test/.local/bin") && fallbackDirs.contains("/opt/homebrew/bin"), "includes standard fallbacks")
+    check(fallbackDirs.firstIndex(of: "/Users/test/bin")! < fallbackDirs.firstIndex(of: "/usr/bin")!, "fallback ~/bin precedes /usr/bin")
+
+    // Rich caller PATH keeps caller precedence while appending login shell and fallback dirs.
+    let cliDirs = BinaryLocator.mergedSearchDirectories(
+        inheritedPath: "/override/bin:/usr/bin:/bin",
+        loginShellDirectories: ["/Users/test/bin", "/usr/bin"],
+        home: "/Users/test"
+    )
+    check(cliDirs.first == "/override/bin", "custom inherited PATH keeps precedence")
+    check(cliDirs.contains("/Users/test/bin"), "merges login shell dirs into custom PATH")
+    check(Set(cliDirs).count == cliDirs.count, "deduplicates merged CLI PATH")
+
+    // Marker extraction isolates PATH from noisy shell profiles and preserves spaces.
+    let noisy = "Welcome to zsh!\n__START__/Users/test/My Apps/bin:/Users/test/bin:/usr/bin\n__END__\nbye\n"
+    check(BinaryLocator.extractMarkedOutput(noisy, startMarker: "__START__", endMarker: "__END__") == "/Users/test/My Apps/bin:/Users/test/bin:/usr/bin",
+          "isolates PATH from profile noise")
+    check(BinaryLocator.extractMarkedOutput("no markers here", startMarker: "__START__", endMarker: "__END__") == nil,
+          "missing markers return nil")
+
+    // Shell selection honors executable supported $SHELL and falls back to /bin/zsh.
+    check(BinaryLocator.loginShellURL(environment: ["SHELL": "/opt/homebrew/bin/bash"], isExecutable: { _ in true }).path == "/opt/homebrew/bin/bash",
+          "uses supported executable $SHELL")
+    check(BinaryLocator.loginShellURL(environment: ["SHELL": "/opt/homebrew/bin/fish"], isExecutable: { _ in true }).path == "/opt/homebrew/bin/fish",
+          "supports fish $SHELL")
+    check(BinaryLocator.loginShellURL(environment: ["SHELL": "/sbin/nologin"], isExecutable: { _ in true }).path == "/bin/zsh",
+          "falls back to /bin/zsh for unsupported shell")
+    check(BinaryLocator.loginShellURL(environment: ["SHELL": "/no/such/zsh"], isExecutable: { _ in false }).path == "/bin/zsh",
+          "falls back to /bin/zsh for non-executable shell")
+    check(BinaryLocator.loginShellURL(environment: [:], isExecutable: { _ in true }).path == "/bin/zsh",
+          "falls back to /bin/zsh when $SHELL is unset")
+    check(BinaryLocator.loginShellPathCommand(for: URL(fileURLWithPath: "/opt/homebrew/bin/fish"), startMarker: "S", endMarker: "E").contains("/usr/bin/printenv PATH"),
+          "fish uses printenv PATH for colon-separated output")
+
+    // Shell execution captures marked output amid noise and times out cleanly on hangs.
+    let noisyRun = BinaryLocator.runShellCommand(
+        shell: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "echo banner; printf '%s%s%s' '__S__' '/custom/bin:/usr/bin' '__E__'; echo footer"],
+        timeout: 2.0
+    )
+    check(noisyRun.flatMap { BinaryLocator.extractMarkedOutput($0, startMarker: "__S__", endMarker: "__E__") } == "/custom/bin:/usr/bin",
+          "shell command extracts marked PATH amid stdout noise")
+    let timedOut = BinaryLocator.runShellCommand(shell: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "exec sleep 5"], timeout: 0.2)
+    check(timedOut == nil, "shell command times out cleanly")
+
+    // Live childEnvironment always includes ~/bin and standard system dirs.
+    let liveHome = FileManager.default.homeDirectoryForCurrentUser.path
+    let liveDirs = BinaryLocator.splitPath(BinaryLocator.childEnvironment["PATH"])
+    check(liveDirs.contains("\(liveHome)/bin") && liveDirs.contains("/usr/bin") && liveDirs.contains("/bin"),
+          "live childEnvironment includes ~/bin and system dirs")
 }
 
 test("agent policy auto-decisions") {
