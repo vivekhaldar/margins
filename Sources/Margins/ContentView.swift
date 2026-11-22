@@ -8,17 +8,18 @@ struct ContentView: View {
         HSplitView {
             IntentPane()
                 .interfaceZoom(state.zoom)
-                .frame(minWidth: 280, idealWidth: 340, maxWidth: 420)
+                .frame(minWidth: 220, idealWidth: 340, maxWidth: .infinity)
             VStack(spacing: 0) {
                 if let v = state.previewing { PreviewBanner(version: v).interfaceZoom(state.zoom) }
                 EditorView(bridge: state.editor)
             }
-            .frame(minWidth: 480)
+            .frame(minWidth: 360, maxWidth: .infinity)
+            .layoutPriority(1)
         }
         .inspector(isPresented: $state.showHistory) {
             HistoryView()
                 .interfaceZoom(state.zoom)
-                .inspectorColumnWidth(min: 260, ideal: 320, max: 460)
+                .inspectorColumnWidth(min: 260, ideal: 320, max: 720)
         }
         .navigationTitle(state.doc.title)
         .navigationSubtitle(subtitle)
