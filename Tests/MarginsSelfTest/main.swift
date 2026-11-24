@@ -648,6 +648,8 @@ test("Google desktop client in a distribution build") {
     let own = GoogleOAuthConfig(clientID: "custom")
     check(own.usingDefault(bundled) == own, "custom IDs never inherit another client's secret")
     check(GoogleOAuthConfig(clientID: "release").usingDefault(bundled) == bundled, "existing matching ID uses the bundled secret")
+    check(GoogleOAuthConfig(clientID: "  release \n", clientSecret: "  ").usingDefault(bundled) == bundled, "whitespace-padded matching ID uses the bundled secret")
+    check(GoogleOAuthConfig(clientID: "  custom  ", clientSecret: " secret ").usingDefault(bundled) == GoogleOAuthConfig(clientID: "custom", clientSecret: "secret"), "custom client ID and secret are trimmed")
     let override = GoogleOAuthConfig(clientID: "release", clientSecret: "override")
     check(override.usingDefault(bundled) == override, "explicit client secret takes precedence")
 }

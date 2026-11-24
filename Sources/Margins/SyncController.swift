@@ -15,6 +15,7 @@ final class SyncController: ObservableObject {
         clientID: Bundle.main.object(forInfoDictionaryKey: "MarginsGoogleClientID") as? String ?? "",
         clientSecret: Bundle.main.object(forInfoDictionaryKey: "MarginsGoogleClientSecret") as? String ?? ""
     )
+    var hasBundledOAuthClient: Bool { Self.bundledConfig.isConfigured }
     var hasOAuthClient: Bool { oauthConfig.usingDefault(Self.bundledConfig).isConfigured }
     private static let onboardingDismissedKey = "syncOnboardingDismissed"
     static var indexURL: URL {

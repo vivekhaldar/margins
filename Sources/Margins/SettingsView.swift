@@ -300,14 +300,16 @@ private struct SyncSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            DisclosureGroup("Use a custom Google OAuth client") {
-                TextField("Google OAuth Client ID", text: $sync.oauthConfig.clientID,
-                          prompt: Text("1234567890-xxxx.apps.googleusercontent.com"))
-                SecureField("Client Secret (optional)", text: $sync.oauthConfig.clientSecret,
-                            prompt: Text("Required by some Google Desktop OAuth clients"))
-                Text("Leave the Client ID empty to use the client included in a distribution build. For a custom client, enable the Google Drive API and choose the Desktop app type.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            if !sync.hasBundledOAuthClient {
+                DisclosureGroup("Use a custom Google OAuth client") {
+                    TextField("Google OAuth Client ID", text: $sync.oauthConfig.clientID,
+                              prompt: Text("1234567890-xxxx.apps.googleusercontent.com"))
+                    SecureField("Client Secret (optional)", text: $sync.oauthConfig.clientSecret,
+                                prompt: Text("Required by some Google Desktop OAuth clients"))
+                    Text("Leave the Client ID empty to use the client included in a distribution build. For a custom client, enable the Google Drive API and choose the Desktop app type.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Local Library") {

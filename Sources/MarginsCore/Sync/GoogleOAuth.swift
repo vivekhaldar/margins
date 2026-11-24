@@ -104,11 +104,14 @@ public struct GoogleOAuthConfig: Codable, Equatable, Sendable {
 
     /// Settings may override the desktop client shipped with a release.
     public func usingDefault(_ bundled: GoogleOAuthConfig) -> GoogleOAuthConfig {
-        guard isConfigured else { return bundled }
-        if clientID == bundled.clientID && clientSecret.isEmpty {
-            return GoogleOAuthConfig(clientID: clientID, clientSecret: bundled.clientSecret, scope: scope)
+        let trimmedID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return bundled }
+        let trimmedSecret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bundledID = bundled.clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedID == bundledID && trimmedSecret.isEmpty {
+            return GoogleOAuthConfig(clientID: trimmedID, clientSecret: bundled.clientSecret, scope: scope)
         }
-        return self
+        return GoogleOAuthConfig(clientID: trimmedID, clientSecret: trimmedSecret, scope: scope)
     }
 }
 
