@@ -84,6 +84,15 @@ public struct SyncIndex: Codable, Equatable, Sendable {
         entries.values.first { $0.filename == filename }
     }
 
+    /// Older builds could record several IDs for one legacy filename. Prefer a
+    /// known Drive copy of these bytes, then an active local entry for the path.
+    public func legacyID(filename: String, contentHash: String) -> UUID? {
+        let candidates = entries.values.filter { $0.filename == filename }
+        let remote = candidates.filter { $0.driveFileId != nil && $0.lastSyncedContentHash == contentHash }
+        let local = candidates.filter { $0.driveFileId == nil && $0.state == .pendingUpload }
+        return (remote.isEmpty ? local : remote).min { $0.docID.uuidString < $1.docID.uuidString }?.docID
+    }
+
     public var sortedByRecency: [SyncEntry] {
         entries.values.sorted {
             if $0.modifiedAt != $1.modifiedAt { return $0.modifiedAt > $1.modifiedAt }
