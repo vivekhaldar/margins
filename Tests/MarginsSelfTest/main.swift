@@ -614,5 +614,225 @@ test("file change watcher detects external atomic writes and ignores self writes
     check(collector.count == 1, "exactly one external change notification")
 }
 
+// --- Phase 1: Google OAuth & Drive backend tests ---
+
+final class MockHTTPClient: HTTPClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var handlers: [@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)]
+    private var recordedRequests: [URLRequest] = []
+
+    init(_ handlers: [@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)]) {
+        self.handlers = handlers
+    }
+
+    var requests: [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedRequests
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        lock.lock()
+        recordedRequests.append(request)
+        let handler = handlers.isEmpty ? nil : handlers.removeFirst()
+        lock.unlock()
+        guard let handler else {
+            throw SyncError.invalidResponse("Unexpected HTTP request: \(request.url?.absoluteString ?? "")")
+        }
+        return try await handler(request)
+    }
+
+    static func jsonResponse(_ obj: Any, status: Int = 200, url: URL = URL(string: "https://example.com")!) -> (Data, HTTPURLResponse) {
+        let data = try! JSONSerialization.data(withJSONObject: obj)
+        let resp = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        return (data, resp)
+    }
+}
+
+test("PKCE challenge and loopback callback parser") {
+    // RFC 7636 Appendix B test vector:
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    check(PKCE.challenge(for: verifier) == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", "RFC 7636 S256 challenge matches")
+
+    let ok = LoopbackOAuthServer.parseCallbackRequest("GET /callback?code=abc123&state=xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", expectedState: "xyz")
+    check((try? ok.get()) == "abc123", "valid callback extracts code")
+
+    let mismatch = LoopbackOAuthServer.parseCallbackRequest("GET /callback?code=abc&state=wrong HTTP/1.1\r\n", expectedState: "xyz")
+    check((try? mismatch.get()) == nil, "state mismatch rejected")
+
+    let err = LoopbackOAuthServer.parseCallbackRequest("GET /callback?error=access_denied&state=xyz HTTP/1.1\r\n", expectedState: "xyz")
+    check((try? err.get()) == nil, "oauth error rejected")
+}
+
+let oauthSem = DispatchSemaphore(value: 0)
+Task {
+    // End-to-end loopback socket test
+    do {
+        let server = try LoopbackOAuthServer()
+        check(server.port > 0, "loopback binds ephemeral port")
+        let redirect = server.redirectURI
+        let waitTask = Task { try await server.waitForCode(expectedState: "st42", timeout: 5) }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let cbURL = URL(string: "\(redirect)?code=auth-code-99&state=st42")!
+        let (body, resp) = try await URLSession.shared.data(from: cbURL)
+        check((resp as? HTTPURLResponse)?.statusCode == 200, "loopback returns HTTP 200")
+        check(String(decoding: body, as: UTF8.self).contains("Signed in to Google Drive"), "loopback returns confirmation HTML")
+        let code = try await waitTask.value
+        check(code == "auth-code-99", "loopback delivers authorization code")
+    } catch {
+        check(false, "loopback server test threw \(error)")
+    }
+
+    // OAuth client authorization URL, code exchange, refresh, and disconnect
+    do {
+        let store = MemoryTokenStore()
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+        let http = MockHTTPClient([
+            { req in
+                let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+                check(body.contains("grant_type=authorization_code"), "code exchange grant_type")
+                check(body.contains("code_verifier=ver123"), "code exchange includes PKCE verifier")
+                return MockHTTPClient.jsonResponse([
+                    "access_token": "tok-1",
+                    "refresh_token": "ref-1",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                    "scope": GoogleOAuthConfig.driveFileScope,
+                ])
+            },
+            { req in
+                let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+                check(body.contains("grant_type=refresh_token"), "refresh grant_type")
+                check(body.contains("refresh_token=ref-1"), "refresh sends stored refresh token")
+                return MockHTTPClient.jsonResponse([
+                    "access_token": "tok-2",
+                    "expires_in": 3600,
+                ])
+            },
+            { req in
+                check(req.url?.absoluteString == GoogleOAuthConfig.revokeEndpoint, "revoke endpoint called")
+                return MockHTTPClient.jsonResponse([:])
+            },
+        ])
+        let oauth = GoogleOAuthClient(
+            config: GoogleOAuthConfig(clientID: "test-client-id"),
+            tokenStore: store,
+            http: http,
+            now: { fixedNow }
+        )
+        let pkce = PKCE(codeVerifier: "ver123", state: "st1")
+        let authURL = try await oauth.authorizationURL(redirectURI: "http://127.0.0.1:9999/callback", pkce: pkce)
+        let authStr = authURL.absoluteString
+        check(authStr.contains("scope=https://www.googleapis.com/auth/drive.file"), "auth URL uses drive.file scope")
+        check(authStr.contains("code_challenge_method=S256"), "auth URL uses S256 PKCE")
+        check(authStr.contains("access_type=offline"), "auth URL requests offline refresh token")
+
+        let exchanged = try await oauth.exchangeCode("code-1", redirectURI: "http://127.0.0.1:9999/callback", codeVerifier: "ver123")
+        check(exchanged.accessToken == "tok-1" && exchanged.refreshToken == "ref-1", "tokens stored from exchange")
+        let cachedToken = try await oauth.validAccessToken()
+        check(cachedToken == "tok-1", "returns cached non-expired token")
+
+        let refreshed = try await oauth.validAccessToken(forceRefresh: true)
+        check(refreshed == "tok-2", "forceRefresh fetches new access token")
+        check(store.load()?.refreshToken == "ref-1", "refresh preserves existing refresh token when omitted")
+
+        await oauth.disconnect()
+        check(store.load() == nil, "disconnect clears stored tokens")
+    } catch {
+        check(false, "oauth client test threw \(error)")
+    }
+
+    // GoogleDriveBackend: ensureRootFolder (create), upload, listChanges pagination, 401 retry
+    do {
+        let docID = UUID()
+        final class RefreshRecorder: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [Bool] = []
+            func record(_ v: Bool) { lock.lock(); values.append(v); lock.unlock() }
+            var all: [Bool] { lock.lock(); defer { lock.unlock() }; return values }
+        }
+        let recorder = RefreshRecorder()
+        let http = MockHTTPClient([
+            // ensureRootFolder: search returns empty
+            { req in
+                check(req.url?.absoluteString.contains("marginsRoot") == true, "root folder query uses appProperties")
+                return MockHTTPClient.jsonResponse(["files": []])
+            },
+            // ensureRootFolder: creates folder
+            { req in
+                check(req.httpMethod == "POST", "creates folder via POST")
+                let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+                check(body.contains("\"name\":\"Margins\"") || body.contains("\"name\" : \"Margins\""), "folder named Margins")
+                return MockHTTPClient.jsonResponse(["id": "folder-1", "name": "Margins"])
+            },
+            // upload: first attempt returns 401, triggers forceRefresh retry
+            { _ in
+                MockHTTPClient.jsonResponse(["error": "unauthorized"], status: 401)
+            },
+            // upload: retry succeeds
+            { req in
+                check(req.httpMethod == "POST", "new upload uses POST")
+                check(req.value(forHTTPHeaderField: "Authorization") == "Bearer fresh-token", "retry uses refreshed token")
+                let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+                check(body.contains(docID.uuidString), "multipart metadata tags marginsDocId")
+                return MockHTTPClient.jsonResponse([
+                    "id": "file-1",
+                    "name": "Doc.margins",
+                    "headRevisionId": "rev-1",
+                    "appProperties": ["marginsDocId": docID.uuidString],
+                ])
+            },
+            // listChanges page 1
+            { _ in
+                MockHTTPClient.jsonResponse([
+                    "nextPageToken": "p2",
+                    "changes": [[
+                        "fileId": "file-1",
+                        "removed": false,
+                        "file": [
+                            "id": "file-1",
+                            "name": "Doc.margins",
+                            "headRevisionId": "rev-2",
+                            "parents": ["folder-1"],
+                            "appProperties": ["marginsDocId": docID.uuidString],
+                        ],
+                    ]],
+                ])
+            },
+            // listChanges page 2
+            { _ in
+                MockHTTPClient.jsonResponse([
+                    "newStartPageToken": "tok-next",
+                    "changes": [[
+                        "fileId": "file-2",
+                        "removed": true,
+                    ]],
+                ])
+            },
+        ])
+        let drive = GoogleDriveBackend(tokenProvider: { force in
+            recorder.record(force)
+            return force ? "fresh-token" : "initial-token"
+        }, http: http)
+
+        let folderID = try await drive.ensureRootFolder()
+        check(folderID == "folder-1", "created root folder ID returned")
+
+        let uploaded = try await drive.upload(data: Data("{\"html\":\"<h1>Hi</h1>\"}".utf8), name: "Doc.margins", docID: docID, folderID: folderID, existingFileID: nil)
+        check(uploaded.id == "file-1" && uploaded.headRevisionId == "rev-1" && uploaded.docID == docID, "upload parses RemoteFile")
+        check(recorder.all.contains(true), "401 triggered forceRefresh")
+
+        let page = try await drive.listChanges(pageToken: "p1", folderID: folderID)
+        check(page.newStartPageToken == "tok-next", "changes pagination captures newStartPageToken")
+        check(page.changes.count == 2, "changes combines all pages")
+        check(page.changes[0].file?.headRevisionId == "rev-2" && page.changes[1].removed, "changes parse updates and removals")
+    } catch {
+        check(false, "drive backend test threw \(error)")
+    }
+
+    oauthSem.signal()
+}
+oauthSem.wait()
+
 print(failures == 0 ? "✓ \(passes) checks passed" : "\(failures) failed, \(passes) passed")
 exit(failures == 0 ? 0 : 1)
