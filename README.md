@@ -47,6 +47,7 @@ The output isn't a reply. It's the document.
 - **A real agent behind the page.** The backend is a full agent, not a one-shot completion. It can reason, search the web, fetch pages, read files and (if you allow it) run commands before writing its edit. Each tool call streams live onto the instruction card, so you can watch what it's doing. Stop a run with the card's Stop button or ⌘. See [Agent tools](#agent-tools).
 - **Code and write in your project.** Point a document at a project folder (the 📁 toolbar menu, or Agent → Project Folder… ⇧⌘P) and the agent works *in that folder*: select a TODO and say "implement this", and it changes the code, runs the build and tests, and reports back. Files it touched are listed on the card ("Changed 2 files", click to open) and in the thread, and the document is only edited if you ask. Use **Full agent** tools for this (Margins offers to switch when you pick a folder); with Research, Copilot asks before each change and Codex/Claude can only read.
 - **YouTube links just work.** Paste a YouTube URL into an instruction ("summarize this talk: https://youtu.be/…"), and Margins fetches the video's transcript itself and hands it to the agent, with any provider and at any tool level.
+- **Google Drive sync.** Optionally sync your `~/Documents/Margins/` library across Macs through a visible `Margins` folder in Google Drive using the narrow `drive.file` scope. Editing stays local-first and instant while a background engine pushes changes, pulls incremental deltas, and writes non-destructive conflict copies if two Macs diverge offline. When connected, ⌘O opens an in-app library picker with instant search and sync badges (⇧⌘O still opens any file from disk), and project folders stay per-machine. See [Google Drive sync](docs/08-google-drive-sync.md).
 - **Bring your own subscription.** Margins uses the model access you already pay for. See [Model providers](#model-providers).
 
 ## Install
@@ -85,7 +86,7 @@ swift scripts/make-icon.swift                        # resize assets/AppIcon-sou
 
 > `swift test` and SwiftUI's `@State` macro both need plugins that ship only with Xcode. The project avoids them: the tests are a self-test executable, and view-local state uses a tiny `Local<T>` ObservableObject.
 
-Documents autosave to `~/Documents/Margins/<Title>.margins`, which is JSON and includes the full version history. A plain `<Title>.md` beside it is kept in sync with the current accepted text, with images in `<Title>.assets/` (File → Show Markdown in Finder). Use ⌘O to open, ⇧⌘S to save a copy elsewhere, and ⇧⌘E to export HTML. ⌘+ / ⌘− / ⌘0 zoom the document; the zoom level is remembered.
+Documents autosave to `~/Documents/Margins/<Title>.margins`, which is JSON and includes the full version history. A plain `<Title>.md` beside it is kept in sync with the current accepted text, with images in `<Title>.assets/` (File → Show Markdown in Finder). Use ⌘O to open (the in-app library picker when Google Drive sync is connected, or Finder otherwise), ⇧⌘O to open any `.margins` file from disk, ⇧⌘S to save a copy elsewhere, and ⇧⌘E to export HTML. ⌘+ / ⌘− / ⌘0 zoom the document; the zoom level is remembered.
 
 ## Model providers
 
@@ -125,6 +126,7 @@ Command-line equivalent: `swift run margins-cli edit copilot --tools research --
 4. [Architecture](docs/04-architecture.md): code layout, edit plans, block model, file format.
 5. [Roadmap](docs/05-roadmap.md).
 6. [Attribution and comments](docs/07-annotations.md): usage, storage rules, and verification.
+7. [Google Drive sync](docs/08-google-drive-sync.md): local-first sync, OAuth, conflict handling, and library picker.
 
 
 ## Contributing
@@ -154,6 +156,19 @@ Swift-based editor integration checks still require a Mac with macOS 14+ and Swi
 
 ## Packaging a release
 
+### Automated GitHub Actions releases
+
+Pushing a tag on `main` whose name begins with `release_` (for example `release_0.3.0` or `release_v0.3.0`) triggers `.github/workflows/release.yml` on an Apple silicon macOS runner:
+
+```sh
+git tag release_0.3.0 main
+git push origin release_0.3.0
+```
+
+The workflow verifies that the tagged commit is on `main`, runs `swift run MarginsSelfTest`, injects the Google Desktop OAuth credentials from the `MARGINS_GOOGLE_OAUTH_JSON` repository secret into `Info.plist` via `MARGINS_GOOGLE_OAUTH_FILE`, builds and verifies `Margins-<version>-arm64.dmg` (including mounted app signature and bundled OAuth keys), creates `Margins-<version>-source.zip`, `RELEASE-SOURCE.json`, and `SHA256SUMS.txt`, and publishes a GitHub Release automatically.
+
+### Local packaging
+
 The DMG build reads the Google Desktop OAuth client from `pass` at `margins/google-drive/desktop-oauth`.
 Unlock your password store before packaging. To use a Desktop client JSON file instead, set
 `MARGINS_GOOGLE_OAUTH_FILE` to its path. The signed app includes the desktop client ID and its
@@ -162,7 +177,7 @@ For a standalone app build with the same credentials, set `MARGINS_GOOGLE_OAUTH_
 `MARGINS_GOOGLE_OAUTH_PASS_ENTRY` when running `scripts/build-app.sh`.
 
 ```sh
-MARGINS_VERSION=0.2.3 scripts/build-dmg.sh
+MARGINS_VERSION=0.3.0 scripts/build-dmg.sh
 ```
 
 This builds a release app, packages it with an Applications shortcut, README and license, and writes a DMG plus a SHA-256 checksum under `build/`. Set `MARGINS_BUILD_NUMBER` to override the numeric bundle build number. The script builds for the host architecture; it does not notarize or publish the result. Publish the DMG, checksum and matching source snapshot through [GitHub Releases](https://github.com/vivekhaldar/margins/releases).
