@@ -287,7 +287,7 @@ private struct SyncSettingsTab: View {
                         Button("Connect Google Drive…") {
                             sync.connectGoogleDrive()
                         }
-                        .disabled(!sync.oauthConfig.isConfigured)
+                        .disabled(!sync.hasOAuthClient)
                     }
                 }
                 if let err = sync.lastError {
@@ -300,12 +300,12 @@ private struct SyncSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("OAuth Configuration") {
+            DisclosureGroup("Use a custom Google OAuth client") {
                 TextField("Google OAuth Client ID", text: $sync.oauthConfig.clientID,
                           prompt: Text("1234567890-xxxx.apps.googleusercontent.com"))
                 SecureField("Client Secret (optional)", text: $sync.oauthConfig.clientSecret,
                             prompt: Text("Required by some Google Desktop OAuth clients"))
-                Text("Create a Desktop app OAuth 2.0 Client ID in Google Cloud Console with the Google Drive API enabled. Redirects use a local loopback port (http://127.0.0.1).")
+                Text("Leave the Client ID empty to use the client included in a distribution build. For a custom client, enable the Google Drive API and choose the Desktop app type.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

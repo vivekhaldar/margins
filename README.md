@@ -154,6 +154,13 @@ Swift-based editor integration checks still require a Mac with macOS 14+ and Swi
 
 ## Packaging a release
 
+The DMG build reads the Google Desktop OAuth client from `pass` at `margins/google-drive/desktop-oauth`.
+Unlock your password store before packaging. To use a Desktop client JSON file instead, set
+`MARGINS_GOOGLE_OAUTH_FILE` to its path. The signed app includes the desktop client ID and its
+shared client secret. Each user signs in separately and their tokens stay in their Mac's Keychain.
+For a standalone app build with the same credentials, set `MARGINS_GOOGLE_OAUTH_FILE` or
+`MARGINS_GOOGLE_OAUTH_PASS_ENTRY` when running `scripts/build-app.sh`.
+
 ```sh
 MARGINS_VERSION=0.2.3 scripts/build-dmg.sh
 ```

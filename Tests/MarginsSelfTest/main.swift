@@ -642,6 +642,16 @@ actor MockHTTPClient: HTTPClient {
     }
 }
 
+test("Google desktop client in a distribution build") {
+    let bundled = GoogleOAuthConfig(clientID: "release", clientSecret: "release-value")
+    check(GoogleOAuthConfig().usingDefault(bundled) == bundled, "a new install uses the complete bundled client")
+    let own = GoogleOAuthConfig(clientID: "custom")
+    check(own.usingDefault(bundled) == own, "custom IDs never inherit another client's secret")
+    check(GoogleOAuthConfig(clientID: "release").usingDefault(bundled) == bundled, "existing matching ID uses the bundled secret")
+    let override = GoogleOAuthConfig(clientID: "release", clientSecret: "override")
+    check(override.usingDefault(bundled) == override, "explicit client secret takes precedence")
+}
+
 test("PKCE challenge and loopback callback parser") {
     // RFC 7636 Appendix B test vector:
     let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"

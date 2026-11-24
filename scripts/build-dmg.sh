@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export MARGINS_VERSION=${MARGINS_VERSION:-0.2.3}
+export MARGINS_GOOGLE_OAUTH_PASS_ENTRY=${MARGINS_GOOGLE_OAUTH_PASS_ENTRY:-margins/google-drive/desktop-oauth}
 scripts/build-app.sh
 ARCH=$(uname -m)
 NAME="Margins-${MARGINS_VERSION}-${ARCH}"

@@ -101,6 +101,15 @@ public struct GoogleOAuthConfig: Codable, Equatable, Sendable {
     public var isConfigured: Bool {
         !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    /// Settings may override the desktop client shipped with a release.
+    public func usingDefault(_ bundled: GoogleOAuthConfig) -> GoogleOAuthConfig {
+        guard isConfigured else { return bundled }
+        if clientID == bundled.clientID && clientSecret.isEmpty {
+            return GoogleOAuthConfig(clientID: clientID, clientSecret: bundled.clientSecret, scope: scope)
+        }
+        return self
+    }
 }
 
 public struct PKCE: Equatable, Sendable {

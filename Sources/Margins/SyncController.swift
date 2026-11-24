@@ -10,6 +10,12 @@ final class SyncController: ObservableObject {
     static let shared = SyncController()
 
     private static let configKey = "googleDriveOAuthConfig"
+    private static let clientSecretAccount = "googleDriveOAuthClientSecret"
+    private static let bundledConfig = GoogleOAuthConfig(
+        clientID: Bundle.main.object(forInfoDictionaryKey: "MarginsGoogleClientID") as? String ?? "",
+        clientSecret: Bundle.main.object(forInfoDictionaryKey: "MarginsGoogleClientSecret") as? String ?? ""
+    )
+    var hasOAuthClient: Bool { oauthConfig.usingDefault(Self.bundledConfig).isConfigured }
     private static let onboardingDismissedKey = "syncOnboardingDismissed"
     static var indexURL: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -20,8 +26,15 @@ final class SyncController: ObservableObject {
     @Published var oauthConfig: GoogleOAuthConfig {
         didSet {
             guard oauthConfig != oldValue else { return }
-            persistConfig()
-            let cfg = oauthConfig
+            if (needsSecretMigration || oauthConfig.clientSecret != oldValue.clientSecret),
+               !Keychain.set(oauthConfig.clientSecret, for: Self.clientSecretAccount) {
+                oauthConfig = oldValue
+                lastError = "Margins couldn't save the Google client secret in your login Keychain."
+                return
+            }
+            needsSecretMigration = false
+            Self.savePublicConfig(oauthConfig, in: defaults)
+            let cfg = oauthConfig.usingDefault(Self.bundledConfig)
             Task { await oauth.updateConfig(cfg) }
         }
     }
@@ -33,6 +46,7 @@ final class SyncController: ObservableObject {
     @Published var showOnboarding = false
 
     private let defaults: UserDefaults
+    private var needsSecretMigration = false
     private let oauth: GoogleOAuthClient
     private let backend: GoogleDriveBackend
     private let engine: SyncEngine
@@ -43,16 +57,26 @@ final class SyncController: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let loadedConfig: GoogleOAuthConfig
+        var loadedConfig: GoogleOAuthConfig
+        var migrationError: String?
         if let data = defaults.data(forKey: Self.configKey),
            let decoded = try? JSONDecoder().decode(GoogleOAuthConfig.self, from: data) {
             loadedConfig = decoded
+            if decoded.clientSecret.isEmpty {
+                loadedConfig.clientSecret = Keychain.get(Self.clientSecretAccount) ?? ""
+            } else if Keychain.set(decoded.clientSecret, for: Self.clientSecretAccount) {
+                Self.savePublicConfig(decoded, in: defaults)
+            } else {
+                migrationError = "Margins couldn't move the Google client secret from preferences to your login Keychain."
+            }
         } else {
             loadedConfig = GoogleOAuthConfig()
         }
         self.oauthConfig = loadedConfig
+        self.lastError = migrationError
+        self.needsSecretMigration = migrationError != nil
         let tokenStore = KeychainTokenStore()
-        self.oauth = GoogleOAuthClient(config: loadedConfig, tokenStore: tokenStore)
+        self.oauth = GoogleOAuthClient(config: loadedConfig.usingDefault(Self.bundledConfig), tokenStore: tokenStore)
         self.backend = GoogleDriveBackend(oauth: oauth)
         self.index = SyncIndex.load(from: Self.indexURL)
         self.engine = SyncEngine(
@@ -103,7 +127,7 @@ final class SyncController: ObservableObject {
 
     func connectGoogleDrive() {
         guard !isSigningIn else { return }
-        guard oauthConfig.isConfigured else {
+        guard hasOAuthClient else {
             lastError = "Enter a Google OAuth Client ID in Settings → Sync first."
             return
         }
@@ -285,9 +309,11 @@ final class SyncController: ObservableObject {
         }
     }
 
-    private func persistConfig() {
-        if let data = try? JSONEncoder().encode(oauthConfig) {
-            defaults.set(data, forKey: Self.configKey)
+    private static func savePublicConfig(_ config: GoogleOAuthConfig, in defaults: UserDefaults) {
+        var publicConfig = config
+        publicConfig.clientSecret = ""
+        if let data = try? JSONEncoder().encode(publicConfig) {
+            defaults.set(data, forKey: configKey)
         }
     }
 }
