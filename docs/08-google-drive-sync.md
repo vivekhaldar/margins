@@ -13,9 +13,11 @@ Packaged releases (`Margins.app` / DMG) bundle Margins' Google Desktop OAuth cli
 
 Tokens are stored in your macOS login Keychain under service `com.vivekhaldar.margins` (account `googleDriveOAuthTokens`). Disconnecting revokes the token with Google and clears it from Keychain while keeping all local files intact.
 
-### Narrow scope and Drive folder
+### Narrow scope, production OAuth status, and Drive folder
 
 Margins requests only `https://www.googleapis.com/auth/drive.file`, which limits access to the `Margins` folder and files Margins itself creates. It cannot read or list the rest of your Google Drive. The `Margins` folder is a normal visible folder tagged with `appProperties`, so you can inspect, back up, or move it in Drive without breaking sync.
+
+The bundled Google OAuth client is configured with an **External** audience and **In production** publishing status, so any Google account can authorize Drive sync without joining a test-user list, and refresh tokens are free of Google's 7-day Testing-mode expiration limit. Google's Verification Center requires no additional data-access review for `drive.file`; brand verification is optional for public sign-in and only controls whether Google displays the Margins name and logo on the consent screen.
 
 ## How sync works
 
