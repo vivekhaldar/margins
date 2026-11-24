@@ -616,8 +616,7 @@ test("file change watcher detects external atomic writes and ignores self writes
 
 // --- Phase 1: Google OAuth & Drive backend tests ---
 
-final class MockHTTPClient: HTTPClient, @unchecked Sendable {
-    private let lock = NSLock()
+actor MockHTTPClient: HTTPClient {
     private var handlers: [@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)]
     private var recordedRequests: [URLRequest] = []
 
@@ -625,24 +624,18 @@ final class MockHTTPClient: HTTPClient, @unchecked Sendable {
         self.handlers = handlers
     }
 
-    var requests: [URLRequest] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recordedRequests
-    }
+    func requests() -> [URLRequest] { recordedRequests }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        lock.lock()
         recordedRequests.append(request)
-        let handler = handlers.isEmpty ? nil : handlers.removeFirst()
-        lock.unlock()
-        guard let handler else {
+        guard !handlers.isEmpty else {
             throw SyncError.invalidResponse("Unexpected HTTP request: \(request.url?.absoluteString ?? "")")
         }
+        let handler = handlers.removeFirst()
         return try await handler(request)
     }
 
-    static func jsonResponse(_ obj: Any, status: Int = 200, url: URL = URL(string: "https://example.com")!) -> (Data, HTTPURLResponse) {
+    nonisolated static func jsonResponse(_ obj: Any, status: Int = 200, url: URL = URL(string: "https://example.com")!) -> (Data, HTTPURLResponse) {
         let data = try! JSONSerialization.data(withJSONObject: obj)
         let resp = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         return (data, resp)
@@ -833,6 +826,284 @@ Task {
     oauthSem.signal()
 }
 oauthSem.wait()
+
+// --- Phase 2: SyncIndex and SyncEngine tests ---
+
+actor InMemorySyncBackend: SyncBackend {
+    struct Stored {
+        var meta: RemoteFile
+        var data: Data
+    }
+    var offline = false
+    var folderID = "drive-folder-1"
+    var files: [String: Stored] = [:]
+    var changeLog: [RemoteChange] = []
+    var revCounter = 0
+
+    func setOffline(_ v: Bool) { offline = v }
+
+    func seedRemote(doc: MarginsDocument, name: String) throws -> RemoteFile {
+        revCounter += 1
+        let id = "remote-\(revCounter)"
+        let data = try doc.encoded()
+        let meta = RemoteFile(id: id, name: name, docID: doc.id, headRevisionId: "rev-\(revCounter)",
+                              modifiedTime: Date(), trashed: false, size: Int64(data.count))
+        files[id] = Stored(meta: meta, data: data)
+        changeLog.append(RemoteChange(fileId: id, removed: false, file: meta))
+        return meta
+    }
+
+    func updateRemote(fileID: String, doc: MarginsDocument, newName: String? = nil) throws -> RemoteFile {
+        guard var stored = files[fileID] else { throw SyncError.httpError(404, "missing") }
+        revCounter += 1
+        let data = try doc.encoded()
+        stored.meta.headRevisionId = "rev-\(revCounter)"
+        if let newName { stored.meta.name = newName }
+        stored.meta.modifiedTime = Date()
+        stored.meta.size = Int64(data.count)
+        stored.data = data
+        files[fileID] = stored
+        changeLog.append(RemoteChange(fileId: fileID, removed: false, file: stored.meta))
+        return stored.meta
+    }
+
+    func fileCount() -> Int { files.count }
+    func fileMeta(_ id: String) -> RemoteFile? { files[id]?.meta }
+
+    func ensureRootFolder() async throws -> String {
+        if offline { throw SyncError.offline("simulated offline") }
+        return folderID
+    }
+
+    func listFiles(folderID: String) async throws -> [RemoteFile] {
+        if offline { throw SyncError.offline("simulated offline") }
+        return files.values.map(\.meta).filter { !$0.trashed }
+    }
+
+    func getStartPageToken() async throws -> String {
+        if offline { throw SyncError.offline("simulated offline") }
+        return "\(changeLog.count)"
+    }
+
+    func listChanges(pageToken: String, folderID: String) async throws -> ChangesPage {
+        if offline { throw SyncError.offline("simulated offline") }
+        let idx = Int(pageToken) ?? 0
+        let slice = idx < changeLog.count ? Array(changeLog[idx...]) : []
+        return ChangesPage(changes: slice, newStartPageToken: "\(changeLog.count)")
+    }
+
+    func getMetadata(fileID: String) async throws -> RemoteFile? {
+        if offline { throw SyncError.offline("simulated offline") }
+        return files[fileID]?.meta
+    }
+
+    func download(fileID: String) async throws -> Data {
+        if offline { throw SyncError.offline("simulated offline") }
+        guard let stored = files[fileID] else { throw SyncError.httpError(404, "not found") }
+        return stored.data
+    }
+
+    func upload(data: Data, name: String, docID: UUID, folderID: String, existingFileID: String?) async throws -> RemoteFile {
+        if offline { throw SyncError.offline("simulated offline") }
+        revCounter += 1
+        let id = existingFileID ?? "remote-\(revCounter)"
+        let meta = RemoteFile(id: id, name: name, docID: docID, headRevisionId: "rev-\(revCounter)",
+                              modifiedTime: Date(), trashed: false, size: Int64(data.count))
+        files[id] = Stored(meta: meta, data: data)
+        changeLog.append(RemoteChange(fileId: id, removed: false, file: meta))
+        return meta
+    }
+
+    func rename(fileID: String, newName: String) async throws -> RemoteFile {
+        if offline { throw SyncError.offline("simulated offline") }
+        guard var stored = files[fileID] else { throw SyncError.httpError(404, "not found") }
+        stored.meta.name = newName
+        files[fileID] = stored
+        return stored.meta
+    }
+
+    func delete(fileID: String) async throws {
+        if offline { throw SyncError.offline("simulated offline") }
+        files.removeValue(forKey: fileID)
+        changeLog.append(RemoteChange(fileId: fileID, removed: true, file: nil))
+    }
+}
+
+test("SyncIndex round trip and recency sorting") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-idx-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let idxURL = dir.appendingPathComponent("sync-index.json")
+    let d1 = UUID()
+    let d2 = UUID()
+    var index = SyncIndex(folderID: "f1", startPageToken: "10", lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    index.setEntry(SyncEntry(docID: d1, driveFileId: "r1", lastSyncedRevision: "rev1", filename: "Older.margins", title: "Older", modifiedAt: Date(timeIntervalSince1970: 1000), state: .synced))
+    index.setEntry(SyncEntry(docID: d2, driveFileId: "r2", lastSyncedRevision: "rev2", filename: "Newer.margins", title: "Newer", modifiedAt: Date(timeIntervalSince1970: 2000), state: .conflict, conflictFilename: "Newer (Conflict).margins"))
+    try index.save(to: idxURL)
+
+    let loaded = SyncIndex.load(from: idxURL)
+    check(loaded == index, "SyncIndex round trips identically")
+    check(loaded.sortedByRecency.map(\.docID) == [d2, d1], "sortedByRecency puts newest first")
+    check(loaded.conflictCount == 1, "conflictCount counts conflict entries")
+    check(loaded.entry(forDriveFileId: "r1")?.docID == d1, "lookup by driveFileId")
+}
+
+let syncSem = DispatchSemaphore(value: 0)
+Task {
+    // 1. Initial upload, rename in place without duplicate, and incremental pull with Markdown regeneration
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-sync-1-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let backend = InMemorySyncBackend()
+        let fixedDate = Date(timeIntervalSince1970: 1_735_689_600) // 2025-01-01 UTC
+        let engine = SyncEngine(
+            backend: backend,
+            documentsFolder: dir,
+            indexURL: dir.appendingPathComponent("sync-index.json"),
+            hostName: "Studio.local",
+            now: { fixedDate }
+        )
+
+        var doc = MarginsDocument()
+        doc.snapshot(html: "<h1>Untitled</h1><p>Draft</p>", slug: "init", author: .you)
+        let untitledURL = dir.appendingPathComponent("Untitled.margins")
+        try doc.encoded().write(to: untitledURL, options: .atomic)
+
+        let status1 = await engine.syncAll(uploadExistingLocal: true)
+        if case .synced = status1 { check(true, "initial sync succeeds") } else { check(false, "expected synced, got \(status1)") }
+        let fileCount1 = await backend.fileCount()
+        check(fileCount1 == 1, "one file uploaded to Drive")
+        let entry1 = await engine.currentIndex().entry(for: doc.id)
+        check(entry1?.driveFileId != nil && entry1?.state == .synced, "index tracks driveFileId and synced state")
+
+        // Rename Untitled.margins -> Roadmap.margins (same doc.id)
+        doc.snapshot(html: "<h1>Roadmap</h1><p>Updated</p>", slug: "rename", author: .you)
+        let renamedURL = dir.appendingPathComponent("Roadmap.margins")
+        try FileManager.default.removeItem(at: untitledURL)
+        try doc.encoded().write(to: renamedURL, options: .atomic)
+
+        _ = await engine.pushDocument(at: renamedURL)
+        let fileCount2 = await backend.fileCount()
+        check(fileCount2 == 1, "rename updates in place without creating duplicate on Drive")
+        let remoteMeta = await backend.fileMeta(entry1!.driveFileId!)
+        check(remoteMeta?.name == "Roadmap.margins", "Drive filename updated in place")
+
+        // Remote edit from Machine B pulled incrementally via changes.list
+        var remoteDoc = doc
+        remoteDoc.snapshot(html: "<h1>Roadmap</h1><p>From Mac B</p>", slug: "mac b", author: .you)
+        _ = try await backend.updateRemote(fileID: entry1!.driveFileId!, doc: remoteDoc)
+
+        _ = await engine.syncAll()
+        let pulled = try MarginsDocument.decode(Data(contentsOf: renamedURL))
+        check(pulled.html.contains("From Mac B"), "incremental pull updates local .margins file")
+        let mdURL = dir.appendingPathComponent("Roadmap.md")
+        let md = (try? String(contentsOf: mdURL, encoding: .utf8)) ?? ""
+        check(md.contains("From Mac B"), "pull regenerates local Markdown mirror")
+    } catch {
+        check(false, "sync engine lifecycle test threw \(error)")
+    }
+
+    // 2. V1 Conflict resolution (zero data loss) when remote moved ahead before push
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-sync-2-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let backend = InMemorySyncBackend()
+        let fixedDate = Date(timeIntervalSince1970: 1_735_689_600) // 2025-01-01
+        let engine = SyncEngine(
+            backend: backend,
+            documentsFolder: dir,
+            indexURL: dir.appendingPathComponent("sync-index.json"),
+            hostName: "MacBook-Pro.local",
+            now: { fixedDate }
+        )
+
+        var doc = MarginsDocument()
+        doc.snapshot(html: "<h1>Notes</h1><p>Base</p>", slug: "base", author: .you)
+        let url = dir.appendingPathComponent("Notes.margins")
+        try doc.encoded().write(to: url, options: .atomic)
+        _ = await engine.syncAll()
+        let driveID = await engine.currentIndex().entry(for: doc.id)!.driveFileId!
+
+        // Machine B updates Drive first
+        var macBDoc = doc
+        macBDoc.snapshot(html: "<h1>Notes</h1><p>Mac B edit</p>", slug: "b", author: .you)
+        _ = try await backend.updateRemote(fileID: driveID, doc: macBDoc)
+
+        // Machine A edits locally offline and pushes
+        var macADoc = doc
+        macADoc.snapshot(html: "<h1>Notes</h1><p>Mac A edit</p>", slug: "a", author: .you)
+        try macADoc.encoded().write(to: url, options: .atomic)
+
+        let conflictStatus = await engine.pushDocument(at: url)
+        check(conflictStatus == .conflict(count: 1), "divergent push detects conflict")
+        let entry = await engine.currentIndex().entry(for: doc.id)
+        check(entry?.state == .conflict, "entry marked conflict")
+        check(entry?.conflictFilename == "Notes (Conflict on MacBook-Pro 2025-01-01).margins", "conflict copy named with host and date")
+        let conflictURL = dir.appendingPathComponent(entry!.conflictFilename!)
+        let conflictDoc = try MarginsDocument.decode(Data(contentsOf: conflictURL))
+        let canonicalDoc = try MarginsDocument.decode(Data(contentsOf: url))
+        check(conflictDoc.html.contains("Mac A edit"), "conflict copy preserves local edit")
+        check(canonicalDoc.html.contains("Mac B edit"), "canonical file updated to remote version")
+    } catch {
+        check(false, "conflict resolution test threw \(error)")
+    }
+
+    // 3. Offline queue + retry, deduplication by doc.id, and cloudOnly on-demand download
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-sync-3-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let backend = InMemorySyncBackend()
+        var cloudDoc = MarginsDocument()
+        cloudDoc.snapshot(html: "<h1>Remote Only</h1><p>In Drive</p>", slug: "remote", author: .you)
+        _ = try await backend.seedRemote(doc: cloudDoc, name: "Remote Only.margins")
+
+        let engine = SyncEngine(
+            backend: backend,
+            documentsFolder: dir,
+            indexURL: dir.appendingPathComponent("sync-index.json"),
+            hostName: "Mini"
+        )
+
+        // Lazy initial sync indexes remote doc as cloudOnly without downloading
+        _ = await engine.syncAll(uploadExistingLocal: false, lazyDownload: true)
+        let cloudEntry = await engine.currentIndex().entry(for: cloudDoc.id)
+        check(cloudEntry?.state == .cloudOnly, "lazy sync marks remote doc as cloudOnly")
+        check(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("Remote Only.margins").path), "cloudOnly file not yet on disk")
+
+        // On-demand download via ensureLocal
+        let downloadedURL = try await engine.ensureLocal(docID: cloudDoc.id)
+        check(FileManager.default.fileExists(atPath: downloadedURL.path), "ensureLocal downloads file on demand")
+        let afterEntry = await engine.currentIndex().entry(for: cloudDoc.id)
+        check(afterEntry?.state == .synced, "entry transitions to synced after on-demand download")
+
+        // Offline write queues as pendingUpload, then flushes when back online
+        await backend.setOffline(true)
+        var localDoc = MarginsDocument()
+        localDoc.snapshot(html: "<h1>Offline Draft</h1><p>Plane mode</p>", slug: "offline", author: .you)
+        let offlineURL = dir.appendingPathComponent("Offline Draft.margins")
+        try localDoc.encoded().write(to: offlineURL, options: .atomic)
+        let offlineStatus = await engine.pushDocument(at: offlineURL)
+        check(offlineStatus == .offline(pendingCount: 1), "offline push reports offline with 1 pending")
+
+        await backend.setOffline(false)
+        let onlineStatus = await engine.syncAll()
+        if case .synced = onlineStatus { check(true, "queued offline document uploads once back online") } else { check(false, "expected synced after reconnect, got \(onlineStatus)") }
+        let syncedOfflineEntry = await engine.currentIndex().entry(for: localDoc.id)
+        check(syncedOfflineEntry?.state == .synced && syncedOfflineEntry?.driveFileId != nil, "offline doc now has driveFileId")
+    } catch {
+        check(false, "offline queue & cloudOnly test threw \(error)")
+    }
+
+    syncSem.signal()
+}
+syncSem.wait()
 
 print(failures == 0 ? "✓ \(passes) checks passed" : "\(failures) failed, \(passes) passed")
 exit(failures == 0 ? 0 : 1)
