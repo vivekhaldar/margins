@@ -1249,6 +1249,7 @@ final class AppState: ObservableObject {
             fileWatcher?.markSelfWrite(encoded)
             try encoded.write(to: fileURL, options: .atomic)
             defaults.set(fileURL, forKey: "lastDocument")
+            SyncController.shared.schedulePush(for: fileURL)
         } catch {
             lastError = "Couldn't save: \(error.localizedDescription)"
             return

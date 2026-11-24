@@ -152,8 +152,16 @@ final class DocumentWindows {
         for state in openStates {
             await state.flushAndSave(includeEmpty: true)
         }
+        await SyncController.shared.flushPendingPushes()
         persistSession()
         terminating = true
+    }
+
+    func reloadOpenWindowIfNeeded(at url: URL) {
+        let standardized = url.standardizedFileURL
+        for state in states.values where state.fileURL.standardizedFileURL == standardized {
+            state.reloadFromExternalChange(standardized)
+        }
     }
 
     func close(_ window: NSWindow) {

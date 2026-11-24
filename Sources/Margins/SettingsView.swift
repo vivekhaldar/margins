@@ -11,6 +11,9 @@ struct SettingsView: View {
                 .tabItem { Label("Providers", systemImage: "cpu") }
             AppearanceSettingsTab()
                 .tabItem { Label("Appearance", systemImage: "textformat") }
+            SyncSettingsTab()
+                .environmentObject(SyncController.shared)
+                .tabItem { Label("Sync", systemImage: "icloud") }
         }
         .frame(width: 720, height: 480)
     }
@@ -248,3 +251,105 @@ private struct ProviderDetail: View {
         }
     }
 }
+
+private struct SyncSettingsTab: View {
+    @EnvironmentObject var sync: SyncController
+
+    var body: some View {
+        Form {
+            Section("Google Drive") {
+                LabeledContent("Status") {
+                    HStack(spacing: 8) {
+                        Text(statusDescription)
+                            .foregroundStyle(statusColor)
+                        if sync.status == .syncing || sync.isSigningIn {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+                if let last = sync.index.lastSyncedAt {
+                    LabeledContent("Last synced", value: last.formatted(date: .abbreviated, time: .shortened))
+                }
+                HStack(spacing: 10) {
+                    if sync.isConnected {
+                        Button("Sync Now") {
+                            Task { await sync.syncNow() }
+                        }
+                        .disabled(sync.status == .syncing)
+                        Button("Disconnect", role: .destructive) {
+                            sync.disconnectGoogleDrive()
+                        }
+                    } else if sync.isSigningIn {
+                        Button("Cancel Sign-In") {
+                            sync.cancelSignIn()
+                        }
+                    } else {
+                        Button("Connect Google Drive…") {
+                            sync.connectGoogleDrive()
+                        }
+                        .disabled(!sync.oauthConfig.isConfigured)
+                    }
+                }
+                if let err = sync.lastError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Text("Margins requests only the narrow drive.file scope, giving access solely to its own Margins folder in your Google Drive. Tokens are stored in your macOS Keychain.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("OAuth Configuration") {
+                TextField("Google OAuth Client ID", text: $sync.oauthConfig.clientID,
+                          prompt: Text("1234567890-xxxx.apps.googleusercontent.com"))
+                SecureField("Client Secret (optional)", text: $sync.oauthConfig.clientSecret,
+                            prompt: Text("Required by some Google Desktop OAuth clients"))
+                Text("Create a Desktop app OAuth 2.0 Client ID in Google Cloud Console with the Google Drive API enabled. Redirects use a local loopback port (http://127.0.0.1).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Local Library") {
+                LabeledContent("Synced folder") {
+                    HStack {
+                        Text(AppState.documentsFolder.path)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button("Reveal in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([AppState.documentsFolder])
+                        }
+                    }
+                }
+                Text("Documents inside ~/Documents/Margins sync automatically. External .margins files opened from elsewhere stay local unless you move them to the Margins Library.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var statusDescription: String {
+        if sync.isSigningIn { return "Waiting for Google sign-in in browser…" }
+        switch sync.status {
+        case .disconnected: return "Not connected (local-only)"
+        case .synced: return "Connected · Synced"
+        case .syncing: return "Syncing…"
+        case .offline(let pending): return pending > 0 ? "Offline (\(pending) queued)" : "Offline"
+        case .conflict(let count): return "\(count) conflict\(count == 1 ? "" : "s") need attention"
+        case .error(let msg): return "Error: \(msg)"
+        }
+    }
+
+    private var statusColor: Color {
+        switch sync.status {
+        case .synced: return .green
+        case .conflict, .offline: return .orange
+        case .error: return .red
+        default: return .secondary
+        }
+    }
+}
+
