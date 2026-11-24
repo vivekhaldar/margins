@@ -91,7 +91,7 @@ struct MarginsApp: App {
                 Button("Project Folder…") { state.chooseProjectFolder() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                 Button("Stop Using Project Folder") { state.setProjectFolder(nil) }
-                    .disabled(state.doc.projectFolder == nil)
+                    .disabled(state.projectFolderPath == nil)
                 Button(state.projectURL == nil ? "Reveal Agent Workspace" : "Show Project in Finder") { state.revealWorkspace() }
             }
         }

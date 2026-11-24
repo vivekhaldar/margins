@@ -72,9 +72,14 @@ final class AppState: ObservableObject {
     private let defaults: UserDefaults
     private var saveTask: Task<Void, Never>?
     private var settingsObserver: NSObjectProtocol?
+    private let projectFolderStore: ProjectFolderStore
+    private var fileWatcher: FileChangeWatcher?
+    @Published var projectFolderRevision = 0
 
-    init(restoreLastDocument: Bool = false, untitledURL: URL? = nil, defaults: UserDefaults = .standard) {
+    init(restoreLastDocument: Bool = false, untitledURL: URL? = nil, defaults: UserDefaults = .standard,
+         projectFolderStore: ProjectFolderStore = .shared) {
         self.defaults = defaults
+        self.projectFolderStore = projectFolderStore
         let ud = defaults
         var list = ProviderConfig.defaults
         if let data = ud.data(forKey: "providers"),
@@ -112,9 +117,11 @@ final class AppState: ObservableObject {
         if restoreLastDocument, let last = defaults.url(forKey: "lastDocument"), FileManager.default.fileExists(atPath: last.path) {
             open(last)
         }
+        startWatchingCurrentFile()
     }
 
     deinit {
+        fileWatcher?.stop()
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
     }
 
@@ -683,15 +690,21 @@ final class AppState: ObservableObject {
 
     // MARK: - project folder
 
+    /// Per-machine project folder path, falling back to legacy `doc.projectFolder` for migration.
+    var projectFolderPath: String? {
+        _ = projectFolderRevision
+        return projectFolderStore.folder(for: doc.id, fallbackDocumentFolder: doc.projectFolder)
+    }
+
     /// The document's project folder, if set and still present.
     var projectURL: URL? {
-        guard let p = doc.projectFolder else { return nil }
+        guard let p = projectFolderPath else { return nil }
         var dir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: p, isDirectory: &dir), dir.boolValue else { return nil }
         return URL(fileURLWithPath: p, isDirectory: true)
     }
 
-    var projectName: String? { doc.projectFolder.map { URL(fileURLWithPath: $0).lastPathComponent } }
+    var projectName: String? { projectFolderPath.map { URL(fileURLWithPath: $0).lastPathComponent } }
 
     func chooseProjectFolder() {
         let panel = NSOpenPanel()
@@ -700,15 +713,19 @@ final class AppState: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.prompt = "Use as Project"
         panel.message = "The agent will work in this folder: it can read it and, with Full agent tools, change files and run commands there."
-        if let p = doc.projectFolder { panel.directoryURL = URL(fileURLWithPath: p) }
+        if let p = projectFolderPath { panel.directoryURL = URL(fileURLWithPath: p) }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         setProjectFolder(url)
         if !toolPolicy.canWrite { offerFullAgent(for: url) }
     }
 
     func setProjectFolder(_ url: URL?) {
-        doc.projectFolder = url?.standardizedFileURL.path
-        scheduleSave()
+        projectFolderStore.setFolder(url?.standardizedFileURL.path, for: doc.id)
+        projectFolderRevision += 1
+        if doc.projectFolder != nil {
+            doc.projectFolder = nil
+            scheduleSave()
+        }
     }
 
     /// Changing files needs Full agent: Codex and Claude can't ask mid-run, so Research is read-only for them.
@@ -1022,6 +1039,7 @@ final class AppState: ObservableObject {
             self.saveNow()
             self.doc = MarginsDocument()
             self.fileURL = Self.newUntitledURL()
+            self.startWatchingCurrentFile()
             self.previewing = nil
             self.pending = PendingInfo()
             self.defaults.removeObject(forKey: "lastDocument")
@@ -1054,7 +1072,10 @@ final class AppState: ObservableObject {
                 self.saveNow()
                 let incoming = reopeningCurrent ? ((try? MarginsDocument.decode(Data(contentsOf: url))) ?? document) : document
                 self.doc = incoming
+                self.projectFolderStore.migrateIfNeeded(docID: incoming.id, legacyFolder: incoming.projectFolder)
+                self.projectFolderRevision += 1
                 self.fileURL = url
+                self.startWatchingCurrentFile()
                 self.previewing = nil
                 self.pending = PendingInfo()
                 self.defaults.set(url, forKey: "lastDocument")
@@ -1170,6 +1191,32 @@ final class AppState: ObservableObject {
 
     func revealInFinder() { NSWorkspace.shared.activateFileViewerSelecting([fileURL]) }
 
+    private func startWatchingCurrentFile() {
+        let watcher = fileWatcher ?? FileChangeWatcher { [weak self] url in
+            Task { @MainActor [weak self] in
+                self?.reloadFromExternalChange(url)
+            }
+        }
+        fileWatcher = watcher
+        watcher.watch(fileURL)
+    }
+
+    func reloadFromExternalChange(_ url: URL) {
+        guard url.standardizedFileURL == fileURL.standardizedFileURL else { return }
+        guard !busy, previewing == nil else { return }
+        guard let data = try? Data(contentsOf: url),
+              var incoming = try? MarginsDocument.decode(data) else { return }
+        incoming.pruneAssets()
+        guard incoming != doc else { return }
+        doc = incoming
+        projectFolderStore.migrateIfNeeded(docID: incoming.id, legacyFolder: incoming.projectFolder)
+        projectFolderRevision += 1
+        pending = PendingInfo()
+        let session = documentSessionID
+        Task { await loadEditorDocument(session: session) }
+        if !incoming.versions.isEmpty { writeMarkdown() }
+    }
+
     private func isUntitled(_ url: URL) -> Bool {
         url.deletingLastPathComponent().standardizedFileURL == Self.documentsFolder.standardizedFileURL
             && url.lastPathComponent.hasPrefix("Untitled")
@@ -1195,9 +1242,12 @@ final class AppState: ObservableObject {
             try? FileManager.default.removeItem(at: markdownURL)
             try? FileManager.default.removeItem(at: assetsFolderURL)
             fileURL = newURL
+            startWatchingCurrentFile()
         }
         do {
-            try doc.encoded().write(to: fileURL, options: .atomic)
+            let encoded = try doc.encoded()
+            fileWatcher?.markSelfWrite(encoded)
+            try encoded.write(to: fileURL, options: .atomic)
             defaults.set(fileURL, forKey: "lastDocument")
         } catch {
             lastError = "Couldn't save: \(error.localizedDescription)"

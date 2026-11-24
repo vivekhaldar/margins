@@ -548,5 +548,71 @@ test("font preferences round trip and CSS stacks") {
     check(custom.uiFontCSS.hasPrefix("\"Helvetica \\\"Neue\\\"\","), "quotes escaped in CSS font family")
 }
 
+test("per-machine project folder store and migration") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-pf-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let storeURL = dir.appendingPathComponent("project-folders.json")
+    let store = ProjectFolderStore(fileURL: storeURL)
+    let docID = UUID()
+    check(store.folder(for: docID) == nil, "empty initially")
+    check(store.folder(for: docID, fallbackDocumentFolder: "/legacy/repo") == "/legacy/repo", "falls back to legacy document field")
+
+    store.migrateIfNeeded(docID: docID, legacyFolder: "/legacy/repo")
+    check(store.folder(for: docID) == "/legacy/repo", "migrates legacy folder into local store")
+
+    // Reopen from disk to verify persistence.
+    let reloaded = ProjectFolderStore(fileURL: storeURL)
+    check(reloaded.folder(for: docID) == "/legacy/repo", "persisted across instances")
+
+    reloaded.setFolder("/machine-b/repo", for: docID)
+    check(reloaded.folder(for: docID, fallbackDocumentFolder: "/legacy/repo") == "/machine-b/repo", "local mapping overrides document field")
+
+    reloaded.setFolder(nil, for: docID)
+    check(reloaded.folder(for: docID) == nil, "clearing removes mapping")
+}
+
+test("file change watcher detects external atomic writes and ignores self writes") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-watch-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let file = dir.appendingPathComponent("note.margins")
+    let initial = Data("{\"v\":1}".utf8)
+    try initial.write(to: file, options: .atomic)
+
+    final class URLCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var urls: [URL] = []
+        func append(_ url: URL) { lock.lock(); urls.append(url); lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return urls.count }
+    }
+
+    let changedSem = DispatchSemaphore(value: 0)
+    let collector = URLCollector()
+
+    let watcher = FileChangeWatcher(debounceInterval: 0.05) { url in
+        collector.append(url)
+        changedSem.signal()
+    }
+    watcher.watch(file)
+    defer { watcher.stop() }
+
+    // Self-write should NOT trigger onExternalChange.
+    let selfData = Data("{\"v\":2}".utf8)
+    watcher.markSelfWrite(selfData)
+    try selfData.write(to: file, options: .atomic)
+    let selfWait = changedSem.wait(timeout: .now() + 0.2)
+    check(selfWait == .timedOut, "self-write ignored by watcher")
+
+    // External atomic write SHOULD trigger onExternalChange.
+    let externalData = Data("{\"v\":3}".utf8)
+    try externalData.write(to: file, options: .atomic)
+    let extWait = changedSem.wait(timeout: .now() + 2.0)
+    check(extWait == .success, "external atomic write detected")
+    check(collector.count == 1, "exactly one external change notification")
+}
+
 print(failures == 0 ? "✓ \(passes) checks passed" : "\(failures) failed, \(passes) passed")
 exit(failures == 0 ? 0 : 1)
