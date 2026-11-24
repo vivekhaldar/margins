@@ -548,5 +548,574 @@ test("font preferences round trip and CSS stacks") {
     check(custom.uiFontCSS.hasPrefix("\"Helvetica \\\"Neue\\\"\","), "quotes escaped in CSS font family")
 }
 
+test("per-machine project folder store and migration") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-pf-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let storeURL = dir.appendingPathComponent("project-folders.json")
+    let store = ProjectFolderStore(fileURL: storeURL)
+    let docID = UUID()
+    check(store.folder(for: docID) == nil, "empty initially")
+    check(store.folder(for: docID, fallbackDocumentFolder: "/legacy/repo") == "/legacy/repo", "falls back to legacy document field")
+
+    store.migrateIfNeeded(docID: docID, legacyFolder: "/legacy/repo")
+    check(store.folder(for: docID) == "/legacy/repo", "migrates legacy folder into local store")
+
+    // Reopen from disk to verify persistence.
+    let reloaded = ProjectFolderStore(fileURL: storeURL)
+    check(reloaded.folder(for: docID) == "/legacy/repo", "persisted across instances")
+
+    reloaded.setFolder("/machine-b/repo", for: docID)
+    check(reloaded.folder(for: docID, fallbackDocumentFolder: "/legacy/repo") == "/machine-b/repo", "local mapping overrides document field")
+
+    reloaded.setFolder(nil, for: docID)
+    check(reloaded.folder(for: docID) == nil, "clearing removes mapping")
+}
+
+test("file change watcher detects external atomic writes and ignores self writes") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-watch-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let file = dir.appendingPathComponent("note.margins")
+    let initial = Data("{\"v\":1}".utf8)
+    try initial.write(to: file, options: .atomic)
+
+    final class URLCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var urls: [URL] = []
+        func append(_ url: URL) { lock.lock(); urls.append(url); lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return urls.count }
+    }
+
+    let changedSem = DispatchSemaphore(value: 0)
+    let collector = URLCollector()
+
+    let watcher = FileChangeWatcher(debounceInterval: 0.05) { url in
+        collector.append(url)
+        changedSem.signal()
+    }
+    watcher.watch(file)
+    defer { watcher.stop() }
+
+    // Self-write should NOT trigger onExternalChange.
+    let selfData = Data("{\"v\":2}".utf8)
+    watcher.markSelfWrite(selfData)
+    try selfData.write(to: file, options: .atomic)
+    let selfWait = changedSem.wait(timeout: .now() + 0.2)
+    check(selfWait == .timedOut, "self-write ignored by watcher")
+
+    // External atomic write SHOULD trigger onExternalChange.
+    let externalData = Data("{\"v\":3}".utf8)
+    try externalData.write(to: file, options: .atomic)
+    let extWait = changedSem.wait(timeout: .now() + 2.0)
+    check(extWait == .success, "external atomic write detected")
+    check(collector.count == 1, "exactly one external change notification")
+}
+
+// --- Phase 1: Google OAuth & Drive backend tests ---
+
+actor MockHTTPClient: HTTPClient {
+    private var handlers: [@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)]
+    private var recordedRequests: [URLRequest] = []
+
+    init(_ handlers: [@Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)]) {
+        self.handlers = handlers
+    }
+
+    func requests() -> [URLRequest] { recordedRequests }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        recordedRequests.append(request)
+        guard !handlers.isEmpty else {
+            throw SyncError.invalidResponse("Unexpected HTTP request: \(request.url?.absoluteString ?? "")")
+        }
+        let handler = handlers.removeFirst()
+        return try await handler(request)
+    }
+
+    nonisolated static func jsonResponse(_ obj: Any, status: Int = 200, url: URL = URL(string: "https://example.com")!) -> (Data, HTTPURLResponse) {
+        let data = try! JSONSerialization.data(withJSONObject: obj)
+        let resp = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        return (data, resp)
+    }
+}
+
+test("Google desktop client in a distribution build") {
+    let bundled = GoogleOAuthConfig(clientID: "release", clientSecret: "release-value")
+    check(GoogleOAuthConfig().usingDefault(bundled) == bundled, "a new install uses the complete bundled client")
+    let own = GoogleOAuthConfig(clientID: "custom")
+    check(own.usingDefault(bundled) == own, "custom IDs never inherit another client's secret")
+    check(GoogleOAuthConfig(clientID: "release").usingDefault(bundled) == bundled, "existing matching ID uses the bundled secret")
+    check(GoogleOAuthConfig(clientID: "  release \n", clientSecret: "  ").usingDefault(bundled) == bundled, "whitespace-padded matching ID uses the bundled secret")
+    check(GoogleOAuthConfig(clientID: "  custom  ", clientSecret: " secret ").usingDefault(bundled) == GoogleOAuthConfig(clientID: "custom", clientSecret: "secret"), "custom client ID and secret are trimmed")
+    let override = GoogleOAuthConfig(clientID: "release", clientSecret: "override")
+    check(override.usingDefault(bundled) == override, "explicit client secret takes precedence")
+}
+
+test("PKCE challenge and loopback callback parser") {
+    // RFC 7636 Appendix B test vector:
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    check(PKCE.challenge(for: verifier) == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", "RFC 7636 S256 challenge matches")
+
+    let ok = LoopbackOAuthServer.parseCallbackRequest("GET /callback?code=abc123&state=xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", expectedState: "xyz")
+    check((try? ok.get()) == "abc123", "valid callback extracts code")
+
+    let mismatch = LoopbackOAuthServer.parseCallbackRequest("GET /callback?code=abc&state=wrong HTTP/1.1\r\n", expectedState: "xyz")
+    check((try? mismatch.get()) == nil, "state mismatch rejected")
+
+    let err = LoopbackOAuthServer.parseCallbackRequest("GET /callback?error=access_denied&state=xyz HTTP/1.1\r\n", expectedState: "xyz")
+    check((try? err.get()) == nil, "oauth error rejected")
+}
+
+let oauthSem = DispatchSemaphore(value: 0)
+Task {
+    // End-to-end loopback socket test
+    do {
+        let server = try LoopbackOAuthServer()
+        check(server.port > 0, "loopback binds ephemeral port")
+        let redirect = server.redirectURI
+        let waitTask = Task { try await server.waitForCode(expectedState: "st42", timeout: 5) }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let cbURL = URL(string: "\(redirect)?code=auth-code-99&state=st42")!
+        let (body, resp) = try await URLSession.shared.data(from: cbURL)
+        check((resp as? HTTPURLResponse)?.statusCode == 200, "loopback returns HTTP 200")
+        check(String(decoding: body, as: UTF8.self).contains("Signed in to Google Drive"), "loopback returns confirmation HTML")
+        let code = try await waitTask.value
+        check(code == "auth-code-99", "loopback delivers authorization code")
+    } catch {
+        check(false, "loopback server test threw \(error)")
+    }
+
+    // OAuth client authorization URL, code exchange, refresh, and disconnect
+    do {
+        let store = MemoryTokenStore()
+        let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+        let http = MockHTTPClient([
+            { req in
+                let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+                check(body.contains("grant_type=authorization_code"), "code exchange grant_type")
+                check(body.contains("code_verifier=ver123"), "code exchange includes PKCE verifier")
+                return MockHTTPClient.jsonResponse([
+                    "access_token": "tok-1",
+                    "refresh_token": "ref-1",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                    "scope": GoogleOAuthConfig.driveFileScope,
+                ])
+            },
+            { req in
+                let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+                check(body.contains("grant_type=refresh_token"), "refresh grant_type")
+                check(body.contains("refresh_token=ref-1"), "refresh sends stored refresh token")
+                return MockHTTPClient.jsonResponse([
+                    "access_token": "tok-2",
+                    "expires_in": 3600,
+                ])
+            },
+            { req in
+                check(req.url?.absoluteString == GoogleOAuthConfig.revokeEndpoint, "revoke endpoint called")
+                return MockHTTPClient.jsonResponse([:])
+            },
+        ])
+        let oauth = GoogleOAuthClient(
+            config: GoogleOAuthConfig(clientID: "test-client-id"),
+            tokenStore: store,
+            http: http,
+            now: { fixedNow }
+        )
+        let pkce = PKCE(codeVerifier: "ver123", state: "st1")
+        let authURL = try await oauth.authorizationURL(redirectURI: "http://127.0.0.1:9999/callback", pkce: pkce)
+        let authStr = authURL.absoluteString
+        check(authStr.contains("scope=https://www.googleapis.com/auth/drive.file"), "auth URL uses drive.file scope")
+        check(authStr.contains("code_challenge_method=S256"), "auth URL uses S256 PKCE")
+        check(authStr.contains("access_type=offline"), "auth URL requests offline refresh token")
+
+        let exchanged = try await oauth.exchangeCode("code-1", redirectURI: "http://127.0.0.1:9999/callback", codeVerifier: "ver123")
+        check(exchanged.accessToken == "tok-1" && exchanged.refreshToken == "ref-1", "tokens stored from exchange")
+        let cachedToken = try await oauth.validAccessToken()
+        check(cachedToken == "tok-1", "returns cached non-expired token")
+
+        let refreshed = try await oauth.validAccessToken(forceRefresh: true)
+        check(refreshed == "tok-2", "forceRefresh fetches new access token")
+        check(store.load()?.refreshToken == "ref-1", "refresh preserves existing refresh token when omitted")
+
+        await oauth.disconnect()
+        check(store.load() == nil, "disconnect clears stored tokens")
+    } catch {
+        check(false, "oauth client test threw \(error)")
+    }
+
+    // GoogleDriveBackend: ensureRootFolder (create), upload, listChanges pagination, 401 retry
+    do {
+        let docID = UUID()
+        final class RefreshRecorder: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [Bool] = []
+            func record(_ v: Bool) { lock.lock(); values.append(v); lock.unlock() }
+            var all: [Bool] { lock.lock(); defer { lock.unlock() }; return values }
+        }
+        let recorder = RefreshRecorder()
+        let http = MockHTTPClient([
+            // ensureRootFolder: search returns empty
+            { req in
+                check(req.url?.absoluteString.contains("marginsRoot") == true, "root folder query uses appProperties")
+                return MockHTTPClient.jsonResponse(["files": []])
+            },
+            // ensureRootFolder: creates folder
+            { req in
+                check(req.httpMethod == "POST", "creates folder via POST")
+                let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+                check(body.contains("\"name\":\"Margins\"") || body.contains("\"name\" : \"Margins\""), "folder named Margins")
+                return MockHTTPClient.jsonResponse(["id": "folder-1", "name": "Margins"])
+            },
+            // upload: first attempt returns 401, triggers forceRefresh retry
+            { _ in
+                MockHTTPClient.jsonResponse(["error": "unauthorized"], status: 401)
+            },
+            // upload: retry succeeds
+            { req in
+                check(req.httpMethod == "POST", "new upload uses POST")
+                check(req.value(forHTTPHeaderField: "Authorization") == "Bearer fresh-token", "retry uses refreshed token")
+                let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+                check(body.contains(docID.uuidString), "multipart metadata tags marginsDocId")
+                return MockHTTPClient.jsonResponse([
+                    "id": "file-1",
+                    "name": "Doc.margins",
+                    "headRevisionId": "rev-1",
+                    "appProperties": ["marginsDocId": docID.uuidString],
+                ])
+            },
+            // listChanges page 1
+            { _ in
+                MockHTTPClient.jsonResponse([
+                    "nextPageToken": "p2",
+                    "changes": [[
+                        "fileId": "file-1",
+                        "removed": false,
+                        "file": [
+                            "id": "file-1",
+                            "name": "Doc.margins",
+                            "headRevisionId": "rev-2",
+                            "parents": ["folder-1"],
+                            "appProperties": ["marginsDocId": docID.uuidString],
+                        ],
+                    ]],
+                ])
+            },
+            // listChanges page 2
+            { _ in
+                MockHTTPClient.jsonResponse([
+                    "newStartPageToken": "tok-next",
+                    "changes": [[
+                        "fileId": "file-2",
+                        "removed": true,
+                    ]],
+                ])
+            },
+        ])
+        let drive = GoogleDriveBackend(tokenProvider: { force in
+            recorder.record(force)
+            return force ? "fresh-token" : "initial-token"
+        }, http: http)
+
+        let folderID = try await drive.ensureRootFolder()
+        check(folderID == "folder-1", "created root folder ID returned")
+
+        let uploaded = try await drive.upload(data: Data("{\"html\":\"<h1>Hi</h1>\"}".utf8), name: "Doc.margins", docID: docID, folderID: folderID, existingFileID: nil)
+        check(uploaded.id == "file-1" && uploaded.headRevisionId == "rev-1" && uploaded.docID == docID, "upload parses RemoteFile")
+        check(recorder.all.contains(true), "401 triggered forceRefresh")
+
+        let page = try await drive.listChanges(pageToken: "p1", folderID: folderID)
+        check(page.newStartPageToken == "tok-next", "changes pagination captures newStartPageToken")
+        check(page.changes.count == 2, "changes combines all pages")
+        check(page.changes[0].file?.headRevisionId == "rev-2" && page.changes[1].removed, "changes parse updates and removals")
+    } catch {
+        check(false, "drive backend test threw \(error)")
+    }
+
+    oauthSem.signal()
+}
+oauthSem.wait()
+
+// --- Phase 2: SyncIndex and SyncEngine tests ---
+
+actor InMemorySyncBackend: SyncBackend {
+    struct Stored {
+        var meta: RemoteFile
+        var data: Data
+    }
+    var offline = false
+    var folderID = "drive-folder-1"
+    var files: [String: Stored] = [:]
+    var changeLog: [RemoteChange] = []
+    var revCounter = 0
+
+    func setOffline(_ v: Bool) { offline = v }
+
+    func seedRemote(doc: MarginsDocument, name: String) throws -> RemoteFile {
+        revCounter += 1
+        let id = "remote-\(revCounter)"
+        let data = try doc.encoded()
+        let meta = RemoteFile(id: id, name: name, docID: doc.id, headRevisionId: "rev-\(revCounter)",
+                              modifiedTime: Date(), trashed: false, size: Int64(data.count))
+        files[id] = Stored(meta: meta, data: data)
+        changeLog.append(RemoteChange(fileId: id, removed: false, file: meta))
+        return meta
+    }
+
+    func updateRemote(fileID: String, doc: MarginsDocument, newName: String? = nil) throws -> RemoteFile {
+        guard var stored = files[fileID] else { throw SyncError.httpError(404, "missing") }
+        revCounter += 1
+        let data = try doc.encoded()
+        stored.meta.headRevisionId = "rev-\(revCounter)"
+        if let newName { stored.meta.name = newName }
+        stored.meta.modifiedTime = Date()
+        stored.meta.size = Int64(data.count)
+        stored.data = data
+        files[fileID] = stored
+        changeLog.append(RemoteChange(fileId: fileID, removed: false, file: stored.meta))
+        return stored.meta
+    }
+
+    func fileCount() -> Int { files.count }
+    func fileMeta(_ id: String) -> RemoteFile? { files[id]?.meta }
+
+    func ensureRootFolder() async throws -> String {
+        if offline { throw SyncError.offline("simulated offline") }
+        return folderID
+    }
+
+    func listFiles(folderID: String) async throws -> [RemoteFile] {
+        if offline { throw SyncError.offline("simulated offline") }
+        return files.values.map(\.meta).filter { !$0.trashed }
+    }
+
+    func getStartPageToken() async throws -> String {
+        if offline { throw SyncError.offline("simulated offline") }
+        return "\(changeLog.count)"
+    }
+
+    func listChanges(pageToken: String, folderID: String) async throws -> ChangesPage {
+        if offline { throw SyncError.offline("simulated offline") }
+        let idx = Int(pageToken) ?? 0
+        let slice = idx < changeLog.count ? Array(changeLog[idx...]) : []
+        return ChangesPage(changes: slice, newStartPageToken: "\(changeLog.count)")
+    }
+
+    func getMetadata(fileID: String) async throws -> RemoteFile? {
+        if offline { throw SyncError.offline("simulated offline") }
+        return files[fileID]?.meta
+    }
+
+    func download(fileID: String) async throws -> Data {
+        if offline { throw SyncError.offline("simulated offline") }
+        guard let stored = files[fileID] else { throw SyncError.httpError(404, "not found") }
+        return stored.data
+    }
+
+    func upload(data: Data, name: String, docID: UUID, folderID: String, existingFileID: String?) async throws -> RemoteFile {
+        if offline { throw SyncError.offline("simulated offline") }
+        revCounter += 1
+        let id = existingFileID ?? "remote-\(revCounter)"
+        let meta = RemoteFile(id: id, name: name, docID: docID, headRevisionId: "rev-\(revCounter)",
+                              modifiedTime: Date(), trashed: false, size: Int64(data.count))
+        files[id] = Stored(meta: meta, data: data)
+        changeLog.append(RemoteChange(fileId: id, removed: false, file: meta))
+        return meta
+    }
+
+    func rename(fileID: String, newName: String) async throws -> RemoteFile {
+        if offline { throw SyncError.offline("simulated offline") }
+        guard var stored = files[fileID] else { throw SyncError.httpError(404, "not found") }
+        stored.meta.name = newName
+        files[fileID] = stored
+        return stored.meta
+    }
+
+    func delete(fileID: String) async throws {
+        if offline { throw SyncError.offline("simulated offline") }
+        files.removeValue(forKey: fileID)
+        changeLog.append(RemoteChange(fileId: fileID, removed: true, file: nil))
+    }
+}
+
+test("SyncIndex round trip and recency sorting") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-idx-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let idxURL = dir.appendingPathComponent("sync-index.json")
+    let d1 = UUID()
+    let d2 = UUID()
+    var index = SyncIndex(folderID: "f1", startPageToken: "10", lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    index.setEntry(SyncEntry(docID: d1, driveFileId: "r1", lastSyncedRevision: "rev1", filename: "Older.margins", title: "Older", modifiedAt: Date(timeIntervalSince1970: 1000), state: .synced))
+    index.setEntry(SyncEntry(docID: d2, driveFileId: "r2", lastSyncedRevision: "rev2", filename: "Newer.margins", title: "Newer", modifiedAt: Date(timeIntervalSince1970: 2000), state: .conflict, conflictFilename: "Newer (Conflict).margins"))
+    try index.save(to: idxURL)
+
+    let loaded = SyncIndex.load(from: idxURL)
+    check(loaded == index, "SyncIndex round trips identically")
+    check(loaded.sortedByRecency.map(\.docID) == [d2, d1], "sortedByRecency puts newest first")
+    check(loaded.conflictCount == 1, "conflictCount counts conflict entries")
+    check(loaded.entry(forDriveFileId: "r1")?.docID == d1, "lookup by driveFileId")
+}
+
+let syncSem = DispatchSemaphore(value: 0)
+Task {
+    // 1. Initial upload, rename in place without duplicate, and incremental pull with Markdown regeneration
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-sync-1-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let backend = InMemorySyncBackend()
+        let fixedDate = Date(timeIntervalSince1970: 1_735_689_600) // 2025-01-01 UTC
+        let engine = SyncEngine(
+            backend: backend,
+            documentsFolder: dir,
+            indexURL: dir.appendingPathComponent("sync-index.json"),
+            hostName: "Studio.local",
+            now: { fixedDate }
+        )
+
+        var doc = MarginsDocument()
+        doc.snapshot(html: "<h1>Untitled</h1><p>Draft</p>", slug: "init", author: .you)
+        let untitledURL = dir.appendingPathComponent("Untitled.margins")
+        try doc.encoded().write(to: untitledURL, options: .atomic)
+
+        let status1 = await engine.syncAll(uploadExistingLocal: true)
+        if case .synced = status1 { check(true, "initial sync succeeds") } else { check(false, "expected synced, got \(status1)") }
+        let fileCount1 = await backend.fileCount()
+        check(fileCount1 == 1, "one file uploaded to Drive")
+        let entry1 = await engine.currentIndex().entry(for: doc.id)
+        check(entry1?.driveFileId != nil && entry1?.state == .synced, "index tracks driveFileId and synced state")
+
+        // Rename Untitled.margins -> Roadmap.margins (same doc.id)
+        doc.snapshot(html: "<h1>Roadmap</h1><p>Updated</p>", slug: "rename", author: .you)
+        let renamedURL = dir.appendingPathComponent("Roadmap.margins")
+        try FileManager.default.removeItem(at: untitledURL)
+        try doc.encoded().write(to: renamedURL, options: .atomic)
+
+        _ = await engine.pushDocument(at: renamedURL)
+        let fileCount2 = await backend.fileCount()
+        check(fileCount2 == 1, "rename updates in place without creating duplicate on Drive")
+        let remoteMeta = await backend.fileMeta(entry1!.driveFileId!)
+        check(remoteMeta?.name == "Roadmap.margins", "Drive filename updated in place")
+
+        // Remote edit from Machine B pulled incrementally via changes.list
+        var remoteDoc = doc
+        remoteDoc.snapshot(html: "<h1>Roadmap</h1><p>From Mac B</p>", slug: "mac b", author: .you)
+        _ = try await backend.updateRemote(fileID: entry1!.driveFileId!, doc: remoteDoc)
+
+        _ = await engine.syncAll()
+        let pulled = try MarginsDocument.decode(Data(contentsOf: renamedURL))
+        check(pulled.html.contains("From Mac B"), "incremental pull updates local .margins file")
+        let mdURL = dir.appendingPathComponent("Roadmap.md")
+        let md = (try? String(contentsOf: mdURL, encoding: .utf8)) ?? ""
+        check(md.contains("From Mac B"), "pull regenerates local Markdown mirror")
+    } catch {
+        check(false, "sync engine lifecycle test threw \(error)")
+    }
+
+    // 2. V1 Conflict resolution (zero data loss) when remote moved ahead before push
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-sync-2-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let backend = InMemorySyncBackend()
+        let fixedDate = Date(timeIntervalSince1970: 1_735_689_600) // 2025-01-01
+        let engine = SyncEngine(
+            backend: backend,
+            documentsFolder: dir,
+            indexURL: dir.appendingPathComponent("sync-index.json"),
+            hostName: "MacBook-Pro.local",
+            now: { fixedDate }
+        )
+
+        var doc = MarginsDocument()
+        doc.snapshot(html: "<h1>Notes</h1><p>Base</p>", slug: "base", author: .you)
+        let url = dir.appendingPathComponent("Notes.margins")
+        try doc.encoded().write(to: url, options: .atomic)
+        _ = await engine.syncAll()
+        let driveID = await engine.currentIndex().entry(for: doc.id)!.driveFileId!
+
+        // Machine B updates Drive first
+        var macBDoc = doc
+        macBDoc.snapshot(html: "<h1>Notes</h1><p>Mac B edit</p>", slug: "b", author: .you)
+        _ = try await backend.updateRemote(fileID: driveID, doc: macBDoc)
+
+        // Machine A edits locally offline and pushes
+        var macADoc = doc
+        macADoc.snapshot(html: "<h1>Notes</h1><p>Mac A edit</p>", slug: "a", author: .you)
+        try macADoc.encoded().write(to: url, options: .atomic)
+
+        let conflictStatus = await engine.pushDocument(at: url)
+        check(conflictStatus == .conflict(count: 1), "divergent push detects conflict")
+        let entry = await engine.currentIndex().entry(for: doc.id)
+        check(entry?.state == .conflict, "entry marked conflict")
+        check(entry?.conflictFilename == "Notes (Conflict on MacBook-Pro 2025-01-01).margins", "conflict copy named with host and date")
+        let conflictURL = dir.appendingPathComponent(entry!.conflictFilename!)
+        let conflictDoc = try MarginsDocument.decode(Data(contentsOf: conflictURL))
+        let canonicalDoc = try MarginsDocument.decode(Data(contentsOf: url))
+        check(conflictDoc.html.contains("Mac A edit"), "conflict copy preserves local edit")
+        check(canonicalDoc.html.contains("Mac B edit"), "canonical file updated to remote version")
+    } catch {
+        check(false, "conflict resolution test threw \(error)")
+    }
+
+    // 3. Offline queue + retry, deduplication by doc.id, and cloudOnly on-demand download
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-sync-3-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let backend = InMemorySyncBackend()
+        var cloudDoc = MarginsDocument()
+        cloudDoc.snapshot(html: "<h1>Remote Only</h1><p>In Drive</p>", slug: "remote", author: .you)
+        _ = try await backend.seedRemote(doc: cloudDoc, name: "Remote Only.margins")
+
+        let engine = SyncEngine(
+            backend: backend,
+            documentsFolder: dir,
+            indexURL: dir.appendingPathComponent("sync-index.json"),
+            hostName: "Mini"
+        )
+
+        // Lazy initial sync indexes remote doc as cloudOnly without downloading
+        _ = await engine.syncAll(uploadExistingLocal: false, lazyDownload: true)
+        let cloudEntry = await engine.currentIndex().entry(for: cloudDoc.id)
+        check(cloudEntry?.state == .cloudOnly, "lazy sync marks remote doc as cloudOnly")
+        check(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("Remote Only.margins").path), "cloudOnly file not yet on disk")
+
+        // On-demand download via ensureLocal
+        let downloadedURL = try await engine.ensureLocal(docID: cloudDoc.id)
+        check(FileManager.default.fileExists(atPath: downloadedURL.path), "ensureLocal downloads file on demand")
+        let afterEntry = await engine.currentIndex().entry(for: cloudDoc.id)
+        check(afterEntry?.state == .synced, "entry transitions to synced after on-demand download")
+
+        // Offline write queues as pendingUpload, then flushes when back online
+        await backend.setOffline(true)
+        var localDoc = MarginsDocument()
+        localDoc.snapshot(html: "<h1>Offline Draft</h1><p>Plane mode</p>", slug: "offline", author: .you)
+        let offlineURL = dir.appendingPathComponent("Offline Draft.margins")
+        try localDoc.encoded().write(to: offlineURL, options: .atomic)
+        let offlineStatus = await engine.pushDocument(at: offlineURL)
+        check(offlineStatus == .offline(pendingCount: 1), "offline push reports offline with 1 pending")
+
+        await backend.setOffline(false)
+        let onlineStatus = await engine.syncAll()
+        if case .synced = onlineStatus { check(true, "queued offline document uploads once back online") } else { check(false, "expected synced after reconnect, got \(onlineStatus)") }
+        let syncedOfflineEntry = await engine.currentIndex().entry(for: localDoc.id)
+        check(syncedOfflineEntry?.state == .synced && syncedOfflineEntry?.driveFileId != nil, "offline doc now has driveFileId")
+    } catch {
+        check(false, "offline queue & cloudOnly test threw \(error)")
+    }
+
+    syncSem.signal()
+}
+syncSem.wait()
+
 print(failures == 0 ? "✓ \(passes) checks passed" : "\(failures) failed, \(passes) passed")
 exit(failures == 0 ? 0 : 1)

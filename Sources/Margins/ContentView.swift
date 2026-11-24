@@ -3,6 +3,8 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var state: AppState
+    @ObservedObject private var sync = SyncController.shared
+    @StateObject private var showLibraryPicker = Local(false)
 
     var body: some View {
         HSplitView {
@@ -12,6 +14,23 @@ struct ContentView: View {
                 .uiFont(.body)
                 .frame(minWidth: 220, idealWidth: 340, maxWidth: .infinity)
             VStack(spacing: 0) {
+                if sync.showOnboarding {
+                    SyncOnboardingBanner(sync: sync)
+                }
+                if let entry = sync.entry(for: state.doc.id),
+                   entry.state == .conflict,
+                   let conflictName = entry.conflictFilename {
+                    ConflictBanner(
+                        conflictFilename: conflictName,
+                        onOpenConflict: {
+                            let url = AppState.documentsFolder.appendingPathComponent(conflictName)
+                            DocumentWindows.shared.open(url)
+                        },
+                        onDismiss: {
+                            sync.clearConflict(for: state.doc.id)
+                        }
+                    )
+                }
                 if let v = state.previewing {
                     PreviewBanner(version: v)
                         .environment(\.interfaceZoom, state.zoom)
@@ -21,6 +40,14 @@ struct ContentView: View {
             }
             .frame(minWidth: 360, maxWidth: .infinity)
             .layoutPriority(1)
+        }
+        .sheet(isPresented: $showLibraryPicker.value) {
+            LibraryPickerView(sync: sync, onDismiss: { showLibraryPicker.value = false })
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .marginsOpenLibraryPicker)) { _ in
+            if DocumentWindows.shared.keyState === state {
+                showLibraryPicker.value = true
+            }
         }
         .inspector(isPresented: $state.showHistory) {
             HistoryView()
@@ -51,6 +78,7 @@ struct ContentView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             if state.busy { ProgressView().controlSize(.small).interfaceZoom(state.zoom) }
+            SyncStatusPill(sync: sync).interfaceZoom(state.zoom)
             ProjectMenu().interfaceZoom(state.zoom)
             ProviderMenu().interfaceZoom(state.zoom)
             Button {

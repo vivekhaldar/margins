@@ -77,13 +77,19 @@ public enum Keychain {
         return String(data: d, encoding: .utf8)
     }
 
-    public static func set(_ value: String, for account: String) {
+    @discardableResult
+    public static func set(_ value: String, for account: String) -> Bool {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                 kSecAttrAccount as String: account]
-        SecItemDelete(q as CFDictionary)
-        guard !value.isEmpty else { return }
+        if value.isEmpty {
+            let status = SecItemDelete(q as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        let attributes = [kSecValueData as String: Data(value.utf8)]
+        let status = SecItemUpdate(q as CFDictionary, attributes as CFDictionary)
+        guard status == errSecItemNotFound else { return status == errSecSuccess }
         var add = q
         add[kSecValueData as String] = Data(value.utf8)
-        SecItemAdd(add as CFDictionary, nil)
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 }

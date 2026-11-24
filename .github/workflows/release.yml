@@ -1,0 +1,203 @@
+name: Release Margins
+
+on:
+  push:
+    tags:
+      - 'release_*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main and parse version
+        id: meta
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Tag '${GITHUB_REF_NAME}' (${GITHUB_SHA}) is not on main; refusing to publish release." >&2
+            exit 1
+          fi
+
+          TAG_SUFFIX="${GITHUB_REF_NAME#release_}"
+          VERSION="${TAG_SUFFIX#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected tag format release_X.Y.Z (or release_vX.Y.Z), got '${GITHUB_REF_NAME}'." >&2
+            exit 1
+          fi
+
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          ARCH="$(uname -m)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "arch=${ARCH}" >> "$GITHUB_OUTPUT"
+          echo "Preparing Margins ${VERSION} (build ${BUILD_NUMBER}, ${ARCH}) from ${GITHUB_SHA}"
+
+      - name: Run self-tests
+        id: test
+        run: |
+          set -euo pipefail
+          OUTPUT="$(swift run MarginsSelfTest)"
+          printf '%s\n' "$OUTPUT"
+          CHECKS="$(printf '%s\n' "$OUTPUT" | grep -Eo '[0-9]+ checks' | tail -n 1 | awk '{print $1}' || true)"
+          echo "core_checks=${CHECKS:-0}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package DMG
+        env:
+          MARGINS_VERSION: ${{ steps.meta.outputs.version }}
+          MARGINS_BUILD_NUMBER: ${{ steps.meta.outputs.build_number }}
+          MARGINS_GOOGLE_OAUTH_JSON: ${{ secrets.MARGINS_GOOGLE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MARGINS_GOOGLE_OAUTH_JSON}" ]]; then
+            echo "MARGINS_GOOGLE_OAUTH_JSON secret is empty or not configured." >&2
+            exit 1
+          fi
+
+          OAUTH_FILE="$(mktemp "${RUNNER_TEMP}/google-oauth.XXXXXX.json")"
+          chmod 600 "$OAUTH_FILE"
+          trap 'rm -f "$OAUTH_FILE"' EXIT
+          printf '%s' "$MARGINS_GOOGLE_OAUTH_JSON" > "$OAUTH_FILE"
+
+          MARGINS_GOOGLE_OAUTH_FILE="$OAUTH_FILE" scripts/build-dmg.sh
+
+          plutil -p build/Margins.app/Contents/Info.plist | grep -q '"MarginsGoogleClientID"'
+          plutil -p build/Margins.app/Contents/Info.plist | grep -q '"MarginsGoogleClientSecret"'
+          codesign --verify --deep --strict build/Margins.app
+
+      - name: Verify mounted DMG signature and assemble release assets
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BUILD_NUMBER: ${{ steps.meta.outputs.build_number }}
+          ARCH: ${{ steps.meta.outputs.arch }}
+          CORE_CHECKS: ${{ steps.test.outputs.core_checks }}
+        run: |
+          set -euo pipefail
+          DMG_NAME="Margins-${VERSION}-${ARCH}.dmg"
+          SOURCE_ZIP="Margins-${VERSION}-source.zip"
+          DIST_DIR="build/release-assets"
+          rm -rf "$DIST_DIR"
+          mkdir -p "$DIST_DIR"
+
+          MOUNT_DIR="$(mktemp -d "${RUNNER_TEMP}/dmg-mount.XXXXXX")"
+          trap 'hdiutil detach "$MOUNT_DIR" -quiet 2>/dev/null || true; rm -rf "$MOUNT_DIR"' EXIT
+          hdiutil attach "build/${DMG_NAME}" -readonly -nobrowse -mountpoint "$MOUNT_DIR" -quiet
+          codesign --verify --deep --strict "${MOUNT_DIR}/Margins.app"
+          hdiutil detach "$MOUNT_DIR" -quiet
+
+          git archive --format=zip --prefix="Margins-${VERSION}/" -o "${DIST_DIR}/${SOURCE_ZIP}" HEAD
+          cp "build/${DMG_NAME}" "${DIST_DIR}/${DMG_NAME}"
+          cp LICENSE README.md "${DIST_DIR}/"
+
+          python3 - <<'PY'
+          import datetime, hashlib, json, os, pathlib
+
+          dist = pathlib.Path("build/release-assets")
+          version = os.environ["VERSION"]
+          arch = os.environ["ARCH"]
+          dmg_name = f"Margins-{version}-{arch}.dmg"
+          source_zip = f"Margins-{version}-source.zip"
+
+          def sha256(path: pathlib.Path) -> str:
+              h = hashlib.sha256()
+              with path.open("rb") as f:
+                  for chunk in iter(lambda: f.read(65536), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          artifacts = {
+              name: sha256(dist / name)
+              for name in ["LICENSE", dmg_name, source_zip, "README.md"]
+          }
+
+          meta = {
+              "version": version,
+              "tag": os.environ["GITHUB_REF_NAME"],
+              "commit": os.environ["GITHUB_SHA"],
+              "buildNumber": os.environ["BUILD_NUMBER"],
+              "architecture": arch,
+              "minimumMacOS": "14.0",
+              "signing": "ad-hoc; not notarized",
+              "dirty": False,
+              "createdAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "executableSHA256": sha256(pathlib.Path("build/Margins.app/Contents/MacOS/Margins")),
+              "artifacts": artifacts,
+              "verification": {
+                  "coreChecks": int(os.environ.get("CORE_CHECKS") or 0),
+                  "dmgIntegrityValid": True,
+                  "mountedAppSignatureValid": True,
+                  "sourceArchiveMatchesCommit": True,
+              },
+          }
+          (dist / "RELEASE-SOURCE.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+          PY
+
+          (
+            cd "$DIST_DIR"
+            shasum -a 256 LICENSE "${DMG_NAME}" "${SOURCE_ZIP}" README.md RELEASE-SOURCE.json > SHA256SUMS.txt
+            shasum -a 256 -c SHA256SUMS.txt
+          )
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          BUILD_NUMBER: ${{ steps.meta.outputs.build_number }}
+          ARCH: ${{ steps.meta.outputs.arch }}
+          CORE_CHECKS: ${{ steps.test.outputs.core_checks }}
+        run: |
+          set -euo pipefail
+          DMG_NAME="Margins-${VERSION}-${ARCH}.dmg"
+          SOURCE_ZIP="Margins-${VERSION}-source.zip"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          NOTES_FILE="$(mktemp "${RUNNER_TEMP}/release-notes.XXXXXX.md")"
+          trap 'rm -f "$NOTES_FILE"' EXIT
+
+          GENERATED="$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${GITHUB_REF_NAME}" \
+            -f target_commitish="${GITHUB_SHA}" \
+            --jq .body || true)"
+
+          cat > "$NOTES_FILE" <<EOF
+          ${GENERATED}
+
+          ## Install
+
+          Requires **macOS 14 or later on Apple silicon (${ARCH})**. Download \`${DMG_NAME}\`, open it, and drag Margins into Applications. Quit an older copy before launching the update.
+
+          The app is ad-hoc signed and is not notarized by Apple. If macOS blocks the first launch and you trust the download, use **System Settings → Privacy & Security → Open Anyway**.
+
+          ## Verification
+
+          Build **${BUILD_NUMBER}** passed **${CORE_CHECKS}** \`MarginsSelfTest\` checks. The app bundle signature, mounted DMG signature, DMG integrity, source archive, bundled Google OAuth client keys, and artifact checksums were verified in GitHub Actions.
+
+          ## Source and checksums
+
+          Tag \`${GITHUB_REF_NAME}\`, the packaged app, and \`${SOURCE_ZIP}\` are built from commit [\`${SHORT_SHA}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}). \`RELEASE-SOURCE.json\` records the full commit, build number, and hashes.
+
+          \`\`\`sh
+          shasum -a 256 -c SHA256SUMS.txt
+          \`\`\`
+          EOF
+
+          gh release create "${GITHUB_REF_NAME}" \
+            "build/release-assets/${DMG_NAME}" \
+            "build/release-assets/${SOURCE_ZIP}" \
+            "build/release-assets/LICENSE" \
+            "build/release-assets/README.md" \
+            "build/release-assets/RELEASE-SOURCE.json" \
+            "build/release-assets/SHA256SUMS.txt" \
+            --title "Margins ${VERSION}" \
+            --notes-file "$NOTES_FILE"

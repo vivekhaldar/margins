@@ -6,11 +6,22 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG=release
-VERSION=${MARGINS_VERSION:-0.2.3}
+VERSION=${MARGINS_VERSION:-0.3.0}
 BUILD_NUMBER=${MARGINS_BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
   echo "MARGINS_VERSION must be X.Y.Z and MARGINS_BUILD_NUMBER must be numeric" >&2
   exit 1
+fi
+# Resolve the desktop client before replacing a previously signed app.
+OAUTH_PLIST=""
+if [[ -n "${MARGINS_GOOGLE_OAUTH_FILE:-}${MARGINS_GOOGLE_OAUTH_PASS_ENTRY:-}" ]]; then
+  OAUTH_PLIST=$(mktemp)
+  trap 'rm -f "$OAUTH_PLIST"' EXIT
+  if [[ -n "${MARGINS_GOOGLE_OAUTH_FILE:-}" ]]; then
+    python3 scripts/google-client-plist.py < "$MARGINS_GOOGLE_OAUTH_FILE" > "$OAUTH_PLIST"
+  else
+    pass show "$MARGINS_GOOGLE_OAUTH_PASS_ENTRY" | python3 scripts/google-client-plist.py > "$OAUTH_PLIST"
+  fi
 fi
 swift build -c "$CONFIG" --product Margins
 BIN_DIR=$(swift build -c "$CONFIG" --show-bin-path)
@@ -63,6 +74,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+if [[ -n "$OAUTH_PLIST" ]]; then
+  /usr/libexec/PlistBuddy -c "Merge '$OAUTH_PLIST'" "$APP/Contents/Info.plist"
+fi
 codesign --force --deep --sign - "$APP" >/dev/null
 echo "Built $APP"
 if [[ "${1:-}" == "--open" ]]; then open "$APP"; fi
