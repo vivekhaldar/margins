@@ -67,17 +67,18 @@ final class SyncController: ObservableObject {
         self.status = connected ? .synced(index.lastSyncedAt) : .disconnected
         self.showOnboarding = !connected && !defaults.bool(forKey: Self.onboardingDismissedKey)
 
-        Task {
-            await engine.setEventHandler { [weak self] event in
+        Task { [weak self] in
+            guard let self else { return }
+            await self.engine.setEventHandler { [weak self] event in
                 Task { @MainActor [weak self] in
                     self?.handle(event)
                 }
             }
             if connected {
-                startBackgroundPolling()
-                await syncNow()
+                self.startBackgroundPolling()
+                await self.syncNow()
             } else {
-                _ = await engine.scanLocalLibrary()
+                _ = await self.engine.scanLocalLibrary()
             }
         }
 
@@ -289,4 +290,8 @@ final class SyncController: ObservableObject {
             defaults.set(data, forKey: Self.configKey)
         }
     }
+}
+
+extension Notification.Name {
+    static let marginsOpenLibraryPicker = Notification.Name("com.vivekhaldar.margins.openLibraryPicker")
 }

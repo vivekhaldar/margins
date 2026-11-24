@@ -20,7 +20,15 @@ struct MarginsApp: App {
                 Button("New Document") { openWindow(id: "document") }.keyboardShortcut("n")
                 Button("New Window") { openWindow(id: "document") }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("Open…") { DocumentWindows.shared.showOpenPanel() }.keyboardShortcut("o")
+                Button("Open…") {
+                    if SyncController.shared.isConnected {
+                        NotificationCenter.default.post(name: .marginsOpenLibraryPicker, object: nil)
+                    } else {
+                        DocumentWindows.shared.showOpenPanel()
+                    }
+                }.keyboardShortcut("o")
+                Button("Open from Disk…") { DocumentWindows.shared.showOpenPanel() }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
                 // Keep Close explicit alongside the custom File commands.
                 Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
@@ -31,6 +39,8 @@ struct MarginsApp: App {
                 Button("Export HTML…") { state.exportHTML() }.keyboardShortcut("e", modifiers: [.command, .shift])
                 Button("Show in Finder") { state.revealInFinder() }
                 Button("Show Markdown in Finder") { state.revealMarkdown() }
+                Button("Move to Margins Library") { SyncController.shared.moveToSyncedLibrary(state: state) }
+                    .disabled(SyncController.shared.isInSyncedLibrary(state.fileURL))
             }
             CommandGroup(after: .textEditing) {
                 Button("Find in Document…") { Task { await state.editor.showFind() } }
