@@ -59,7 +59,13 @@ struct IntentPane: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !state.doc.intents.isEmpty {
+            HStack {
+                ComposerTargetPill()
+                Spacer()
+            }
+            if state.composerTarget == .cloud {
+                CloudComposerOptions()
+            } else if !state.doc.intents.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(suggestions, id: \.self) { s in
@@ -86,8 +92,7 @@ struct IntentPane: View {
                         return .handled
                     }
                 if draftBox.value.isEmpty {
-                    Text(state.doc.intents.isEmpty ? "What do you want to write? e.g. “A design doc for rate limiting our public API”"
-                                                   : "Refine the document… (select text first to scope it)")
+                    Text(composerPlaceholder)
                         .uiFont(.body)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 5).padding(.vertical, 1)
@@ -102,17 +107,40 @@ struct IntentPane: View {
                 Spacer()
                 // Return (including ⌘Return) is handled by the focused composer above.
                 // A window-wide shortcut here would steal ⌘Return from the document.
-                Button("Send") { send() }
+                Button(state.composerTarget == .cloud ? "Launch" : "Send") { send() }
                     .uiFont(.body)
-                    .disabled(draftBox.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(sendDisabled)
             }
         }
         .padding(12)
         .onAppear { composerFocused = true }
     }
 
+    private var composerPlaceholder: String {
+        if state.composerTarget == .cloud {
+            return "Describe a task for Copilot Cloud Agent…"
+        }
+        return state.doc.intents.isEmpty
+            ? "What do you want to write? e.g. “A design doc for rate limiting our public API”"
+            : "Refine the document… (select text first to scope it)"
+    }
+
+    private var sendDisabled: Bool {
+        if draftBox.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        if state.composerTarget == .cloud {
+            return state.cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return false
+    }
+
     private func send() {
-        state.submit(draftBox.value)
+        guard !sendDisabled else { return }
+        if state.composerTarget == .cloud {
+            state.submitCloud(draftBox.value)
+        } else {
+            state.submit(draftBox.value)
+        }
         draftBox.value = ""
     }
 }
@@ -169,7 +197,14 @@ struct IntentCard: View {
                 .help("Open this thread in the document")
             }
             Text(intent.text).uiFont(.body, weight: .medium).textSelection(.enabled)
-            status
+            if let cloudTask = intent.cloudTask {
+                CloudTaskCardSection(intent: intent, task: cloudTask)
+                if let e = intent.error {
+                    Text(e).uiFont(.caption).foregroundStyle(.red).textSelection(.enabled)
+                }
+            } else {
+                status
+            }
             if intent.steps != nil || state.liveThought[intent.step] != nil {
                 AgentActivity(intent: intent)
             }

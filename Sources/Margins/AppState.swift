@@ -76,6 +76,20 @@ final class AppState: ObservableObject {
     var fileWatcher: FileChangeWatcher?
     @Published var projectFolderRevision = 0
 
+    // Copilot Cloud Agent state (logic in AppState+CloudAgents.swift)
+    @Published var composerTarget: ComposerTarget = .local
+    @Published var cloudRepo = ""
+    @Published var cloudBaseRef = "main"
+    @Published var cloudCreatePR = false
+    @Published var cloudAuthStatus: CopilotCloudAuthStatus?
+    @Published var cloudDirtyFilesCount = 0
+    @Published var cloudLogs: [UUID: String] = [:]
+    @Published var cloudStreamingIntentIDs: Set<UUID> = []
+    var cloudPollTasks: [UUID: Task<Void, Never>] = [:]
+    var cloudLogTasks: [UUID: Task<Void, Never>] = [:]
+    var cloudNotifiedAttention: Set<UUID> = []
+    let cloudClient = CopilotCloudClient()
+
     init(restoreLastDocument: Bool = false, untitledURL: URL? = nil, defaults: UserDefaults = .standard,
          projectFolderStore: ProjectFolderStore = .shared) {
         self.defaults = defaults
@@ -125,6 +139,8 @@ final class AppState: ObservableObject {
             open(last)
         }
         startWatchingCurrentFile()
+        resumeCloudPolling()
+        refreshCloudContext()
     }
 
     deinit {

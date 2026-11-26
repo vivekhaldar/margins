@@ -371,7 +371,7 @@ extension AppState {
         scheduleSave()
     }
 
-    func stopAll() { running.keys.forEach(stop(step:)) }
+    func stopAll() { running.keys.forEach(stop(step:)); cancelCloudPolling() }
 
     private func finish(_ step: Int, documentID: UUID) {
         guard documentSessionID == documentID else { return }

@@ -161,8 +161,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             DocumentWindows.shared.persistSession()
             if notification.name == NSWindow.didBecomeKeyNotification,
-               let url = DocumentWindows.shared.keyState?.fileURL {
-                AgentNotifications.shared.clearNotifications(forDocumentURL: url)
+               let keyState = DocumentWindows.shared.keyState {
+                AgentNotifications.shared.clearNotifications(forDocumentURL: keyState.fileURL)
+                keyState.pollActiveCloudTasksImmediately()
             }
         }
     }

@@ -178,6 +178,7 @@ extension AppState {
             self.previewing = nil
             self.pending = PendingInfo()
             self.defaults.removeObject(forKey: "lastDocument")
+            self.refreshCloudContext(forceRepoResolve: true)
             let installedSession = self.documentSessionID
             Task { await self.loadEditorDocument(session: installedSession) }
         }
@@ -221,6 +222,8 @@ extension AppState {
                 self.projectFolderRevision += 1
                 self.fileURL = url
                 self.startWatchingCurrentFile()
+                self.resumeCloudPolling()
+                self.refreshCloudContext(forceRepoResolve: true)
                 self.previewing = nil
                 self.pending = PendingInfo()
                 self.defaults.set(url, forKey: "lastDocument")
@@ -355,6 +358,7 @@ extension AppState {
         doc = incoming
         projectFolderStore.migrateIfNeeded(docID: incoming.id, legacyFolder: incoming.projectFolder)
         projectFolderRevision += 1
+        resumeCloudPolling()
         pending = PendingInfo()
         let session = documentSessionID
         Task { await loadEditorDocument(session: session) }
