@@ -115,19 +115,22 @@ extension AppState {
     // MARK: - Polling Lifecycle
 
     func resumeCloudPolling() {
+        startCloudWatchers(trigger: .open)
+    }
+
+    /// Focus only fills gaps (a live `--log --follow` stream is left alone); wake restarts every watcher
+    /// because `gh` children may be stuck on sockets that died while the machine slept.
+    func pollActiveCloudTasksImmediately(trigger: CloudReconcileTrigger) {
+        refreshCloudContext(forceRepoResolve: false)
+        startCloudWatchers(trigger: trigger)
+    }
+
+    private func startCloudWatchers(trigger: CloudReconcileTrigger) {
         for intent in doc.intents {
             guard let task = intent.cloudTask,
                   CloudTaskState(rawState: task.cloudState).shouldPoll,
-                  cloudPollTasks[intent.id] == nil else { continue }
-            startCloudPolling(for: intent.id)
-        }
-    }
-
-    func pollActiveCloudTasksImmediately() {
-        refreshCloudContext(forceRepoResolve: false)
-        for intent in doc.intents {
-            guard let task = intent.cloudTask,
-                  CloudTaskState(rawState: task.cloudState).shouldPoll else { continue }
+                  CloudWatcherPolicy.shouldStartWatcher(trigger: trigger, watcherRunning: cloudPollTasks[intent.id] != nil)
+            else { continue }
             startCloudPolling(for: intent.id)
         }
     }
@@ -187,25 +190,21 @@ extension AppState {
                 cloudStreamingIntentIDs.remove(intentID)
             }
         }
-        var receivedFirstLine = false
-        let lineLock = NSLock()
+        let stream = CloudLogStreamBox(existing: cloudLogs[intentID])
         let client = cloudClient
         _ = try? await client.streamSessionLog(repo: repo, sessionID: sessionID) { [weak self] line in
-            lineLock.lock()
-            let isFirstLine = !receivedFirstLine
-            receivedFirstLine = true
-            lineLock.unlock()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, self.documentSessionID == session else { return }
-                    if isFirstLine {
-                        self.cloudLogs[intentID] = line
-                    } else {
-                        let current = self.cloudLogs[intentID] ?? ""
-                        self.cloudLogs[intentID] = current.isEmpty ? line : current + "\n" + line
-                    }
+                    guard stream.isActive, let self, self.documentSessionID == session,
+                          let text = stream.accumulator.append(line) else { return }
+                    self.cloudLogs[intentID] = text
                 }
             }
+        }
+        stream.isActive = false
+        // A replay shorter than what was shown (e.g. GitHub trimmed the log) still wins once it ends cleanly.
+        if !Task.isCancelled, documentSessionID == session, !stream.accumulator.text.isEmpty {
+            cloudLogs[intentID] = stream.accumulator.text
         }
     }
 
@@ -450,5 +449,17 @@ extension AppState {
             .joined(separator: "\n\n")
         guard !plain.isEmpty else { return nil }
         return String(plain.prefix(3000))
+    }
+}
+
+/// Main-actor state for one live log stream; main-actor isolation makes it safe to capture in the
+/// `@Sendable` line callback without a lock or a captured `var`.
+@MainActor
+private final class CloudLogStreamBox {
+    var accumulator: CloudLogStreamAccumulator
+    var isActive = true
+
+    init(existing: String?) {
+        accumulator = CloudLogStreamAccumulator(existing: existing)
     }
 }

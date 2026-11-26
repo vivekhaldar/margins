@@ -175,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if notification.name == NSWindow.didBecomeKeyNotification,
                let keyState = DocumentWindows.shared.keyState {
                 AgentNotifications.shared.clearNotifications(forDocumentURL: keyState.fileURL)
-                keyState.pollActiveCloudTasksImmediately()
+                keyState.pollActiveCloudTasksImmediately(trigger: .focus)
             }
         }
     }

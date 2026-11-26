@@ -4,7 +4,9 @@ public struct CopilotCloudClient: Sendable {
     public static let readOnlyGuardrail =
         "IMPORTANT (Read-only mode): Do not create branches, commit changes, edit repository files, or open a pull request. Analyze the repository and provide your full answer, findings, or proposed text in your final response."
 
-    private static let recoveryWindowSeconds: TimeInterval = 300
+    /// Tasks created up to this long before the POST started still count (client/server clock skew).
+    private static let recoveryClockSkewSeconds: TimeInterval = 120
+    private static let recoveryMaxCandidates = 5
     private let runner: CloudCommandRunner
     private let now: @Sendable () -> Date
 
@@ -85,11 +87,12 @@ public struct CopilotCloudClient: Sendable {
         }
     }
 
+    /// Lists recent tasks, newest-created first. List items never include `prompt` or `sessions`.
     public func listRecentTasks(repo rawRepo: String, perPage: Int = 20) async throws -> [CloudTaskSnapshot] {
         let repo = try Self.validateRepo(rawRepo)
         let gh = try requireGH()
         let clamped = max(1, min(perPage, 100))
-        let endpoint = "agents/repos/\(repo)/tasks?per_page=\(clamped)"
+        let endpoint = "agents/repos/\(repo)/tasks?per_page=\(clamped)&sort=created_at&direction=desc"
         let res = try await runner.run(gh, arguments: ["api", endpoint], stdin: nil, cwd: nil, onLine: nil)
         guard res.status == 0 else {
             throw CopilotCloudError.commandFailed(command: "gh api \(endpoint)", status: res.status, detail: Self.bestOutput(res))
@@ -255,16 +258,50 @@ public struct CopilotCloudClient: Sendable {
         return url
     }
 
+    /// After an ambiguous POST, finds the task we probably created. The list endpoint omits prompts, so
+    /// candidates created since the POST (by this user, when known) are fetched individually and matched on
+    /// `sessions[].prompt`. If exactly one candidate exists and GitHub exposes no prompt for it yet, it is
+    /// accepted; any other ambiguity returns nil rather than attaching to someone else's task.
     private func recoverSubmittedTask(repo: String, prompt: String, since startedAt: Date) async throws -> CloudTaskSnapshot? {
         let recent = try await listRecentTasks(repo: repo, perPage: 20)
-        let normalizedTarget = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let earliest = startedAt.addingTimeInterval(-Self.recoveryWindowSeconds)
-        return recent.first { task in
-            guard let candidate = task.prompt?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  candidate == normalizedTarget else { return false }
-            if let created = task.createdAt { return created >= earliest }
+        let viewer = await viewerID()
+        let candidates = Self.recoveryCandidates(
+            recent,
+            earliest: startedAt.addingTimeInterval(-Self.recoveryClockSkewSeconds),
+            viewerID: viewer
+        )
+        guard !candidates.isEmpty else { return nil }
+        let target = Self.normalizePrompt(prompt)
+        var unverified: [CloudTaskSnapshot] = []
+        for candidate in candidates.prefix(Self.recoveryMaxCandidates) {
+            guard let detail = try? await fetchTask(repo: repo, id: candidate.taskID) else {
+                unverified.append(candidate)
+                continue
+            }
+            let prompts = detail.sessionPrompts.map(Self.normalizePrompt)
+            if prompts.contains(target) { return detail }
+            if prompts.isEmpty { unverified.append(detail) }
+        }
+        return candidates.count == 1 && unverified.count == 1 ? unverified[0] : nil
+    }
+
+    private func viewerID() async -> Int64? {
+        guard let gh = runner.locate("gh"),
+              let res = try? await runner.run(gh, arguments: ["api", "user", "--jq", ".id"], stdin: nil, cwd: nil, onLine: nil),
+              res.status == 0 else { return nil }
+        return Int64(res.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    static func recoveryCandidates(_ tasks: [CloudTaskSnapshot], earliest: Date, viewerID: Int64?) -> [CloudTaskSnapshot] {
+        tasks.filter { task in
+            guard let created = task.createdAt, created >= earliest else { return false }
+            if let viewerID, let creator = task.creatorID, creator != viewerID { return false }
             return true
         }
+    }
+
+    static func normalizePrompt(_ raw: String) -> String {
+        raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     private static func parseTaskObject(_ obj: [String: Any]) throws -> CloudTaskSnapshot {
@@ -275,15 +312,20 @@ public struct CopilotCloudClient: Sendable {
         let state = nonEmptyString(obj["state"] ?? obj["status"]) ?? "queued"
         let createdAt = nonEmptyString(obj["created_at"] ?? obj["createdAt"]).flatMap(parseISO8601)
         let prompt = nonEmptyString(obj["prompt"])
-        let sessionID = newestSessionID(in: obj["sessions"] as? [[String: Any]] ?? [])
+        let sessions = obj["sessions"] as? [[String: Any]] ?? []
+        let sessionID = newestSessionID(in: sessions)
             ?? nonEmptyString(obj["session_id"] ?? obj["sessionId"])
+        let creator = obj["creator"] as? [String: Any]
+        let creatorID = (creator?["id"] as? NSNumber)?.int64Value
         return CloudTaskSnapshot(
             taskID: taskID,
             htmlURL: htmlURL,
             state: state,
             sessionID: sessionID,
             createdAt: createdAt,
-            prompt: prompt
+            prompt: prompt,
+            sessionPrompts: sessions.compactMap { nonEmptyString($0["prompt"]) },
+            creatorID: creatorID
         )
     }
 

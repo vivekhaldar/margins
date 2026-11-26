@@ -1599,47 +1599,152 @@ test("CloudTaskFormatter escapes HTML and filters unsafe URLs") {
     check(!html.contains("javascript:"), "unsafe URL scheme rejected")
 }
 
+test("CloudTaskFormatter.extractSummary keeps the final answer and drops tool steps") {
+    let log = """
+      I'll start by exploring the repository structure.
+
+    Bash: List files
+
+        $ ls -la
+        total 12
+
+    View README.md
+
+        # Project
+
+    Thought
+
+      ## Summary
+
+      The parser lives in Sources/Parser.swift and converts Markdown into
+      HTML using a two-pass approach.
+
+      │ File         │ Purpose │
+      │──────────────┼─────────│
+      │ Parser.swift │ parse   │
+
+      • Handles tables
+      • Handles footnotes and a long item that wraps onto the
+        next terminal line
+
+    """
+    let summary = CloudTaskFormatter.extractSummary(fromLog: log)
+    check(summary.hasPrefix("## Summary"), "summary starts at the final answer")
+    check(!summary.contains("ls -la") && !summary.contains("README") && !summary.contains("explor"), "tool steps and earlier chatter dropped")
+    check(summary.contains("converts Markdown into HTML using"), "terminal hard-wraps are unwrapped")
+    check(summary.contains("│ Parser.swift │ parse   │"), "table rows kept intact")
+    check(summary.contains("• Handles footnotes and a long item that wraps onto the next terminal line"), "wrapped list item joined")
+
+    let short = CloudTaskFormatter.extractSummary(fromLog: log, maxChars: 140)
+    check(!short.contains("│"), "truncation never splits a table")
+    check(short.hasSuffix("two-pass approach."), "truncation stops at a paragraph boundary")
+    let tiny = CloudTaskFormatter.extractSummary(fromLog: "  " + String(repeating: "word ", count: 50), maxChars: 30)
+    check(tiny.count <= 30 && tiny.hasSuffix("…") && !tiny.contains("wor…"), "oversized paragraph cut at a word boundary")
+
+    let withFooter = "  Final answer here.\n\nFor detailed session logs, try:\n\n  gh agent-task view 'abc' --log\n"
+    check(CloudTaskFormatter.extractSummary(fromLog: withFooter) == "Final answer here.", "gh footer is ignored")
+    check(CloudTaskFormatter.extractSummary(fromLog: "  \n\n") == "", "empty log yields empty summary")
+}
+
+test("CloudLogStreamAccumulator buffers reconnect replay and CloudWatcherPolicy") {
+    var fresh = CloudLogStreamAccumulator(existing: nil)
+    check(fresh.append("a") == "a" && fresh.append("b") == "a\nb", "first stream publishes immediately")
+
+    var replay = CloudLogStreamAccumulator(existing: "a\nb\nc")
+    check(replay.append("a") == nil && replay.append("b") == nil, "replay of already-shown log is buffered")
+    check(replay.append("c") == "a\nb\nc", "publishes once replay catches up")
+    check(replay.append("d") == "a\nb\nc\nd", "then appends live lines without duplicates")
+
+    check(!CloudWatcherPolicy.shouldStartWatcher(trigger: .focus, watcherRunning: true), "focus leaves a live stream alone")
+    check(CloudWatcherPolicy.shouldStartWatcher(trigger: .focus, watcherRunning: false), "focus restarts a missing watcher")
+    check(CloudWatcherPolicy.shouldStartWatcher(trigger: .wake, watcherRunning: true), "wake restarts possibly-wedged streams")
+    check(!CloudWatcherPolicy.shouldStartWatcher(trigger: .open, watcherRunning: true), "open does not duplicate watchers")
+}
+
 let cloudSem = DispatchSemaphore(value: 0)
 Task {
-    // 1. Timeout / duplicate-launch recovery: never retry POST, recover from GET ?per_page=20
+    // 1. Timeout / duplicate-launch recovery: never retry POST. List items omit `prompt`, so candidates
+    //    created since the POST are fetched individually and matched on `sessions[].prompt`.
     do {
         struct SimulatedTimeout: Error {}
         let fixedNow = Date(timeIntervalSince1970: 1_730_000_000)
+        let iso = ISO8601DateFormatter()
         let req = CloudTaskRequest(repo: "octo/repo", baseRef: "main", instruction: "Refactor parser", createPullRequest: false)
         let expectedPrompt = CopilotCloudClient.packagePrompt(for: req)
-        let recentPayload = try JSONSerialization.data(withJSONObject: [
-            "tasks": [
-                [
-                    "id": "task-old",
-                    "html_url": "https://github.com/octo/repo/tasks/task-old",
-                    "state": "completed",
-                    "prompt": "Different prompt",
-                    "created_at": "2024-10-27T05:45:00Z",
-                ],
-                [
-                    "id": "task-recovered",
-                    "html_url": "https://github.com/octo/repo/tasks/task-recovered",
-                    "state": "queued",
-                    "prompt": expectedPrompt,
-                    "created_at": ISO8601DateFormatter().string(from: fixedNow),
-                ],
-            ]
-        ])
+        func json(_ obj: Any) -> String { String(decoding: try! JSONSerialization.data(withJSONObject: obj), as: UTF8.self) }
+        let listJSON = json(["tasks": [
+            ["id": "task-other", "state": "queued", "creator": ["id": 7], "created_at": iso.string(from: fixedNow.addingTimeInterval(5))],
+            ["id": "task-recovered", "state": "queued", "creator": ["id": 42], "created_at": iso.string(from: fixedNow.addingTimeInterval(3))],
+            ["id": "task-sibling", "state": "queued", "creator": ["id": 42], "created_at": iso.string(from: fixedNow.addingTimeInterval(1))],
+            ["id": "task-old", "state": "completed", "creator": ["id": 42], "created_at": "2024-10-27T05:45:00Z"],
+        ]])
+        // GitHub may reflow whitespace; the initial session's prompt can also be empty.
+        let recoveredDetail = json(["id": "task-recovered", "state": "queued", "html_url": "https://github.com/octo/repo/tasks/task-recovered",
+                                    "sessions": [["id": "sess-a", "prompt": expectedPrompt.replacingOccurrences(of: "\n\n", with: "\n \n")],
+                                                 ["id": "sess-0", "prompt": ""]]])
         let runner = MockCloudCommandRunner(handlers: [
             { _, _ in throw SimulatedTimeout() },
             { call, _ in
-                check(call.arguments == ["api", "agents/repos/octo/repo/tasks?per_page=20"], "queries recent tasks on ambiguous POST")
-                return ProcessResult(status: 0, stdout: String(decoding: recentPayload, as: UTF8.self), stderr: "")
+                check(call.arguments == ["api", "agents/repos/octo/repo/tasks?per_page=20&sort=created_at&direction=desc"],
+                      "queries newest-created tasks on ambiguous POST")
+                return ProcessResult(status: 0, stdout: listJSON, stderr: "")
+            },
+            { call, _ in
+                check(call.arguments == ["api", "user", "--jq", ".id"], "looks up viewer to filter other users' tasks")
+                return ProcessResult(status: 0, stdout: "42\n", stderr: "")
+            },
+            { call, _ in
+                check(call.arguments == ["api", "agents/repos/octo/repo/tasks/task-recovered"], "skips other creators and fetches newest candidate")
+                return ProcessResult(status: 0, stdout: recoveredDetail, stderr: "")
             },
         ])
         let client = CopilotCloudClient(runner: runner, now: { fixedNow })
         let recovered = try await client.startTask(req)
         check(recovered.taskID == "task-recovered", "recovered existing task instead of retrying POST")
+        check(recovered.sessionID == "sess-a" || recovered.sessionID == "sess-0", "recovered snapshot carries session")
         let calls = await runner.calls()
-        let postCalls = calls.filter { $0.arguments.contains("POST") }
-        check(postCalls.count == 1, "POST is invoked exactly once")
+        check(calls.filter { $0.arguments.contains("POST") }.count == 1, "POST is invoked exactly once")
     } catch {
         check(false, "timeout recovery test threw \(error)")
+    }
+
+    // 1b. Recovery refuses to guess when several candidates exist and none exposes a matching prompt.
+    do {
+        let fixedNow = Date(timeIntervalSince1970: 1_730_000_000)
+        let created = ISO8601DateFormatter().string(from: fixedNow)
+        let listJSON = #"{"tasks":[{"id":"t1","state":"queued","created_at":"\#(created)"},{"id":"t2","state":"queued","created_at":"\#(created)"}]}"#
+        let empty: (String) -> String = { #"{"id":"\#($0)","state":"queued","sessions":[{"id":"s","prompt":""}]}"# }
+        let runner = MockCloudCommandRunner(handlers: [
+            { _, _ in ProcessResult(status: 1, stdout: "", stderr: "HTTP 502") },
+            { _, _ in ProcessResult(status: 0, stdout: listJSON, stderr: "") },
+            { _, _ in ProcessResult(status: 1, stdout: "", stderr: "no user scope") },
+            { _, _ in ProcessResult(status: 0, stdout: empty("t1"), stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: empty("t2"), stderr: "") },
+        ])
+        let client = CopilotCloudClient(runner: runner, now: { fixedNow })
+        do {
+            _ = try await client.startTask(CloudTaskRequest(repo: "octo/repo", baseRef: "main", instruction: "Hi"))
+            check(false, "ambiguous recovery should not attach to an arbitrary task")
+        } catch {
+            check(error.localizedDescription.contains("HTTP 502"), "surfaces original POST failure when recovery is ambiguous")
+        }
+    }
+
+    // 1c. A single fresh candidate whose prompt GitHub has not exposed yet is accepted.
+    do {
+        let fixedNow = Date(timeIntervalSince1970: 1_730_000_000)
+        let created = ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(2))
+        let runner = MockCloudCommandRunner(handlers: [
+            { _, _ in ProcessResult(status: 0, stdout: "not json", stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: #"{"tasks":[{"id":"only","state":"queued","created_at":"\#(created)"}]}"#, stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: "42", stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: #"{"id":"only","state":"queued","sessions":[{"id":"s1","prompt":""}]}"#, stderr: "") },
+        ])
+        let client = CopilotCloudClient(runner: runner, now: { fixedNow })
+        let task = try await client.startTask(CloudTaskRequest(repo: "octo/repo", baseRef: "main", instruction: "Hi"))
+        check(task.taskID == "only" && task.sessionID == "s1", "single unverified candidate is recovered")
+    } catch {
+        check(false, "single-candidate recovery threw \(error)")
     }
 
     // 2. Polling newest session selection, session metadata, log fetch, live log stream, and repo resolution

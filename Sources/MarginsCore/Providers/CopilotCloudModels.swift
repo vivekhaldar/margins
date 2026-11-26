@@ -110,6 +110,9 @@ public struct CloudTaskSnapshot: Equatable, Sendable {
     public var sessionID: String?
     public var createdAt: Date?
     public var prompt: String?
+    /// Non-empty `sessions[].prompt` values (only present on the single-task GET).
+    public var sessionPrompts: [String]
+    public var creatorID: Int64?
 
     public init(
         taskID: String,
@@ -117,7 +120,9 @@ public struct CloudTaskSnapshot: Equatable, Sendable {
         state: String,
         sessionID: String? = nil,
         createdAt: Date? = nil,
-        prompt: String? = nil
+        prompt: String? = nil,
+        sessionPrompts: [String] = [],
+        creatorID: Int64? = nil
     ) {
         self.taskID = taskID
         self.htmlURL = htmlURL
@@ -125,6 +130,8 @@ public struct CloudTaskSnapshot: Equatable, Sendable {
         self.sessionID = sessionID
         self.createdAt = createdAt
         self.prompt = prompt
+        self.sessionPrompts = sessionPrompts
+        self.creatorID = creatorID
     }
 }
 
@@ -238,15 +245,9 @@ public enum CloudTaskState: Equatable, Sendable {
 }
 
 public enum CloudTaskFormatter {
+    /// The agent's final answer from a `gh agent-task view --log` transcript (tool steps and footers removed).
     public static func extractSummary(fromLog log: String, maxChars: Int = 1200) -> String {
-        let cleaned = log.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return "" }
-        let lines = cleaned.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        let tail = lines.suffix(12).joined(separator: "\n")
-        if tail.count <= maxChars { return tail }
-        return String(tail.suffix(maxChars))
+        CloudLogSummarizer.summary(fromLog: log, maxChars: maxChars)
     }
 
     public static func insertionHTML(

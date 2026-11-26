@@ -163,7 +163,7 @@ final class DocumentWindows {
 
     func reconcileCloudTasksAfterWake() {
         for state in states.values {
-            state.pollActiveCloudTasksImmediately()
+            state.pollActiveCloudTasksImmediately(trigger: .wake)
         }
     }
 
