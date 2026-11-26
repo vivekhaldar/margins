@@ -434,6 +434,8 @@ test("selection content requests write into the document") {
     check(prompt.contains("AUTHOR'S MESSAGE\nsay more about this"), "selection expansion preserves the author's request")
     check(prompt.contains("[b2] <p>Leaders need technical judgment and organizational skill.</p>") &&
           prompt.contains("[b3] <h2>Career progress</h2>"), "expansion receives existing section content and its boundary")
+    check(prompt.contains("Default to editing the document") && prompt.contains("when in doubt"),
+          "selection threads bias toward document edits when ambiguous")
     check(prompt.contains("Return document edits; a reply alone") && prompt.contains("use insertAfter"),
           "content requests require insertions rather than a sidebar-only answer")
     check(prompt.contains("keep it as a heading") && prompt.contains("nearby existing block in that section"),
@@ -445,7 +447,8 @@ test("selection content requests write into the document") {
     let workspace = URL(fileURLWithPath: "/tmp/margins-prompt-test")
     for policy in AgentToolPolicy.allCases {
         let system = PromptBuilder.system(tools: AgentContext(policy: policy, workspace: workspace))
-        check(system.contains("document is your primary output") && system.contains("substantive content in edits[].html"),
+        check(system.contains("document is your primary output") && system.contains("substantive content in edits[].html") &&
+              system.contains("When in doubt, prefer a tracked edit"),
               "document output contract applies with tools \(policy.rawValue)")
     }
     check(PromptBuilder.system.contains("An explicit request to answer without editing takes precedence"),
