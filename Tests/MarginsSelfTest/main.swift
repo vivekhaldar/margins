@@ -1644,6 +1644,27 @@ test("CloudTaskFormatter.extractSummary keeps the final answer and drops tool st
     let withFooter = "  Final answer here.\n\nFor detailed session logs, try:\n\n  gh agent-task view 'abc' --log\n"
     check(CloudTaskFormatter.extractSummary(fromLog: withFooter) == "Final answer here.", "gh footer is ignored")
     check(CloudTaskFormatter.extractSummary(fromLog: "  \n\n") == "", "empty log yields empty summary")
+
+    let nestedBullets = """
+          "subject": "tool json"
+        }
+
+      Intro paragraph before nested bullets.
+
+      • Top-level item:
+          • Nested item that wraps onto the
+          next terminal line at indent 6
+          • Another nested item with a
+            hanging continuation at indent 8
+
+      Closing paragraph.
+    """
+    let nestedSummary = CloudTaskFormatter.extractSummary(fromLog: nestedBullets)
+    check(nestedSummary.hasPrefix("Intro paragraph before nested bullets."), "nested bullet continuations do not truncate earlier prose")
+    check(nestedSummary.contains("• Nested item that wraps onto the next terminal line at indent 6"), "wrapped nested bullet joined")
+    check(nestedSummary.contains("• Another nested item with a hanging continuation at indent 8"), "hanging nested bullet joined")
+    check(nestedSummary.hasSuffix("Closing paragraph."), "closing paragraph preserved after nested bullets")
+    check(!nestedSummary.contains("tool json"), "preceding indented JSON still dropped")
 }
 
 test("CloudLogStreamAccumulator buffers reconnect replay and CloudWatcherPolicy") {

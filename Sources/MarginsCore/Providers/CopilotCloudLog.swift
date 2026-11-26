@@ -98,22 +98,46 @@ enum CloudLogSummarizer {
         if paragraph.count == 1, !first.hasSuffix("."), toolTitlePrefixes.contains(where: { first.hasPrefix($0) }) {
             return .noise
         }
-        if paragraph.contains(where: isCodeLine) { return .noise }
+        if hasCodeLine(paragraph) { return .noise }
         return .prose
     }
 
-    private static func isCodeLine(_ raw: String) -> Bool {
-        let line = raw.trimmingCharacters(in: .whitespaces)
-        let indent = raw.prefix { $0 == " " }.count
-        if line.hasPrefix("```") || line.hasPrefix("$ ") { return true }
-        if line == "{" || line == "}" || line.hasPrefix("{\"") || line.hasPrefix("},") { return true }
-        // Glamour indents body text by 2; code blocks sit noticeably deeper than surrounding prose.
-        return indent >= 6 && !isListOrTable(line)
+    private static func hasCodeLine(_ paragraph: [String]) -> Bool {
+        var listIndent: Int?
+        for raw in paragraph {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            let indent = raw.prefix { $0 == " " }.count
+            if isExplicitCodeLine(line) { return true }
+            if isListItem(line) {
+                listIndent = indent
+                continue
+            }
+            if isTableLine(line) {
+                listIndent = nil
+                continue
+            }
+            if let active = listIndent {
+                if indent >= active && indent <= active + 4 { continue }
+                if indent < active { listIndent = nil }
+            }
+            // Glamour indents body text by 2; code blocks sit noticeably deeper than surrounding prose.
+            if indent >= 6 { return true }
+        }
+        return false
+    }
+
+    private static func isExplicitCodeLine(_ line: String) -> Bool {
+        line.hasPrefix("```") || line.hasPrefix("$ ")
+            || line == "{" || line == "}" || line.hasPrefix("{\"") || line.hasPrefix("},")
+    }
+
+    private static func isListItem(_ line: String) -> Bool {
+        line.hasPrefix("•") || line.hasPrefix("- ") || line.hasPrefix("* ")
+            || line.range(of: "^[0-9]+[.)] ", options: .regularExpression) != nil
     }
 
     private static func isListOrTable(_ line: String) -> Bool {
-        line.hasPrefix("•") || line.hasPrefix("- ") || line.hasPrefix("* ") || isTableLine(line)
-            || line.range(of: "^[0-9]+[.)] ", options: .regularExpression) != nil
+        isListItem(line) || isTableLine(line)
     }
 
     private static func isTableLine(_ line: String) -> Bool {
