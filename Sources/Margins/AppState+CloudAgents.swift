@@ -8,7 +8,8 @@ enum ComposerTarget: String, CaseIterable {
 }
 
 extension AppState {
-    private static let cloudPollIntervalNanoseconds: UInt64 = 20_000_000_000
+    private static let cloudQueuedPollIntervalNanoseconds: UInt64 = 10_000_000_000
+    private static let cloudReconnectDelayNanoseconds: UInt64 = 5_000_000_000
 
     // MARK: - Context & Preflight
 
@@ -152,20 +153,64 @@ extension AppState {
 
     func startCloudPolling(for intentID: UUID) {
         cloudPollTasks[intentID]?.cancel()
+        stopCloudLogStream(for: intentID)
         let session = documentSessionID
         cloudPollTasks[intentID] = Task { [weak self] in
             defer {
                 if let self, self.documentSessionID == session {
                     self.cloudPollTasks[intentID] = nil
+                    self.cloudStreamingIntentIDs.remove(intentID)
                 }
             }
             while !Task.isCancelled {
                 guard let self, self.documentSessionID == session else { return }
                 let shouldContinue = await self.pollCloudOnce(intentID: intentID, session: session)
                 guard shouldContinue, !Task.isCancelled else { return }
-                try? await Task.sleep(nanoseconds: Self.cloudPollIntervalNanoseconds)
+                if let ref = self.cloudTaskRef(for: intentID), let sessionID = ref.sessionID {
+                    await self.followCloudSessionLog(intentID: intentID, repo: ref.repo, sessionID: sessionID, session: session)
+                    guard !Task.isCancelled else { return }
+                    let stillActive = await self.pollCloudOnce(intentID: intentID, session: session)
+                    guard stillActive, !Task.isCancelled else { return }
+                    try? await Task.sleep(nanoseconds: Self.cloudReconnectDelayNanoseconds)
+                } else {
+                    try? await Task.sleep(nanoseconds: Self.cloudQueuedPollIntervalNanoseconds)
+                }
             }
         }
+    }
+
+    private func followCloudSessionLog(intentID: UUID, repo: String, sessionID: String, session: UUID) async {
+        guard documentSessionID == session else { return }
+        cloudStreamingIntentIDs.insert(intentID)
+        defer {
+            if documentSessionID == session {
+                cloudStreamingIntentIDs.remove(intentID)
+            }
+        }
+        var receivedFirstLine = false
+        let lineLock = NSLock()
+        let client = cloudClient
+        _ = try? await client.streamSessionLog(repo: repo, sessionID: sessionID) { [weak self] line in
+            lineLock.lock()
+            let isFirstLine = !receivedFirstLine
+            receivedFirstLine = true
+            lineLock.unlock()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.documentSessionID == session else { return }
+                    if isFirstLine {
+                        self.cloudLogs[intentID] = line
+                    } else {
+                        let current = self.cloudLogs[intentID] ?? ""
+                        self.cloudLogs[intentID] = current.isEmpty ? line : current + "\n" + line
+                    }
+                }
+            }
+        }
+    }
+
+    private func cloudTaskRef(for intentID: UUID) -> CloudTaskRef? {
+        doc.intents.first(where: { $0.id == intentID })?.cloudTask
     }
 
     private func pollCloudOnce(intentID: UUID, session: UUID) async -> Bool {
@@ -280,44 +325,32 @@ extension AppState {
     // MARK: - Live Log Viewer
 
     func setCloudLogExpanded(_ expanded: Bool, for intentID: UUID) {
-        guard expanded else {
-            stopCloudLogStream(for: intentID)
-            return
-        }
+        guard expanded else { return }
         guard let intent = doc.intents.first(where: { $0.id == intentID }),
               let task = intent.cloudTask,
               let sessionID = task.sessionID else { return }
 
         let state = CloudTaskState(rawState: task.cloudState)
+        if state.shouldPoll {
+            if cloudPollTasks[intentID] == nil {
+                startCloudPolling(for: intentID)
+            }
+            return
+        }
+
+        guard (cloudLogs[intentID] ?? "").isEmpty else { return }
         let session = documentSessionID
         let client = cloudClient
-
-        if state.shouldPoll {
-            stopCloudLogStream(for: intentID)
-            cloudStreamingIntentIDs.insert(intentID)
-            cloudLogTasks[intentID] = Task { [weak self] in
-                defer {
-                    if let self, self.documentSessionID == session {
-                        self.cloudStreamingIntentIDs.remove(intentID)
-                        self.cloudLogTasks[intentID] = nil
-                    }
-                }
-                _ = try? await client.streamSessionLog(repo: task.repo, sessionID: sessionID) { [weak self] line in
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated {
-                            guard let self, self.documentSessionID == session else { return }
-                            let current = self.cloudLogs[intentID] ?? ""
-                            self.cloudLogs[intentID] = current.isEmpty ? line : current + "\n" + line
-                        }
-                    }
+        cloudLogTasks[intentID]?.cancel()
+        cloudLogTasks[intentID] = Task { [weak self] in
+            defer {
+                if let self, self.documentSessionID == session {
+                    self.cloudLogTasks[intentID] = nil
                 }
             }
-        } else if (cloudLogs[intentID] ?? "").isEmpty {
-            Task {
-                if let log = try? await client.fetchSessionLog(repo: task.repo, sessionID: sessionID),
-                   documentSessionID == session {
-                    cloudLogs[intentID] = log
-                }
+            if let log = try? await client.fetchSessionLog(repo: task.repo, sessionID: sessionID),
+               let self, self.documentSessionID == session {
+                self.cloudLogs[intentID] = log
             }
         }
     }

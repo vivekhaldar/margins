@@ -131,11 +131,6 @@ struct CloudTaskCardSection: View {
                 logViewer
             }
         }
-        .onDisappear {
-            if logExpanded.value {
-                state.setCloudLogExpanded(false, for: intent.id)
-            }
-        }
     }
 
     private var headerRow: some View {
