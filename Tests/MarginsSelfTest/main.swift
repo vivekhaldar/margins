@@ -1116,6 +1116,103 @@ Task {
         check(false, "offline queue & cloudOnly test threw \(error)")
     }
 
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let indexURL = dir.appendingPathComponent("sync-index.json")
+        let backend = InMemorySyncBackend()
+        let legacy = Data(#"{"html":"<h1>Legacy</h1>","intents":[],"versions":[],"nextStep":1,"extra":"keep"}"#.utf8)
+        let localURL = dir.appendingPathComponent("Draft.margins")
+        try legacy.write(to: localURL)
+
+        // Simulate an older upload with the ID only in Drive metadata and the index.
+        let id = UUID()
+        let remote = try await backend.upload(data: legacy, name: localURL.lastPathComponent, docID: id,
+                                              folderID: "drive-folder-1", existingFileID: nil)
+        var index = SyncIndex(folderID: "drive-folder-1", startPageToken: "0")
+        index.setEntry(SyncEntry(docID: id, driveFileId: remote.id, lastSyncedRevision: remote.headRevisionId,
+                                 lastSyncedContentHash: SyncEngine.sha256Hex(legacy), filename: remote.name,
+                                 title: "Legacy", state: .cloudOnly))
+        index.setEntry(SyncEntry(docID: UUID(), filename: remote.name, title: "Legacy"))
+        try index.save(to: indexURL)
+        let recovering = SyncEngine(backend: backend, documentsFolder: dir, indexURL: indexURL)
+        _ = await recovering.syncAll()
+        let migrated = try Data(contentsOf: localURL)
+        let fields = try JSONSerialization.jsonObject(with: migrated) as? [String: Any]
+        check(fields?["id"] as? String == id.uuidString && fields?["extra"] as? String == "keep",
+              "legacy scan persists the existing Drive identity and preserves unknown fields")
+        let uploaded = try await backend.download(fileID: remote.id)
+        check(uploaded == migrated, "legacy upload sends the same identified bytes stored on disk")
+        let recovered = await recovering.currentIndex()
+        check(recovered.entries.count == 1 && recovered.pendingUploadCount == 0, "stale local ID is removed after migration")
+
+        // A distinct legacy file with identical bytes must retain its own identity.
+        let otherURL = dir.appendingPathComponent("Copy.margins")
+        try legacy.write(to: otherURL)
+        _ = await recovering.pushDocument(at: otherURL)
+        let other = try MarginsDocument.decode(Data(contentsOf: otherURL))
+        check(other.id != id, "autosave migrates a separate legacy file independently")
+        let restarted = SyncEngine(backend: backend, documentsFolder: dir, indexURL: indexURL)
+        _ = await restarted.syncAll()
+        _ = await restarted.syncAll()
+        let count = await backend.fileCount()
+        let settled = await restarted.currentIndex()
+        let localNames = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".margins") }
+        check(count == 2 && settled.entries.count == 2 && settled.pendingUploadCount == 0 && localNames.count == 2,
+              "repeated sync and restart create no local or Drive duplicates")
+    } catch {
+        check(false, "legacy local migration threw \(error)")
+    }
+
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Shared.margins")
+        try Data(#"{"html":"","intents":[],"versions":[],"nextStep":1}"#.utf8).write(to: url)
+        let ids = try await withThrowingTaskGroup(of: UUID.self) { group in
+            for _ in 0..<8 {
+                group.addTask { try SyncDocument.load(at: url, index: SyncIndex()).document.id }
+            }
+            var ids = Set<UUID>()
+            for try await id in group { ids.insert(id) }
+            return ids
+        }
+        let stored = try MarginsDocument.decode(Data(contentsOf: url))
+        check(ids == [stored.id], "overlapping editor and sync reads adopt one persisted legacy identity")
+    } catch {
+        check(false, "concurrent legacy migration threw \(error)")
+    }
+
+    for lazy in [false, true] {
+        do {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let backend = InMemorySyncBackend()
+            let remoteID = UUID()
+            let legacy = Data(#"{"html":"<h1>From Drive</h1>","versions":[],"intents":[],"nextStep":1}"#.utf8)
+            let remote = try await backend.upload(data: legacy, name: "Old.margins", docID: remoteID,
+                                                  folderID: "drive-folder-1", existingFileID: nil)
+            let engine = SyncEngine(backend: backend, documentsFolder: dir, indexURL: dir.appendingPathComponent("index.json"))
+            _ = await engine.syncAll(lazyDownload: lazy)
+            let url = try await engine.ensureLocal(docID: remoteID)
+            let data = try Data(contentsOf: url)
+            let doc = try MarginsDocument.decode(data)
+            check(doc.id == remoteID, "legacy Drive download persists its metadata ID (lazy=\(lazy))")
+            _ = await engine.syncAll()
+            let index = await engine.currentIndex()
+            let count = await backend.fileCount()
+            check(count == 1 && index.entries.count == 1 && index.pendingUploadCount == 0 &&
+                  index.entry(for: remoteID)?.lastSyncedContentHash == SyncEngine.sha256Hex(data),
+                  "downloaded legacy bytes stay settled on the next scan (lazy=\(lazy))")
+            let metadata = await backend.fileMeta(remote.id)
+            check(metadata?.headRevisionId == remote.headRevisionId, "a legacy download alone does not trigger a re-upload")
+        } catch {
+            check(false, "legacy Drive migration threw \(error)")
+        }
+    }
+
     syncSem.signal()
 }
 syncSem.wait()

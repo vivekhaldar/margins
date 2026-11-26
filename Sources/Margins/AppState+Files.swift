@@ -193,11 +193,21 @@ extension AppState {
         }
     }
 
+    private func readDocument(at url: URL) throws -> (document: MarginsDocument, needsIDSave: Bool) {
+        if SyncController.shared.isInSyncedLibrary(url) {
+            let file = try SyncDocument.load(at: url, index: SyncController.shared.index)
+            return (file.document, false)
+        }
+        let data = try Data(contentsOf: url)
+        let doc = try MarginsDocument.decode(data)
+        let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return (doc, fields?["id"] == nil)
+    }
+
     func open(_ url: URL) {
         do {
-            let data = try Data(contentsOf: url)
-            var d = try MarginsDocument.decode(data)
-            let hadID = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] != nil
+            let loaded = try readDocument(at: url)
+            var d = loaded.document
             d.pruneAssets()
             cancelDocumentRuns()
             let session = documentSessionID
@@ -205,7 +215,7 @@ extension AppState {
                 let reopeningCurrent = self.fileURL.standardizedFileURL == url.standardizedFileURL
                 self.cancelDocumentRuns()
                 self.saveNow()
-                let incoming = reopeningCurrent ? ((try? MarginsDocument.decode(Data(contentsOf: url))) ?? document) : document
+                let incoming = reopeningCurrent ? ((try? self.readDocument(at: url).document) ?? document) : document
                 self.doc = incoming
                 self.projectFolderStore.migrateIfNeeded(docID: incoming.id, legacyFolder: incoming.projectFolder)
                 self.projectFolderRevision += 1
@@ -218,7 +228,7 @@ extension AppState {
                 let installedSession = self.documentSessionID
                 Task { await self.loadEditorDocument(session: installedSession) }
                 if !incoming.versions.isEmpty { self.writeMarkdown() }
-                if !hadID { self.scheduleSave() }
+                if loaded.needsIDSave { self.scheduleSave() }
             }
             if editor.isReadyForSnapshot {
                 Task {
@@ -226,7 +236,7 @@ extension AppState {
                     guard documentSessionID == session else { return }
                     do {
                         // Reopening the same file must include edits just drained above.
-                        var current = try MarginsDocument.decode(Data(contentsOf: url))
+                        var current = try readDocument(at: url).document
                         current.pruneAssets()
                         replace(current)
                     } catch { lastError = "Couldn't open \(url.lastPathComponent): \(error.localizedDescription)" }
@@ -339,8 +349,7 @@ extension AppState {
     func reloadFromExternalChange(_ url: URL) {
         guard url.standardizedFileURL == fileURL.standardizedFileURL else { return }
         guard !busy, previewing == nil else { return }
-        guard let data = try? Data(contentsOf: url),
-              var incoming = try? MarginsDocument.decode(data) else { return }
+        guard var incoming = try? readDocument(at: url).document else { return }
         incoming.pruneAssets()
         guard incoming != doc else { return }
         doc = incoming

@@ -67,17 +67,28 @@ public actor SyncEngine {
     /// Scans `documentsFolder` for `.margins` files, updating `sync-index.json` by `doc.id`.
     @discardableResult
     public func scanLocalLibrary() -> SyncIndex {
+        do { return try scanLibrary() }
+        catch {
+            updateStatus(.error(error.localizedDescription))
+            return index
+        }
+    }
+
+    private func scanLibrary() throws -> SyncIndex {
         let fm = FileManager.default
-        try? fm.createDirectory(at: documentsFolder, withIntermediateDirectories: true)
-        let urls = ((try? fm.contentsOfDirectory(at: documentsFolder, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])) ?? [])
+        try fm.createDirectory(at: documentsFolder, withIntermediateDirectories: true)
+        let urls = try fm.contentsOfDirectory(at: documentsFolder, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])
             .filter { $0.pathExtension == MarginsDocument.fileExtension }
 
         var seenIDs = Set<UUID>()
         for url in urls {
-            guard let data = try? Data(contentsOf: url),
-                  let doc = try? MarginsDocument.decode(data) else { continue }
+            let file: SyncDocument
+            do { file = try SyncDocument.load(at: url, index: index) }
+            catch is DecodingError { continue }
+            catch let error as CocoaError where error.code == .fileReadNoSuchFile { continue }
+            let doc = file.document
             seenIDs.insert(doc.id)
-            let hash = Self.sha256Hex(data)
+            let hash = Self.sha256Hex(file.data)
             let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now()
             let filename = url.lastPathComponent
 
@@ -127,7 +138,7 @@ public actor SyncEngine {
         defer { isSyncing = false }
 
         do {
-            scanLocalLibrary()
+            _ = try scanLibrary()
             let folderID: String
             if let existingFolder = index.folderID {
                 folderID = existingFolder
@@ -170,12 +181,16 @@ public actor SyncEngine {
         guard standardized.deletingLastPathComponent() == documentsFolder else {
             return status
         }
-        guard let data = try? Data(contentsOf: standardized),
-              let doc = try? MarginsDocument.decode(data) else {
+        let file: SyncDocument
+        do { file = try SyncDocument.load(at: standardized, index: index) }
+        catch is DecodingError { return status }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return status }
+        catch {
+            updateStatus(.error(error.localizedDescription))
             return status
         }
-
-        let hash = Self.sha256Hex(data)
+        let doc = file.document
+        let hash = Self.sha256Hex(file.data)
         let filename = standardized.lastPathComponent
         var entry = index.entry(for: doc.id) ?? SyncEntry(
             docID: doc.id,
@@ -235,8 +250,9 @@ public actor SyncEngine {
         index.setEntry(entry)
         persistIndex()
 
-        let data = try await backend.download(fileID: fileID)
-        let doc = try MarginsDocument.decode(data)
+        let file = try SyncDocument(await backend.download(fileID: fileID)) { docID }
+        let data = file.data
+        let doc = file.document
         try FileManager.default.createDirectory(at: documentsFolder, withIntermediateDirectories: true)
         try data.write(to: targetURL, options: .atomic)
         Self.regenerateMarkdown(for: doc, at: targetURL)

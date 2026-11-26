@@ -86,8 +86,9 @@ extension SyncEngine {
             return
         }
 
-        let remoteData = try await backend.download(fileID: remote.id)
-        let remoteDoc = try MarginsDocument.decode(remoteData)
+        let file = try SyncDocument(await backend.download(fileID: remote.id)) { remote.docID ?? existingEntry?.docID }
+        let remoteData = file.data
+        let remoteDoc = file.document
         let remoteHash = Self.sha256Hex(remoteData)
         let docID = remote.docID ?? remoteDoc.id
 
@@ -208,8 +209,13 @@ extension SyncEngine {
 
     func pushEntry(_ entry: SyncEntry, folderID: String) async throws {
         let localURL = entry.localURL(in: documentsFolder)
-        guard let localData = try? Data(contentsOf: localURL),
-              let localDoc = try? MarginsDocument.decode(localData) else { return }
+        let file: SyncDocument
+        do { file = try SyncDocument.load(at: localURL, index: index) }
+        catch is DecodingError { return }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return }
+        let localData = file.data
+        let localDoc = file.document
+        guard localDoc.id == entry.docID else { return }
         let localHash = Self.sha256Hex(localData)
 
         if try await resolveRemoteConflictBeforePush(entry: entry, localURL: localURL, localData: localData, localDoc: localDoc, localHash: localHash) {
@@ -250,11 +256,12 @@ extension SyncEngine {
             return false
         }
 
-        let remoteData = try await backend.download(fileID: fileID)
+        let remote = try SyncDocument(await backend.download(fileID: fileID)) { entry.docID }
+        let remoteData = remote.data
         let remoteHash = Self.sha256Hex(remoteData)
         guard remoteHash != localHash else { return false }
 
-        let remoteDoc = try MarginsDocument.decode(remoteData)
+        let remoteDoc = remote.document
         try applyConflict(
             entry: entry,
             localURL: localURL,
