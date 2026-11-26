@@ -574,6 +574,85 @@ test("per-machine project folder store and migration") {
 
     reloaded.setFolder(nil, for: docID)
     check(reloaded.folder(for: docID) == nil, "clearing removes mapping")
+    check(reloaded.recentFolders() == ["/machine-b/repo", "/legacy/repo"], "clearing document mapping preserves recents")
+}
+
+test("project folder store recent MRU, cap, clearing, and legacy JSON migration") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-pf-recent-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // Legacy flat [String: String] file migrates and seeds recents.
+    let legacyURL = dir.appendingPathComponent("legacy-project-folders.json")
+    let docA = UUID()
+    let docB = UUID()
+    let legacyJSON = try JSONEncoder().encode([
+        docA.uuidString: "/tmp/work/alpha",
+        docB.uuidString: "/tmp/work/beta",
+    ])
+    try legacyJSON.write(to: legacyURL, options: .atomic)
+
+    let migrated = ProjectFolderStore(fileURL: legacyURL)
+    check(migrated.folder(for: docA) == "/tmp/work/alpha", "legacy doc A preserved")
+    check(migrated.folder(for: docB) == "/tmp/work/beta", "legacy doc B preserved")
+    check(migrated.recentFolders() == ["/tmp/work/alpha", "/tmp/work/beta"], "legacy values seed unique recents")
+
+    // MRU ordering, deduplication, and 10-item cap.
+    let storeURL = dir.appendingPathComponent("project-folders.json")
+    let store = ProjectFolderStore(fileURL: storeURL)
+    var changeCount = 0
+    let token = NotificationCenter.default.addObserver(
+        forName: ProjectFolderStore.didChangeNotification, object: store, queue: nil
+    ) { _ in changeCount += 1 }
+    defer { NotificationCenter.default.removeObserver(token) }
+
+    let docID = UUID()
+    for i in 1...12 {
+        store.setFolder("/repos/proj-\(i)", for: docID)
+    }
+    check(changeCount == 12, "didChangeNotification posted on each save")
+    check(store.recentFolders().count == 10, "recent list capped at 10")
+    check(store.recentFolders().first == "/repos/proj-12", "most recent folder at index 0")
+    check(!store.recentFolders().contains("/repos/proj-1"), "oldest folders evicted beyond 10")
+
+    // Re-selecting an existing folder moves it to index 0 without duplicating.
+    store.setFolder("/repos/proj-5/", for: docID)
+    check(store.recentFolders().count == 10, "re-selecting deduplicates standardized path")
+    check(store.recentFolders().first == "/repos/proj-5", "re-selected folder promoted to index 0")
+
+    // Removing one recent entry leaves others intact.
+    store.removeRecentFolder("/repos/proj-12")
+    check(!store.recentFolders().contains("/repos/proj-12"), "removeRecentFolder removes entry")
+    check(store.recentFolders().count == 9, "removeRecentFolder reduces count by 1")
+
+    // Clearing recents preserves document mappings and persists.
+    store.clearRecentFolders()
+    check(store.recentFolders().isEmpty, "clearRecentFolders empties recents")
+    check(store.folder(for: docID) == "/repos/proj-5", "clearRecentFolders leaves document mappings intact")
+
+    let reopened = ProjectFolderStore(fileURL: storeURL)
+    check(reopened.recentFolders().isEmpty, "cleared recents persist across reload")
+    check(reopened.folder(for: docID) == "/repos/proj-5", "document mapping persists after clearRecentFolders")
+
+    // Missing directory filtering lazily prunes in memory and persists on next save.
+    let realDir = dir.appendingPathComponent("real-repo")
+    try FileManager.default.createDirectory(at: realDir, withIntermediateDirectories: true)
+    let missingDir = dir.appendingPathComponent("deleted-repo")
+    reopened.setFolder(missingDir.path, for: docID)
+    reopened.setFolder(realDir.path, for: docID)
+    check(reopened.existingRecentFolders() == [realDir.standardizedFileURL.path], "existingRecentFolders filters missing paths")
+    reopened.setFolder(nil, for: docID)
+    let afterPrune = ProjectFolderStore(fileURL: storeURL)
+    check(afterPrune.recentFolders() == [realDir.standardizedFileURL.path], "pruned missing paths dropped on next save")
+
+    // Display label disambiguation when folder names collide.
+    let urls = [
+        URL(fileURLWithPath: "/Users/dev/work/app"),
+        URL(fileURLWithPath: "/Users/dev/personal/app"),
+        URL(fileURLWithPath: "/Users/dev/margins"),
+    ]
+    check(ProjectFolderStore.displayLabel(for: urls[2], among: urls) == "margins", "unique name uses lastPathComponent")
+    check(ProjectFolderStore.displayLabel(for: urls[0], among: urls).contains("/Users/dev/work/app"), "duplicate name includes path")
 }
 
 test("file change watcher detects external atomic writes and ignores self writes") {
