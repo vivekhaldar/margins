@@ -145,19 +145,119 @@
     if (endpoints) selection.setBaseAndExtent(...point(root, endpoints[0], true), ...point(root, endpoints[1], true));
   }
 
+  function isCacheHit(previous, key, old, proposal) {
+    return previous?.key === key &&
+      previous.old === old.firstElementChild &&
+      previous.proposal === proposal.firstElementChild &&
+      previous.snippets.every(el => proposal.contains(el)) &&
+      previous.ranges.every(range => !range.collapsed && proposal.contains(range.startContainer) && proposal.contains(range.endContainer));
+  }
+
+  function isEligibleInlinePair(old, proposal) {
+    const a = old.firstElementChild, b = proposal.firstElementChild;
+    if (old.children.length !== 1 || proposal.children.length !== 1 || !a || !b) return false;
+    if (!prose.test(a.tagName) || a.tagName !== b.tagName) return false;
+    if ([...old.childNodes, ...proposal.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) return false;
+    if ([...a.querySelectorAll('*'), ...b.querySelectorAll('*')].some(el => !el.closest('.diff-removed') && !inline.test(el.tagName))) return false;
+    return a.textContent.length + b.textContent.length <= 100000;
+  }
+
+  function wrapRangeSnippet(range, root) {
+    const snippet = document.createElement('span');
+    let fragment = range.cloneContents();
+    let ancestor = range.commonAncestorContainer;
+    if (ancestor.nodeType === 3) ancestor = ancestor.parentElement;
+    for (; ancestor !== root; ancestor = ancestor.parentElement) {
+      const wrapper = ancestor.cloneNode(false);
+      wrapper.removeAttribute('data-bid');
+      wrapper.append(fragment);
+      fragment = wrapper;
+    }
+    snippet.append(fragment);
+    return snippet.innerHTML;
+  }
+
+  function buildRemovals(a, removed, left, right, pairs) {
+    const rightText = right.items.map(t => t.text).join('');
+    return removed.map(range => {
+      const start = offsetAt(a, range.startContainer, range.startOffset);
+      const end = offsetAt(a, range.endContainer, range.endOffset);
+      const previous = pairs.filter(([i]) => left.items[i].end <= start).at(-1);
+      const next = pairs.find(([i]) => left.items[i].start >= end);
+      const first = previous ? previous[1] + 1 : 0;
+      const limit = next ? next[1] : right.items.length;
+      let index = first;
+      while (index < limit && !right.items[index].text.trim()) index++;
+      const offset = right.items[index]?.start ?? right.items.at(-1)?.end ?? 0;
+      const before = rightText.slice(0, offset);
+      const after = rightText.slice(offset);
+      return {
+        offset,
+        text: range.toString(),
+        html: wrapRangeSnippet(range, a),
+        spaceBefore: /\S$/.test(before) && /\s/.test(a.textContent[start - 1] || ''),
+        spaceAfter: /^\S/.test(after) && (index < limit || /\s/.test(a.textContent[end] || ''))
+      };
+    });
+  }
+
+  function saveSelectionEndpoints(doc) {
+    const selection = getSelection();
+    if (!selection?.rangeCount || !doc.contains(selection.anchorNode) || !doc.contains(selection.focusNode)) return null;
+    const savePoint = (node, offset) => {
+      const root = (node.nodeType === 1 ? node : node.parentElement).closest('.chg > ins');
+      return root ? {root, offset: offsetAt(root, node, offset)} : {node, offset};
+    };
+    return [savePoint(selection.anchorNode, selection.anchorOffset), savePoint(selection.focusNode, selection.focusOffset)];
+  }
+
+  function restoreSelectionEndpoints(endpoints) {
+    if (!endpoints) return;
+    const restore = p => p.root ? point(p.root, p.offset, true) : [p.node, p.offset];
+    getSelection().setBaseAndExtent(...restore(endpoints[0]), ...restore(endpoints[1]));
+  }
+
+  function decorateChange(ch, cache, decorated) {
+    const old = ch.querySelector(':scope > del'), proposal = ch.querySelector(':scope > ins');
+    if (!old || !proposal) return [];
+    const key = JSON.stringify([old.innerHTML, cleanHTML(proposal)]);
+    const previous = cache.get(ch);
+    if (isCacheHit(previous, key, old, proposal)) return previous.ranges;
+
+    ch.querySelector(':scope > .diff-before')?.remove();
+    ch.classList.remove('diff-compact');
+    const a = old.firstElementChild, b = proposal.firstElementChild;
+    const entry = {key, old: a, proposal: b, ranges: [], snippets: [], splits: previous?.splits || []};
+    cache.set(ch, entry);
+
+    if (!isEligibleInlinePair(old, proposal)) { strip(proposal); return []; }
+    const left = tokens(a), right = tokens(b), pairs = matches(left.items, right.items);
+    if (!pairs || !pairs.some(([i]) => left.items[i].text.trim())) { strip(proposal); return []; }
+    const removed = ranges(left, new Set(pairs.map(p => p[0])));
+    const added = ranges(right, new Set(pairs.map(p => p[1])));
+    // Whitespace-only changes remain visible in the full before/after view.
+    if (!removed.length && !added.length && left.items.map(t => t.text).join('') !== right.items.map(t => t.text).join('')) {
+      strip(proposal);
+      return [];
+    }
+
+    ch.classList.add('diff-compact');
+    placeRemovals(b, buildRemovals(a, removed, left, right, pairs), entry.splits);
+    decorated.add(ch);
+    entry.snippets = [...b.querySelectorAll('.diff-removed')];
+    // Inserting an inline snippet can split a text node; resolve highlights
+    // against the final DOM, excluding the display-only deletion nodes.
+    entry.ranges = ranges(tokens(b), new Set(pairs.map(p => p[1])));
+    return entry.ranges;
+  }
+
   function create(doc) {
     const cache = new WeakMap();
     const decorated = new Set();
     let composing = false;
     function suspend() {
       if (!decorated.size) return;
-      const selection = getSelection();
-      const savePoint = (node, offset) => {
-        const root = (node.nodeType === 1 ? node : node.parentElement).closest('.chg > ins');
-        return root ? {root, offset: offsetAt(root, node, offset)} : {node, offset};
-      };
-      const endpoints = selection?.rangeCount && doc.contains(selection.anchorNode) && doc.contains(selection.focusNode)
-        ? [savePoint(selection.anchorNode, selection.anchorOffset), savePoint(selection.focusNode, selection.focusOffset)] : null;
+      const endpoints = saveSelectionEndpoints(doc);
       for (const ch of decorated) {
         const entry = cache.get(ch);
         strip(ch);
@@ -170,10 +270,7 @@
       }
       decorated.clear();
       CSS.highlights?.delete('margins-added');
-      if (endpoints) {
-        const restore = p => p.root ? point(p.root, p.offset, true) : [p.node, p.offset];
-        selection.setBaseAndExtent(...restore(endpoints[0]), ...restore(endpoints[1]));
-      }
+      restoreSelectionEndpoints(endpoints);
     }
     doc.addEventListener('beforeinput', suspend);
     // Keydown precedes WebKit's target-range calculation; beforeinput also
@@ -191,64 +288,7 @@
       for (const ch of decorated) if (!doc.contains(ch)) decorated.delete(ch);
       const highlights = [];
       doc.querySelectorAll(':scope > .chg').forEach(ch => {
-        const old = ch.querySelector(':scope > del'), proposal = ch.querySelector(':scope > ins');
-        if (!old || !proposal) return;
-        const key = JSON.stringify([old.innerHTML, cleanHTML(proposal)]);
-        const previous = cache.get(ch);
-        if (previous?.key === key && previous.old === old.firstElementChild && previous.proposal === proposal.firstElementChild &&
-          previous.snippets.every(el => proposal.contains(el)) &&
-          previous.ranges.every(range => !range.collapsed && proposal.contains(range.startContainer) && proposal.contains(range.endContainer))) {
-          highlights.push(...previous.ranges); return;
-        }
-        ch.querySelector(':scope > .diff-before')?.remove();
-        ch.classList.remove('diff-compact');
-        const entry = {key, old: old.firstElementChild, proposal: proposal.firstElementChild, ranges: [], snippets: [], splits: previous?.splits || []}; cache.set(ch, entry);
-        const a = old.firstElementChild, b = proposal.firstElementChild;
-        if (old.children.length !== 1 || proposal.children.length !== 1 || !a || !b ||
-          !prose.test(a.tagName) || a.tagName !== b.tagName ||
-          [...old.childNodes, ...proposal.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()) ||
-          [...a.querySelectorAll('*'), ...b.querySelectorAll('*')].some(el => !el.closest('.diff-removed') && !inline.test(el.tagName)) ||
-          a.textContent.length + b.textContent.length > 100000) { strip(proposal); return; }
-        const left = tokens(a), right = tokens(b), pairs = matches(left.items, right.items);
-        if (!pairs || !pairs.some(([i]) => left.items[i].text.trim())) { strip(proposal); return; }
-        const removed = ranges(left, new Set(pairs.map(p => p[0])));
-        const added = ranges(right, new Set(pairs.map(p => p[1])));
-        // Whitespace-only changes remain visible in the full before/after view.
-        if (!removed.length && !added.length && left.items.map(t => t.text).join('') !== right.items.map(t => t.text).join('')) { strip(proposal); return; }
-        ch.classList.add('diff-compact');
-        const removals = removed.map(range => {
-            const start = offsetAt(a, range.startContainer, range.startOffset);
-            const end = offsetAt(a, range.endContainer, range.endOffset);
-            const previous = pairs.filter(([i]) => left.items[i].end <= start).at(-1);
-            const next = pairs.find(([i]) => left.items[i].start >= end);
-            const first = previous ? previous[1] + 1 : 0;
-            const limit = next ? next[1] : right.items.length;
-            let index = first;
-            while (index < limit && !right.items[index].text.trim()) index++;
-            const offset = right.items[index]?.start ?? right.items.at(-1)?.end ?? 0;
-            const text = range.toString();
-            const before = right.items.map(t => t.text).join('').slice(0, offset);
-            const after = right.items.map(t => t.text).join('').slice(offset);
-            const snippet = document.createElement('span');
-            let fragment = range.cloneContents();
-            let ancestor = range.commonAncestorContainer;
-            if (ancestor.nodeType === 3) ancestor = ancestor.parentElement;
-            for (; ancestor !== a; ancestor = ancestor.parentElement) {
-              const wrapper = ancestor.cloneNode(false); wrapper.removeAttribute('data-bid');
-              wrapper.append(fragment); fragment = wrapper;
-            }
-            snippet.append(fragment);
-            return {offset, text, html: snippet.innerHTML,
-              spaceBefore: /\S$/.test(before) && /\s/.test(a.textContent[start - 1] || ''),
-              spaceAfter: /^\S/.test(after) && (index < limit || /\s/.test(a.textContent[end] || ''))};
-          });
-        placeRemovals(b, removals, entry.splits);
-        decorated.add(ch);
-        entry.snippets = [...b.querySelectorAll('.diff-removed')];
-        // Inserting an inline snippet can split a text node; resolve highlights
-        // against the final DOM, excluding the display-only deletion nodes.
-        entry.ranges = ranges(tokens(b), new Set(pairs.map(p => p[1])));
-        highlights.push(...entry.ranges);
+        highlights.push(...decorateChange(ch, cache, decorated));
       });
       CSS.highlights.set('margins-added', new Highlight(...highlights));
     }

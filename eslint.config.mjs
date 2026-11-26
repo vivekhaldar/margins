@@ -1,0 +1,59 @@
+// Standalone ESLint 9 flat config for Margins' embedded editor scripts.
+// Scripts are loaded via <script> tags in Sources/Margins/Resources/Editor/editor.html.
+export default [
+  {
+    files: ["Sources/Margins/Resources/Editor/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: {
+        // Browser / WebKit runtime globals
+        window: "readonly",
+        document: "readonly",
+        navigator: "readonly",
+        console: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        requestAnimationFrame: "readonly",
+        cancelAnimationFrame: "readonly",
+        performance: "readonly",
+        MutationObserver: "readonly",
+        ResizeObserver: "readonly",
+        Node: "readonly",
+        NodeFilter: "readonly",
+        Element: "readonly",
+        HTMLElement: "readonly",
+        Range: "readonly",
+        Selection: "readonly",
+        CSS: "readonly",
+        Highlight: "readonly",
+        Event: "readonly",
+        CustomEvent: "readonly",
+        KeyboardEvent: "readonly",
+        MouseEvent: "readonly",
+        ClipboardEvent: "readonly",
+        DataTransfer: "readonly",
+        DOMParser: "readonly",
+        URL: "readonly",
+        getComputedStyle: "readonly",
+        webkit: "readonly",
+
+        // Shared globals exposed across editor.html <script> tags
+        MarginsAnnotations: "writable",
+        MarginsAnnotationEngine: "writable",
+        MarginsAnnotationAlignment: "writable",
+        MarginsAnnotationUI: "writable",
+        MarginsTrackedDiff: "writable",
+        margins: "writable",
+      },
+    },
+    rules: {
+      "no-empty": "error",
+      "no-debugger": "error",
+      "complexity": ["warn", 18],
+      "max-depth": ["warn", 5],
+      "max-params": ["error", 6],
+      "max-lines-per-function": ["warn", { max: 80, skipBlankLines: true, skipComments: true }],
+    },
+  },
+];

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Opt-in pre-commit hook: git config core.hooksPath .githooks
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+exec "$ROOT/scripts/check.sh" --staged

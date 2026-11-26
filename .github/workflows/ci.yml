@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Ensure SwiftLint is installed
+        run: |
+          if ! command -v swiftlint >/dev/null 2>&1; then
+            brew install swiftlint
+          fi
+          swiftlint version
+
+      - name: Run full check suite
+        env:
+          CI: "true"
+        run: scripts/check.sh --all
+
+      - name: Diff-scoped desloppify ratchet (PRs only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          CHANGED="$(git diff --name-only "${BASE_SHA}...HEAD" -- 'Sources/*.swift' 'Sources/**/*.swift' 'Sources/Margins/Resources/Editor/*.js' || true)"
+          if [[ -z "$CHANGED" ]]; then
+            echo "No production Swift or editor JS files changed; skipping desloppify ratchet."
+            exit 0
+          fi
+
+          python3 -m pip install --quiet desloppify
+
+          HEAD_STATE="${RUNNER_TEMP}/desloppify-head.json"
+          BASE_STATE="${RUNNER_TEMP}/desloppify-base.json"
+          BASE_DIR="${RUNNER_TEMP}/base-worktree"
+
+          git worktree add --detach "$BASE_DIR" "$BASE_SHA" >/dev/null
+          trap 'git worktree remove --force "$BASE_DIR" >/dev/null 2>&1 || true' EXIT
+
+          desloppify --exclude .build --exclude build scan --path . --state "$HEAD_STATE" --profile ci --no-badge >/dev/null || true
+          desloppify --exclude .build --exclude build scan --path "$BASE_DIR" --state "$BASE_STATE" --profile ci --no-badge >/dev/null || true
+
+          CHANGED_FILES="$CHANGED" HEAD_STATE="$HEAD_STATE" BASE_STATE="$BASE_STATE" python3 - <<'PY'
+          import json, os, pathlib
+
+          changed = {line.strip() for line in os.environ["CHANGED_FILES"].splitlines() if line.strip()}
+          ignored_detectors = {"orphaned", "test_coverage", "untested", "stale_exclude"}
+
+          def load_issues(path_str: str) -> dict[tuple[str, str, str], dict]:
+              p = pathlib.Path(path_str)
+              if not p.is_file():
+                  return {}
+              data = json.loads(p.read_text(encoding="utf-8"))
+              raw = data.get("issues") or data.get("findings") or {}
+              items = raw.values() if isinstance(raw, dict) else raw
+              out = {}
+              for item in items:
+                  if not isinstance(item, dict):
+                      continue
+                  if item.get("status", "open") != "open":
+                      continue
+                  tier = item.get("tier")
+                  if tier not in (3, 4, "T3", "T4"):
+                      continue
+                  detector = str(item.get("detector", ""))
+                  if detector in ignored_detectors:
+                      continue
+                  file_path = str(item.get("file", "")).lstrip("./")
+                  if file_path not in changed:
+                      continue
+                  key = (file_path, detector, str(item.get("summary", "")))
+                  out[key] = item
+              return out
+
+          base_issues = load_issues(os.environ["BASE_STATE"])
+          head_issues = load_issues(os.environ["HEAD_STATE"])
+          new_issues = [v for k, v in head_issues.items() if k not in base_issues]
+
+          if new_issues:
+              for issue in new_issues:
+                  print(f"{issue.get('file')}: [desloppify T{issue.get('tier')} {issue.get('detector')}] {issue.get('summary')}")
+              raise SystemExit(1)
+
+          print(f"desloppify ratchet: ok ({len(changed)} changed file(s), 0 new T3/T4 issues)")
+          PY

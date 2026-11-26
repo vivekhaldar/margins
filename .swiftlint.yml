@@ -1,0 +1,40 @@
+# Anti-slop structural rules only (no formatting churn).
+included:
+  - Sources
+excluded:
+  - .build
+  - build
+  - Tests
+  - scripts
+
+only_rules:
+  - file_length
+  - function_body_length
+  - cyclomatic_complexity
+  - nesting
+  - type_body_length
+
+file_length:
+  warning: 500
+  error: 650
+  ignore_comment_only_lines: true
+
+function_body_length:
+  warning: 60
+  error: 100
+
+cyclomatic_complexity:
+  warning: 15
+  error: 25
+
+nesting:
+  type_level:
+    warning: 2
+    error: 3
+  function_level:
+    warning: 4
+    error: 6
+
+type_body_length:
+  warning: 450
+  error: 600

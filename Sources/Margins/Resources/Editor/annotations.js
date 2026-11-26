@@ -12,6 +12,72 @@
   const origins = new Set(['author', 'agent', 'unattributed', 'pasted', 'uncertain']);
   const sameOrigin = (a, b) => a.origin === b.origin && a.runId === b.runId && a.parentRunId === b.parentRunId;
 
+  function myersAlign(a, b, x0, y0, n, m) {
+    const limit = Math.min(n + m, 384), trace = [], started = Date.now();
+    const v = new Map([[1, 0]]);
+    for (let d = 0; d <= limit && Date.now() - started < 35; d++) {
+      trace.push(new Map(v));
+      for (let k = -d; k <= d; k += 2) {
+        let x = (k === -d || (k !== d && (v.get(k - 1) ?? -1) < (v.get(k + 1) ?? -1)))
+          ? (v.get(k + 1) ?? 0) : (v.get(k - 1) ?? 0) + 1;
+        let y = x - k;
+        while (x < n && y < m && a[x0 + x] === b[y0 + y]) { x++; y++; }
+        v.set(k, x);
+        if (x < n || y < m) continue;
+        const pairs = [];
+        let px = n, py = m;
+        for (let distance = d; distance >= 0; distance--) {
+          const prior = trace[distance], diagonal = px - py;
+          const pk = (diagonal === -distance || (diagonal !== distance && (prior.get(diagonal - 1) ?? -1) < (prior.get(diagonal + 1) ?? -1))) ? diagonal + 1 : diagonal - 1;
+          const previousX = prior.get(pk) ?? 0, previousY = previousX - pk;
+          while (px > previousX && py > previousY) { pairs.push([x0 + --px, y0 + --py]); }
+          px = previousX; py = previousY;
+        }
+        return pairs.reverse();
+      }
+    }
+    return null;
+  }
+
+  function uniqueWordTokens(s, lo, hi) {
+    const out = new Map(), pattern = /[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu;
+    pattern.lastIndex = lo;
+    for (let match; (match = pattern.exec(s)) && match.index < hi;) {
+      if (match.index + match[0].length > hi) break;
+      const prior = out.get(match[0]);
+      out.set(match[0], prior === undefined ? {offset: match.index, length: match[0].length} : null);
+    }
+    return out;
+  }
+
+  function patienceAnchors(a, b, x0, ax, y0, by) {
+    const left = uniqueWordTokens(a, x0, ax), right = uniqueWordTokens(b, y0, by);
+    const candidates = [...left]
+      .filter(([word, value]) => value && right.get(word))
+      .map(([word, value]) => ({a: value.offset, b: right.get(word).offset, length: value.length}))
+      .sort((p, q) => p.a - q.a);
+    const tails = [], indexes = [], previous = [];
+    candidates.forEach((value, index) => {
+      let lo = 0, hi = tails.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (tails[mid] < value.b) lo = mid + 1; else hi = mid; }
+      previous[index] = lo ? indexes[lo - 1] : -1;
+      tails[lo] = value.b; indexes[lo] = index;
+    });
+    const anchors = [];
+    for (let i = indexes[tails.length - 1]; i !== undefined && i >= 0; i = previous[i]) anchors.push(candidates[i]);
+    return anchors.reverse();
+  }
+
+  function trimSurrogatePairs(a, b, matches) {
+    const high = code => code >= 0xD800 && code <= 0xDBFF, low = code => code >= 0xDC00 && code <= 0xDFFF;
+    return matches.flatMap(match => {
+      let {a: x, b: y, length} = match;
+      if ((low(a.charCodeAt(x)) && high(a.charCodeAt(x - 1))) || (low(b.charCodeAt(y)) && high(b.charCodeAt(y - 1)))) { x++; y++; length--; }
+      if ((high(a.charCodeAt(x + length - 1)) && low(a.charCodeAt(x + length))) || (high(b.charCodeAt(y + length - 1)) && low(b.charCodeAt(y + length)))) length--;
+      return length > 0 ? [{a: x, b: y, length}] : [];
+    });
+  }
+
   // Bounded Myers alignment. Prefix/suffix make ordinary typing constant in the
   // unchanged text. If the edit budget is exhausted, unique word anchors retain
   // confidently unchanged regions; unmatched text is explicitly uncertain.
@@ -32,60 +98,20 @@
       while (x1 - suffix > x0 && y1 - suffix > y0 && a[x1 - suffix - 1] === b[y1 - suffix - 1]) suffix++;
       const ax = x1 - suffix, by = y1 - suffix, n = ax - x0, m = by - y0;
       if (n && m) {
-        const limit = Math.min(n + m, 384), trace = [], started = Date.now();
-        let v = new Map([[1, 0]]), found = false;
-        for (let d = 0; d <= limit && Date.now() - started < 35; d++) {
-          trace.push(new Map(v));
-          for (let k = -d; k <= d; k += 2) {
-            let x = (k === -d || (k !== d && (v.get(k - 1) ?? -1) < (v.get(k + 1) ?? -1)))
-              ? (v.get(k + 1) ?? 0) : (v.get(k - 1) ?? 0) + 1;
-            let y = x - k;
-            while (x < n && y < m && a[x0 + x] === b[y0 + y]) { x++; y++; }
-            v.set(k, x);
-            if (x < n || y < m) continue;
-            const pairs = [];
-            let px = n, py = m;
-            for (let distance = d; distance >= 0; distance--) {
-              const prior = trace[distance], diagonal = px - py;
-              const pk = (diagonal === -distance || (diagonal !== distance && (prior.get(diagonal - 1) ?? -1) < (prior.get(diagonal + 1) ?? -1))) ? diagonal + 1 : diagonal - 1;
-              const previousX = prior.get(pk) ?? 0, previousY = previousX - pk;
-              while (px > previousX && py > previousY) { pairs.push([x0 + --px, y0 + --py]); }
-              px = previousX; py = previousY;
-            }
-            pairs.reverse().forEach(pair => add(pair[0], pair[1], 1));
-            found = true; break;
-          }
-          if (found) break;
-        }
-        if (!found) {
+        const pairs = myersAlign(a, b, x0, y0, n, m);
+        if (pairs) {
+          pairs.forEach(pair => add(pair[0], pair[1], 1));
+        } else {
           // A patience-style fallback handles long documents with many separate
           // edits without an unbounded quadratic diff or invented attribution.
-          const tokens = (s, lo, hi) => {
-            const out = new Map(), pattern = /[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu;
-            pattern.lastIndex = lo;
-            for (let match; (match = pattern.exec(s)) && match.index < hi;) {
-              if (match.index + match[0].length > hi) break;
-              const prior = out.get(match[0]);
-              out.set(match[0], prior === undefined ? {offset: match.index, length: match[0].length} : null);
-            }
-            return out;
-          };
-          const left = tokens(a, x0, ax), right = tokens(b, y0, by);
-          const candidates = [...left].filter(([word, value]) => value && right.get(word))
-            .map(([word, value]) => ({a: value.offset, b: right.get(word).offset, length: value.length})).sort((p, q) => p.a - q.a);
-          const tails = [], indexes = [], previous = [];
-          candidates.forEach((value, index) => {
-            let lo = 0, hi = tails.length;
-            while (lo < hi) { const mid = (lo + hi) >> 1; if (tails[mid] < value.b) lo = mid + 1; else hi = mid; }
-            previous[index] = lo ? indexes[lo - 1] : -1;
-            tails[lo] = value.b; indexes[lo] = index;
-          });
-          const anchors = [];
-          for (let i = indexes[tails.length - 1]; i !== undefined && i >= 0; i = previous[i]) anchors.push(candidates[i]);
-          anchors.reverse();
-          if (anchors.length && depth < 5) {
+          const anchors = depth < 5 ? patienceAnchors(a, b, x0, ax, y0, by) : [];
+          if (anchors.length) {
             let x = x0, y = y0;
-            for (const anchor of anchors) { segment(x, anchor.a, y, anchor.b, depth + 1); add(anchor.a, anchor.b, anchor.length); x = anchor.a + anchor.length; y = anchor.b + anchor.length; }
+            for (const anchor of anchors) {
+              segment(x, anchor.a, y, anchor.b, depth + 1);
+              add(anchor.a, anchor.b, anchor.length);
+              x = anchor.a + anchor.length; y = anchor.b + anchor.length;
+            }
             segment(x, ax, y, by, depth + 1);
           } else complete = false;
         }
@@ -93,14 +119,7 @@
       add(x1 - suffix, y1 - suffix, suffix);
     }
     segment(0, a.length, 0, b.length);
-    const high = code => code >= 0xD800 && code <= 0xDBFF, low = code => code >= 0xDC00 && code <= 0xDFFF;
-    const safe = result.flatMap(match => {
-      let {a: x, b: y, length} = match;
-      if ((low(a.charCodeAt(x)) && high(a.charCodeAt(x - 1))) || (low(b.charCodeAt(y)) && high(b.charCodeAt(y - 1)))) { x++; y++; length--; }
-      if ((high(a.charCodeAt(x + length - 1)) && low(a.charCodeAt(x + length))) || (high(b.charCodeAt(y + length - 1)) && low(b.charCodeAt(y + length)))) length--;
-      return length > 0 ? [{a: x, b: y, length}] : [];
-    });
-    return {matches: safe, complete};
+    return {matches: trimSurrogatePairs(a, b, result), complete};
   }
 
   function flatten(records) {
@@ -245,6 +264,88 @@
     detachBlock(blockId) {
       for (const comment of this.state.comments) if (!comment.anchor?.detached && comment.anchor.start?.blockId === blockId && comment.anchor.end?.blockId === blockId) comment.anchor.detached = true;
     }
+    syncSpans(previous, next, before, options) {
+      const sourceRecords = active(previous).map(record => {
+        const side = this.resolutions.get(record.blockId);
+        return side ? previous.find(value => value.blockId === record.blockId && value.side === side) || record : record;
+      });
+      const from = flatten(sourceRecords), to = flatten(active(next));
+      const comparison = align(from.text, to.text);
+      const projected = project(this.allSpans(from.records), comparison.matches);
+      // Native undo can outlive the bounded metadata history. Restored text
+      // without a retained origin is uncertain, rather than new author typing.
+      const insertion = options.history ? 'uncertain' : options.origin || 'author';
+      const fillOrigin = comparison.complete ? insertion : 'uncertain';
+      const spans = [];
+      for (const record of next) {
+        if (record.side === 'original') {
+          const source = previous.find(value => key(value) === key(record)) || previous.find(value => value.blockId === record.blockId && !value.side);
+          const saved = source ? before.spans.filter(span => key(span) === key(source)) : [];
+          const aligned = source ? project(saved, align(source.text, record.text).matches) : [];
+          spans.push(...this.fill(record, aligned, 'unattributed'));
+          continue;
+        }
+        const global = to.records.find(value => key(value) === key(record));
+        let matched = projected
+          .filter(span => span.start < global.globalStart + record.text.length && span.end > global.globalStart)
+          .map(span => Object.assign({}, span, {
+            start: Math.max(0, span.start - global.globalStart),
+            end: Math.min(record.text.length, span.end - global.globalStart)
+          }));
+        // Exact block moves are independent of order in the global alignment.
+        const stable = previous.find(value => key(value) === key(record) && value.text === record.text);
+        const exact = previous.filter(value => value.text === record.text && value.side !== 'original');
+        if (record.text && stable) matched = before.spans.filter(span => key(span) === key(stable));
+        else if (record.text && exact.length === 1 && !this.resolutions.has(record.blockId)) matched = before.spans.filter(span => key(span) === key(exact[0]));
+        spans.push(...this.fill(record, matched, fillOrigin, options.runId, options.parentRunId));
+      }
+      return spans;
+    }
+    syncCommentAnchor(comment, previous, next) {
+      const oldAnchor = clone(comment.anchor);
+      // A tracked proposal must not consume comments on the original. Keep
+      // the saved original surface, including intermediate blocks in a range.
+      const oldCoordinates = this.anchorRecords(oldAnchor, previous);
+      const firstIndex = oldCoordinates.findIndex(value => key(value) === key(oldAnchor.start || {}));
+      const lastIndex = oldCoordinates.findIndex(value => key(value) === key(oldAnchor.end || {}));
+      const sides = Object.assign({}, oldAnchor.surfaceSides || {});
+      if (firstIndex >= 0 && lastIndex >= firstIndex) {
+        for (const prior of oldCoordinates.slice(firstIndex, lastIndex + 1)) {
+          const original = !prior.side && next.find(value => value.blockId === prior.blockId && value.side === 'original');
+          if (!original) continue;
+          sides[prior.blockId] = 'original';
+          if (oldAnchor.start.blockId === prior.blockId) comment.anchor.start.side = 'original';
+          if (oldAnchor.end.blockId === prior.blockId) comment.anchor.end.side = 'original';
+        }
+      }
+      if (Object.keys(sides).length) comment.anchor.surfaceSides = sides;
+      if (this.anchorText(comment.anchor) === oldAnchor.quote && this.anchorValid(comment.anchor)) return;
+
+      const startRecord = previous.find(value => key(value) === key(oldAnchor.start || {}));
+      const endRecord = previous.find(value => key(value) === key(oldAnchor.end || {}));
+      if (!startRecord || !endRecord) { this.recover(comment); return; }
+      const sameStart = next.find(value => key(value) === key(startRecord));
+      const sameEnd = next.find(value => key(value) === key(endRecord));
+      if (sameStart && sameEnd && startRecord.text === sameStart.text && endRecord.text === sameEnd.text && this.anchorText(comment.anchor) === oldAnchor.quote) return;
+
+      // Prefer the anchor's original/proposed coordinate spaces while they
+      // exist. Resolving a change maps that saved side into the live document.
+      if (sameStart && sameEnd && startRecord === endRecord && (startRecord.side === 'original' || endRecord.side === 'original')) {
+        const mappedOriginal = mapRange(oldAnchor.start.offset, oldAnchor.end.offset, align(startRecord.text, sameStart.text).matches);
+        if (mappedOriginal) {
+          comment.anchor.start = endpoint(sameStart, mappedOriginal.start);
+          comment.anchor.end = endpoint(sameEnd, mappedOriginal.end);
+          this.refreshQuote(comment);
+          return;
+        }
+      }
+      const old = flatten(oldCoordinates), target = flatten(active(next));
+      const a = old.records.find(value => key(value) === key(startRecord));
+      const b = old.records.find(value => key(value) === key(endRecord));
+      const mapped = a && b ? mapRange(a.globalStart + oldAnchor.start.offset, b.globalStart + oldAnchor.end.offset, align(old.text, target.text).matches) : null;
+      if (mapped && mapped.end > mapped.start) { comment.anchor = this.anchorFromGlobal(mapped.start, mapped.end); return; }
+      this.recover(comment);
+    }
     sync(options = {}) {
       const next = this.views();
       if (options.history && this.restoreHistory(options.history)) return true;
@@ -257,73 +358,12 @@
         }
         return false;
       }
-      const previous = this.records, before = this.snapshot(), sourceRecords = [];
-      for (const record of active(previous)) {
-        const side = this.resolutions.get(record.blockId);
-        sourceRecords.push(side ? previous.find(value => value.blockId === record.blockId && value.side === side) || record : record);
-      }
-      const from = flatten(sourceRecords), to = flatten(active(next));
-      const comparison = align(from.text, to.text);
-      const sourceSpans = this.allSpans(from.records);
-      const projected = project(sourceSpans, comparison.matches);
-      // Native undo can outlive the bounded metadata history. Restored text
-      // without a retained origin is uncertain, rather than new author typing.
-      const insertion = options.history ? 'uncertain' : options.origin || 'author', spans = [];
-      for (const record of next) {
-        if (record.side === 'original') {
-          const source = previous.find(value => key(value) === key(record)) || previous.find(value => value.blockId === record.blockId && !value.side);
-          const saved = source ? before.spans.filter(span => key(span) === key(source)) : [];
-          const aligned = source ? project(saved, align(source.text, record.text).matches) : [];
-          spans.push(...this.fill(record, aligned, 'unattributed')); continue;
-        }
-        const global = to.records.find(value => key(value) === key(record));
-        let matched = projected.filter(span => span.start < global.globalStart + record.text.length && span.end > global.globalStart)
-          .map(span => Object.assign({}, span, {start: Math.max(0, span.start - global.globalStart), end: Math.min(record.text.length, span.end - global.globalStart)}));
-        // Exact block moves are independent of order in the global alignment.
-        const stable = previous.find(value => key(value) === key(record) && value.text === record.text);
-        const exact = previous.filter(value => value.text === record.text && value.side !== 'original');
-        if (record.text && stable) matched = before.spans.filter(span => key(span) === key(stable));
-        else if (record.text && exact.length === 1 && !this.resolutions.has(record.blockId)) matched = before.spans.filter(span => key(span) === key(exact[0]));
-        spans.push(...this.fill(record, matched, comparison.complete ? insertion : 'uncertain', options.runId, options.parentRunId));
-      }
-      this.records = next; this.state.spans = spans;
+      const previous = this.records, before = this.snapshot();
+      this.state.spans = this.syncSpans(previous, next, before, options);
+      this.records = next;
       this.cachedSelection = null;
       for (const comment of this.state.comments) {
-        if (comment.anchor?.detached) continue;
-        const oldAnchor = clone(comment.anchor);
-        // A tracked proposal must not consume comments on the original. Keep
-        // the saved original surface, including intermediate blocks in a range.
-        const oldCoordinates = this.anchorRecords(oldAnchor, previous);
-        const firstIndex = oldCoordinates.findIndex(value => key(value) === key(oldAnchor.start || {}));
-        const lastIndex = oldCoordinates.findIndex(value => key(value) === key(oldAnchor.end || {}));
-        const sides = Object.assign({}, oldAnchor.surfaceSides || {});
-        if (firstIndex >= 0 && lastIndex >= firstIndex) for (const prior of oldCoordinates.slice(firstIndex, lastIndex + 1)) {
-          const original = !prior.side && next.find(value => value.blockId === prior.blockId && value.side === 'original');
-          if (!original) continue;
-          sides[prior.blockId] = 'original';
-          if (oldAnchor.start.blockId === prior.blockId) comment.anchor.start.side = 'original';
-          if (oldAnchor.end.blockId === prior.blockId) comment.anchor.end.side = 'original';
-        }
-        if (Object.keys(sides).length) comment.anchor.surfaceSides = sides;
-        if (this.anchorText(comment.anchor) === oldAnchor.quote && this.anchorValid(comment.anchor)) continue;
-        const startRecord = previous.find(value => key(value) === key(oldAnchor.start || {}));
-        const endRecord = previous.find(value => key(value) === key(oldAnchor.end || {}));
-        if (!startRecord || !endRecord) { this.recover(comment); continue; }
-        const sameStart = next.find(value => key(value) === key(startRecord));
-        const sameEnd = next.find(value => key(value) === key(endRecord));
-        if (sameStart && sameEnd && startRecord.text === sameStart.text && endRecord.text === sameEnd.text && this.anchorText(comment.anchor) === oldAnchor.quote) continue;
-        // Prefer the anchor's original/proposed coordinate spaces while they
-        // exist. Resolving a change maps that saved side into the live document.
-        const anchorSources = this.anchorRecords(oldAnchor, previous);
-        const old = flatten(anchorSources), target = flatten(active(next));
-        if (sameStart && sameEnd && (startRecord.side === 'original' || endRecord.side === 'original')) {
-          const a = mapRange(oldAnchor.start.offset, oldAnchor.end.offset, align(startRecord.text, sameStart.text).matches);
-          if (startRecord === endRecord && a) { comment.anchor.start = endpoint(sameStart, a.start); comment.anchor.end = endpoint(sameEnd, a.end); this.refreshQuote(comment); continue; }
-        }
-        const a = old.records.find(value => key(value) === key(startRecord)), b = old.records.find(value => key(value) === key(endRecord));
-        const mapped = a && b ? mapRange(a.globalStart + oldAnchor.start.offset, b.globalStart + oldAnchor.end.offset, align(old.text, target.text).matches) : null;
-        if (mapped && mapped.end > mapped.start) { comment.anchor = this.anchorFromGlobal(mapped.start, mapped.end); continue; }
-        this.recover(comment);
+        if (!comment.anchor?.detached) this.syncCommentAnchor(comment, previous, next);
       }
       this.state.revision++; this.state.texts = this.textRecords(); this.resolutions.clear(); this.future = [];
       this.remember(); this.notify(options.silent !== true); return true;
@@ -498,6 +538,19 @@
         else comment.anchor.detached = true;
       }
     }
+    projectGlobalSpans(flat, globalSpans, fallbackOrigin) {
+      return this.records.flatMap(record => {
+        if (record.side === 'original') return this.state.spans.filter(span => key(span) === key(record));
+        const global = flat.records.find(value => key(value) === key(record));
+        const projected = globalSpans
+          .filter(span => span.start < global.globalStart + record.text.length && span.end > global.globalStart)
+          .map(span => Object.assign({}, span, {
+            start: Math.max(0, span.start - global.globalStart),
+            end: Math.min(record.text.length, span.end - global.globalStart)
+          }));
+        return this.fill(record, projected, fallbackOrigin);
+      });
+    }
     markOrigin(start, end, origin, advanceRevision = false, parentRunId) {
       const flat = flatten(active(this.records));
       start = Math.max(0, start); end = Math.min(flat.text.length, end);
@@ -507,18 +560,13 @@
         return [span.start < start ? Object.assign({}, span, {end: start}) : null, span.end > end ? Object.assign({}, span, {start: end}) : null].filter(Boolean);
       });
       retained.push({start, end, origin, ...(parentRunId ? {parentRunId} : {})});
-      this.state.spans = this.records.flatMap(record => {
-        if (record.side === 'original') return this.state.spans.filter(span => key(span) === key(record));
-        const global = flat.records.find(value => key(value) === key(record));
-        const projected = retained.filter(span => span.start < global.globalStart + record.text.length && span.end > global.globalStart).map(span => Object.assign({}, span, {start: Math.max(0, span.start - global.globalStart), end: Math.min(record.text.length, span.end - global.globalStart)}));
-        return this.fill(record, projected, origin);
-      });
+      this.state.spans = this.projectGlobalSpans(flat, retained, origin);
       if (advanceRevision) { this.state.revision++; this.remember(); }
       else if (this.history.length) this.history[this.history.length - 1] = {signature: this.fingerprint(), html: this.doc.innerHTML, state: this.snapshot()};
       else this.remember();
       this.notify(false);
     }
-    applyExactEdit(priorSpans, start, end, insertedLength, origin, parentRunId, advanceRevision = false) {
+    applyExactEdit(priorSpans, {start, end, insertedLength, origin, parentRunId, advanceRevision = false}) {
       const flat = flatten(active(this.records)), shift = insertedLength - (end - start), newEnd = start + insertedLength;
       const transported = priorSpans.flatMap(span => {
         const pieces = [];
@@ -527,12 +575,7 @@
         return pieces;
       });
       if (insertedLength > 0) transported.push({start, end: newEnd, origin, ...(parentRunId ? {parentRunId} : {})});
-      this.state.spans = this.records.flatMap(record => {
-        if (record.side === 'original') return this.state.spans.filter(span => key(span) === key(record));
-        const global = flat.records.find(value => key(value) === key(record));
-        const projected = transported.filter(span => span.start < global.globalStart + record.text.length && span.end > global.globalStart).map(span => Object.assign({}, span, {start: Math.max(0, span.start - global.globalStart), end: Math.min(record.text.length, span.end - global.globalStart)}));
-        return this.fill(record, projected, 'uncertain');
-      });
+      this.state.spans = this.projectGlobalSpans(flat, transported, 'uncertain');
       if (advanceRevision) { this.state.revision++; this.remember(); }
       else if (this.history.length) this.history[this.history.length - 1] = {signature: this.fingerprint(), html: this.doc.innerHTML, state: this.snapshot()};
       this.notify(false);
@@ -555,12 +598,7 @@
         if (span.end <= start || span.start >= end) return [span];
         return [span.start < start ? Object.assign({}, span, {end: start}) : null, span.end > end ? Object.assign({}, span, {start: end}) : null].filter(Boolean);
       });
-      this.state.spans = this.records.flatMap(record => {
-        if (record.side === 'original') return this.state.spans.filter(span => key(span) === key(record));
-        const global = flat.records.find(value => key(value) === key(record));
-        const projected = [...keep, ...copied].filter(span => span.start < global.globalStart + record.text.length && span.end > global.globalStart).map(span => Object.assign({}, span, {start: Math.max(0, span.start - global.globalStart), end: Math.min(record.text.length, span.end - global.globalStart)}));
-        return this.fill(record, projected, 'pasted');
-      });
+      this.state.spans = this.projectGlobalSpans(flat, [...keep, ...copied], 'pasted');
       const runIds = new Set(this.state.runs.map(run => run.id));
       this.state.runs.push(...(payload.runs || []).filter(run => !runIds.has(run.id)));
       this.state.revision++;

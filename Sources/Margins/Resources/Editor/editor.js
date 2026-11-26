@@ -414,7 +414,14 @@
       const length = Math.max(0, delta + edit.end - edit.start);
       const removed = edit.priorComments.filter(comment => !comment.detached && comment.start >= edit.start && comment.end <= edit.end && comment.end > comment.start).map(comment => ({id: comment.id, quote: comment.anchor.quote}));
       annotations.reconcileReplacement(edit.start, edit.start + length, removed);
-      annotations.applyExactEdit(edit.priorSpans, edit.start, edit.end, length, annotationInput.origin, annotationInput.parentRunId, !synced);
+      annotations.applyExactEdit(edit.priorSpans, {
+        start: edit.start,
+        end: edit.end,
+        insertedLength: length,
+        origin: annotationInput.origin,
+        parentRunId: annotationInput.parentRunId,
+        advanceRevision: !synced
+      });
     }
     if (annotationPaste && annotations && (annotationPaste.kind !== 'drop' || e.inputType === 'insertFromDrop')) {
       const current = annotations.getState().text;
@@ -727,6 +734,16 @@
     e.preventDefault();
     if (e.type === 'cut' && !doc.classList.contains('ro')) { captureAnnotationInput({inputType: 'deleteByCut'}); document.execCommand('delete'); }
   }
+  function parseAnnotationClipboard(transfer) {
+    const raw = transfer?.getData(ANNOTATION_CLIPBOARD);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      console.warn('Ignoring malformed annotation clipboard payload:', err);
+      return null;
+    }
+  }
   doc.addEventListener('copy', copyAnnotations);
   doc.addEventListener('cut', copyAnnotations);
   doc.addEventListener('dragstart', e => {
@@ -742,8 +759,7 @@
     if (!range || !doc.contains(range.startContainer)) return;
     const start = annotations.offsetForDOM(range.startContainer, range.startOffset);
     if (start == null) return;
-    let payload = null;
-    try { payload = JSON.parse(e.dataTransfer?.getData(ANNOTATION_CLIPBOARD) || 'null'); } catch (_) {}
+    const payload = parseAnnotationClipboard(e.dataTransfer);
     const text = annotations.getState().text;
     annotationPaste = {start, after: text.slice(start), payload, kind: 'drop'};
     annotationInput = {origin: 'pasted'};
@@ -754,8 +770,7 @@
     annotations.sync({silent: true});
     const selection = annotations.selectionFromDOM(), offset = selection ? selection.start : annotations.getCaretOffset();
     if (offset == null) return;
-    let payload = null;
-    try { payload = JSON.parse(e.clipboardData?.getData(ANNOTATION_CLIPBOARD) || 'null'); } catch (_) {}
+    const payload = parseAnnotationClipboard(e.clipboardData);
     const text = annotations.getState().text;
     annotationPaste = {start: offset, after: text.slice(selection ? selection.end : offset), payload};
     annotationInput = {origin: 'pasted'};
