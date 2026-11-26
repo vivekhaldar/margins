@@ -207,6 +207,7 @@ article.ro~#tmarks{display:none}
 /* Formatting controls stay above the document without taking its selection. */
 .formatbar{display:flex;flex-wrap:wrap;gap:6px;padding:6px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
 .formatbar button[aria-pressed=true]{background:var(--accbg);border-color:var(--acc);color:var(--acc)}
+.formatbar-sep{width:1px;align-self:stretch;margin:2px 2px;background:var(--line)}
 body.previewing .formatbar{display:none}
 article ul[data-task]{list-style:none;padding-left:24px}
 article input[type=checkbox]{margin:0 8px 0 -22px;accent-color:var(--acc);cursor:pointer}
@@ -284,7 +285,7 @@ article.ro input[type=checkbox],.chg>del input[type=checkbox]{pointer-events:non
 @media (max-width:760px){.annotation-controls{margin-left:0;padding-left:0;border-left:0}.annotation-toggle{font-size:11px}}
 /* Historical attribution remains inspectable while document editing is disabled. */
 body.previewing .formatbar{display:flex}
-body.previewing .formatbar [data-format]{display:none}
+body.previewing .formatbar [data-format],body.previewing .formatbar .formatbar-sep{display:none}
 body.previewing .annotation-controls{border-left:0;padding-left:0;margin-left:0}
 .annotation-menu-separator{height:1px;background:var(--line);margin:3px 4px}
 .annotation-uncertain{border-top:1px dashed var(--acc)}

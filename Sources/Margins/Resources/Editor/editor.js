@@ -452,92 +452,10 @@
 
   // ---------- author formatting ----------
   const formatbar = $('#formatbar');
-  let formatRange = null;
-  function editableRange(range) {
-    if (!range || doc.classList.contains('ro')) return false;
-    const element = n => n.nodeType === 1 ? n : n.parentElement;
-    return [range.startContainer, range.endContainer].every(n => doc.contains(n) &&
-      !element(n).closest('[contenteditable="false"],.tools')) &&
-      ![...doc.querySelectorAll('.chg > del,.tools')].some(el => range.intersectsNode(el));
-  }
-  document.addEventListener('selectionchange', () => {
-    const sel = getSelection();
-    if (sel.rangeCount && editableRange(sel.getRangeAt(0))) formatRange = sel.getRangeAt(0).cloneRange();
-    formatbar.querySelectorAll('[data-format]').forEach(button => {
-      const command = button.dataset.format;
-      if (['bold', 'italic', 'underline'].includes(command))
-        button.setAttribute('aria-pressed', String(document.queryCommandState(command)));
-    });
+  const formatting = window.MarginsFormatting.create({
+    doc, formatbar, trackedDiff, syncChecklists, prepareTypingParagraph, noteEdit, normalize, scheduleOutline
   });
-  function format(command) {
-    const commands = {bold:'bold', italic:'italic', underline:'underline', bullets:'insertUnorderedList',
-      numbers:'insertOrderedList', removeFormat:'removeFormat'};
-    const active = document.activeElement;
-    if (active !== document.body && !doc.contains(active) && !formatbar.contains(active)) return;
-    const sel = getSelection();
-    let range = sel.rangeCount ? sel.getRangeAt(0) : null;
-    if (!range || !doc.contains(range.commonAncestorContainer)) range = formatRange;
-    if (!editableRange(range) || !range.startContainer.isConnected) return;
-    doc.focus(); sel.removeAllRanges(); sel.addRange(range);
-    trackedDiff?.suspend();
-    range = sel.getRangeAt(0);
-    const el = n => n.nodeType === 1 ? n : n.parentElement;
-    const lists = () => [...doc.querySelectorAll('ul,ol')].filter(list =>
-      list.contains(sel.anchorNode) || (!sel.isCollapsed && sel.getRangeAt(0).intersectsNode(list)));
-    if (command === 'toggleCheck') {
-      const items = [...doc.querySelectorAll('ul[data-task] > li')].filter(li =>
-        li.contains(sel.anchorNode) || (!sel.isCollapsed && range.intersectsNode(li)));
-      const boxes = items.map(li => li.querySelector(':scope > input[type=checkbox]')).filter(Boolean);
-      const checked = boxes.some(box => !box.checked);
-      boxes.forEach(box => { box.checked = checked; box.toggleAttribute('checked', checked); });
-    } else if (command === 'checklist') {
-      if (!el(sel.anchorNode).closest('ul,ol')) document.execCommand('insertUnorderedList');
-      else if (el(sel.anchorNode).closest('ol')) document.execCommand('insertUnorderedList');
-      const targets = lists().filter(list => list.tagName === 'UL');
-      const remove = targets.length && targets.every(list => list.hasAttribute('data-task'));
-      targets.forEach(list => {
-        list.toggleAttribute('data-task', !remove);
-        if (remove) list.querySelectorAll(':scope > li > input[type=checkbox]').forEach(box => box.remove());
-      });
-      syncChecklists();
-    } else if (commands[command]) {
-      if (command === 'bullets' || command === 'numbers') {
-        lists().forEach(list => {
-          list.removeAttribute('data-task');
-          list.querySelectorAll(':scope > li > input[type=checkbox]').forEach(box => box.remove());
-        });
-      }
-      document.execCommand(commands[command], false, null);
-    } else return;
-    noteEdit(); normalize(); scheduleOutline();
-    formatRange = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
-  }
-  formatbar.addEventListener('mousedown', e => e.preventDefault());
-  formatbar.addEventListener('click', e => {
-    const button = e.target.closest('[data-format]');
-    if (button) format(button.dataset.format);
-  });
-  doc.addEventListener('click', e => {
-    if (!e.target.matches('input[type=checkbox]')) return;
-    if (doc.classList.contains('ro') || e.target.closest('.chg > del')) { e.preventDefault(); return; }
-    e.target.toggleAttribute('checked', e.target.checked);
-    noteEdit(e.target);
-  });
-  doc.addEventListener('keydown', e => {
-    if (!e.metaKey && !e.ctrlKey && (e.key.length === 1 || e.key === 'Enter')) prepareTypingParagraph();
-    if ((e.metaKey || e.ctrlKey) && !e.altKey) {
-      const key = e.key.toLowerCase();
-      const command = e.shiftKey ? ({'7':'numbers', '&':'numbers', '8':'bullets', '*':'bullets',
-        '9':'checklist', '(':'checklist', 'x':'toggleCheck'}[key]) : ({b:'bold', i:'italic', u:'underline'}[key]);
-      if (command) { e.preventDefault(); format(command); }
-    } else if (e.metaKey && e.altKey && e.key === '0') { e.preventDefault(); format('removeFormat'); }
-    else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      const n = getSelection().anchorNode;
-      const li = n && (n.nodeType === 1 ? n : n.parentElement).closest('ul[data-task] > li');
-      // Let WebKit's empty-list-item behavior exit a checklist normally.
-      if (li && !li.textContent.trim()) li.querySelector(':scope > input[type=checkbox]')?.remove();
-    }
-  });
+  const format = command => formatting.format(command);
 
   // ---------- pointer ----------
   doc.addEventListener('mousedown', (e) => { if (e.target.closest('.tools')) e.preventDefault(); });
@@ -1432,7 +1350,7 @@
       clearTimeout(revTimer); rev = {ok: 0, no: 0, secs: new Set()};
       annotationInput = null; annotationPaste = null;
       live = null;
-      formatRange = null;
+      formatting.reset();
       closeThread();
       doc.innerHTML = html || '';
       doc.contentEditable = 'true';

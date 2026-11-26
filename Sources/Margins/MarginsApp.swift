@@ -51,6 +51,15 @@ struct MarginsApp: App {
                     .keyboardShortcut("g", modifiers: [.command, .shift])
             }
             CommandMenu("Format") {
+                Button("Body") { Task { await state.editor.format("paragraph") } }
+                    .keyboardShortcut("0", modifiers: [.command, .shift])
+                Button("Heading 1") { Task { await state.editor.format("h1") } }
+                    .keyboardShortcut("1", modifiers: [.command, .option])
+                Button("Heading 2") { Task { await state.editor.format("h2") } }
+                    .keyboardShortcut("2", modifiers: [.command, .option])
+                Button("Heading 3") { Task { await state.editor.format("h3") } }
+                    .keyboardShortcut("3", modifiers: [.command, .option])
+                Divider()
                 Button("Bold") { Task { await state.editor.format("bold") } }.keyboardShortcut("b")
                 Button("Italic") { Task { await state.editor.format("italic") } }.keyboardShortcut("i")
                 Button("Underline") { Task { await state.editor.format("underline") } }.keyboardShortcut("u")

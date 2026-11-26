@@ -43,6 +43,7 @@ export default [
         MarginsAnnotationEngine: "writable",
         MarginsAnnotationAlignment: "writable",
         MarginsAnnotationUI: "writable",
+        MarginsFormatting: "writable",
         MarginsTrackedDiff: "writable",
         margins: "writable",
       },

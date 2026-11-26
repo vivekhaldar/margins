@@ -19,6 +19,11 @@
   <button class="btn p" id="accAll" data-act="acc-all" disabled>Accept all</button>
 </div>
 <div class="formatbar" id="formatbar" role="toolbar" aria-label="Text formatting and annotations">
+  <button class="btn" data-format="paragraph" title="Body (⌘⇧0)" aria-label="Body">Body</button>
+  <button class="btn" data-format="h1" title="Heading 1 (⌘⌥1)" aria-label="Heading 1"><strong>H1</strong></button>
+  <button class="btn" data-format="h2" title="Heading 2 (⌘⌥2)" aria-label="Heading 2"><strong>H2</strong></button>
+  <button class="btn" data-format="h3" title="Heading 3 (⌘⌥3)" aria-label="Heading 3"><strong>H3</strong></button>
+  <span class="formatbar-sep" aria-hidden="true"></span>
   <button class="btn" data-format="bold" title="Bold (⌘B)" aria-label="Bold"><strong>B</strong></button>
   <button class="btn" data-format="italic" title="Italic (⌘I)" aria-label="Italic"><em>I</em></button>
   <button class="btn" data-format="underline" title="Underline (⌘U)" aria-label="Underline">Underline</button>
@@ -95,6 +100,7 @@
 </div>
 <script src="annotations.js"></script>
 <script src="tracked-diff.js"></script>
+<script src="formatting.js"></script>
 <script src="editor.js"></script>
 <script src="annotations-ui.js"></script>
 </body>
