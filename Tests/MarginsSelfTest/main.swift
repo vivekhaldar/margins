@@ -655,6 +655,120 @@ test("project folder store recent MRU, cap, clearing, and legacy JSON migration"
     check(ProjectFolderStore.displayLabel(for: urls[0], among: urls).contains("/Users/dev/work/app"), "duplicate name includes path")
 }
 
+test("agent notification coordinator suppression, formatting, and unbundled safety") {
+    final class MockDelivery: AgentNotificationDelivery {
+        var isAvailable: Bool
+        var authRequests = 0
+        var delivered: [AgentNotificationPayload] = []
+        var clearedURLs: [URL] = []
+
+        init(isAvailable: Bool = true) { self.isAvailable = isAvailable }
+        func requestAuthorization() { authRequests += 1 }
+        func deliver(_ payload: AgentNotificationPayload) { delivered.append(payload) }
+        func removeDelivered(forDocumentURL url: URL) { clearedURLs.append(url) }
+    }
+
+    let suiteName = "margins-notify-test-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let docURL = URL(fileURLWithPath: "/tmp/Notes.margins")
+    let intentID = UUID()
+    let threadID = UUID()
+
+    // Unbundled environment is a safe no-op.
+    let unbundledDelivery = MockDelivery(isAvailable: false)
+    let unbundled = AgentNotificationCoordinator(delivery: unbundledDelivery, defaults: defaults)
+    unbundled.requestAuthorizationIfNeeded()
+    unbundled.notify(
+        documentURL: docURL, step: 1, intentID: intentID,
+        outcome: .completed(hasEdits: true, summary: "Tightened intro", slug: "tighten intro", reply: ""),
+        isDocumentFocused: false
+    )
+    unbundled.clearNotifications(forDocumentURL: docURL)
+    check(unbundledDelivery.authRequests == 0, "unbundled skips authorization")
+    check(unbundledDelivery.delivered.isEmpty, "unbundled skips delivery")
+    check(unbundledDelivery.clearedURLs.isEmpty, "unbundled skips clearing")
+
+    // Bundled environment: lazy auth, focus suppression, cancellation suppression, and formatting.
+    let delivery = MockDelivery(isAvailable: true)
+    let coordinator = AgentNotificationCoordinator(delivery: delivery, defaults: defaults)
+    coordinator.requestAuthorizationIfNeeded()
+    coordinator.requestAuthorizationIfNeeded()
+    check(delivery.authRequests == 1, "lazy authorization requested once")
+
+    // Suppressed while document is focused (default onlyWhenInBackground = true).
+    coordinator.notify(
+        documentURL: docURL, step: 1, intentID: intentID,
+        outcome: .completed(hasEdits: true, summary: "Tightened intro", slug: "tighten intro", reply: ""),
+        isDocumentFocused: true
+    )
+    check(delivery.delivered.isEmpty, "suppressed while document is focused")
+
+    // Suppressed when cancelled even if unfocused.
+    coordinator.notify(
+        documentURL: docURL, step: 1, intentID: intentID,
+        outcome: .failed(error: "Stopped."), wasCancelled: true, isDocumentFocused: false
+    )
+    check(delivery.delivered.isEmpty, "suppressed on cancellation")
+
+    // Delivered for edits when unfocused; uses summary and carries IDs.
+    coordinator.notify(
+        documentURL: docURL, step: 2, intentID: intentID, threadID: nil,
+        outcome: .completed(hasEdits: true, summary: "Added rollout timeline", slug: "add timeline", reply: ""),
+        isDocumentFocused: false
+    )
+    check(delivery.delivered.count == 1, "delivers edit notification when unfocused")
+    check(delivery.delivered[0].title == "Notes", "title uses document name without extension")
+    check(delivery.delivered[0].body == "Added rollout timeline", "edit notification body uses summary")
+    check(delivery.delivered[0].playSound == true, "sound defaults to on")
+    check(delivery.delivered[0].intentID == intentID, "payload preserves intentID")
+
+    // Falls back to slug when summary is empty, and truncates long reply-only notifications.
+    let longReply = String(repeating: "word ", count: 60)
+    coordinator.notify(
+        documentURL: docURL, step: 3, intentID: intentID, threadID: threadID,
+        outcome: .completed(hasEdits: false, summary: "", slug: "reply slug", reply: longReply),
+        isDocumentFocused: false
+    )
+    check(delivery.delivered.count == 2, "delivers reply-only notification")
+    check(delivery.delivered[1].threadID == threadID, "payload preserves threadID")
+    check(delivery.delivered[1].body.count <= 180 && delivery.delivered[1].body.hasSuffix("…"), "long reply truncated cleanly")
+
+    // Failure notification includes failure indicator and error message.
+    coordinator.notify(
+        documentURL: docURL, step: 4, intentID: intentID,
+        outcome: .failed(error: "Provider timed out"),
+        isDocumentFocused: false
+    )
+    check(delivery.delivered.count == 3, "delivers failure notification")
+    check(delivery.delivered[2].title == "Notes · Agent failed", "failure title includes indicator")
+    check(delivery.delivered[2].body == "Provider timed out", "failure body uses error message")
+
+    // Respects preferences: notify even when focused if onlyWhenInBackground = false, sound off, and master disable.
+    defaults.set(false, forKey: AgentNotificationPreferences.onlyWhenInBackgroundKey)
+    defaults.set(false, forKey: AgentNotificationPreferences.playSoundKey)
+    coordinator.notify(
+        documentURL: docURL, step: 5, intentID: intentID,
+        outcome: .completed(hasEdits: true, summary: "", slug: "polish conclusion", reply: ""),
+        isDocumentFocused: true
+    )
+    check(delivery.delivered.count == 4, "delivers while focused when background-only is off")
+    check(delivery.delivered[3].body == "polish conclusion", "falls back to slug when summary is empty")
+    check(delivery.delivered[3].playSound == false, "respects playSound preference")
+
+    defaults.set(false, forKey: AgentNotificationPreferences.notifyOnFinishKey)
+    coordinator.notify(
+        documentURL: docURL, step: 6, intentID: intentID,
+        outcome: .completed(hasEdits: true, summary: "Ignored", slug: "ignored", reply: ""),
+        isDocumentFocused: false
+    )
+    check(delivery.delivered.count == 4, "master toggle suppresses notifications")
+
+    coordinator.clearNotifications(forDocumentURL: docURL)
+    check(delivery.clearedURLs == [docURL], "clearNotifications forwards document URL")
+}
+
 test("file change watcher detects external atomic writes and ignores self writes") {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-watch-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
