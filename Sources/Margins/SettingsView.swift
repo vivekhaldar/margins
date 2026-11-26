@@ -1,6 +1,7 @@
 import AppKit
 import MarginsCore
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
@@ -11,6 +12,8 @@ struct SettingsView: View {
                 .tabItem { Label("Providers", systemImage: "cpu") }
             AppearanceSettingsTab()
                 .tabItem { Label("Appearance", systemImage: "textformat") }
+            NotificationsSettingsTab()
+                .tabItem { Label("Notifications", systemImage: "bell") }
             SyncSettingsTab()
                 .environmentObject(SyncController.shared)
                 .tabItem { Label("Sync", systemImage: "icloud") }
@@ -248,6 +251,47 @@ private struct ProviderDetail: View {
             } catch {
                 ui.value.testResult = error.localizedDescription
             }
+        }
+    }
+}
+
+private struct NotificationsSettingsTab: View {
+    @AppStorage(AgentNotificationPreferences.notifyOnFinishKey) private var notifyOnFinish = true
+    @AppStorage(AgentNotificationPreferences.playSoundKey) private var playSound = true
+    @AppStorage(AgentNotificationPreferences.onlyWhenInBackgroundKey) private var onlyWhenInBackground = true
+    @StateObject private var authStatus = Local<UNAuthorizationStatus>(.notDetermined)
+
+    var body: some View {
+        Form {
+            Section("Agent Completion") {
+                Toggle("Notify when an agent finishes", isOn: $notifyOnFinish)
+                    .onChange(of: notifyOnFinish) { _, enabled in
+                        guard enabled else { return }
+                        AgentNotifications.shared.requestAuthorizationIfNeeded(force: true)
+                        Task { authStatus.value = await AgentNotifications.shared.authorizationStatus() }
+                    }
+                Toggle("Play sound", isOn: $playSound)
+                    .disabled(!notifyOnFinish)
+                Toggle("Only when document is in background", isOn: $onlyWhenInBackground)
+                    .disabled(!notifyOnFinish)
+                Text("Notifications fire for instructions, selection threads, tracked-change refinements, and tool approval prompts. Cancelled runs never notify.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if authStatus.value == .denied {
+                Section("System Permission") {
+                    Text("Notifications are currently disabled for Margins in macOS System Settings.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button("Open Notification Settings…") {
+                        AgentNotifications.shared.openSystemNotificationSettings()
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .task {
+            authStatus.value = await AgentNotifications.shared.authorizationStatus()
         }
     }
 }
