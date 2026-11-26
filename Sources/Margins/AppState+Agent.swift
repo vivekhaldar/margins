@@ -309,12 +309,11 @@ extension AppState {
             },
             askPermission: { [weak self] request in
                 await withCheckedContinuation { cont in
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated {
-                            guard let self, self.documentSessionID == documentID, self.activeRunIDs[step] == runID, self.running[step] != nil else { cont.resume(returning: .deny); return }
-                            self.permissionAsks[step] = PermissionAsk(request: request, step: step) { d in cont.resume(returning: d) }
-                        }
-                    }
+                    DispatchQueue.main.async { MainActor.assumeIsolated {
+                        guard let self, self.documentSessionID == documentID, self.activeRunIDs[step] == runID, self.running[step] != nil else { cont.resume(returning: .deny); return }
+                        self.permissionAsks[step] = PermissionAsk(request: request, step: step) { d in cont.resume(returning: d) }
+                        self.notifyAgentPermissionNeeded(step: step, request: request)
+                    } }
                 }
             })
     }
@@ -380,25 +379,26 @@ extension AppState {
         running[step] = nil
         liveThought[step] = nil
         thoughtBreak.remove(step)
-        let failed = activeRunIDs[step].flatMap { id in doc.annotationRuns.first { $0.id == id }?.status } == "failed"
-            || doc.intents.first(where: { $0.kind == .instruction && $0.step == step })?.status == .failed
+        let failed = activeRunIDs[step].flatMap { id in doc.annotationRuns.first { $0.id == id }?.status } == "failed" || doc.intents.first(where: { $0.kind == .instruction && $0.step == step })?.status == .failed
         updateIntent(step) { intent in
             // Anything still "running" when the agent finished didn't report completion.
             intent.steps = intent.steps?.map { var s = $0; if s.status == .running { s.status = failed ? .failed : .done }; return s }
         }
-        if let runID = activeRunIDs.removeValue(forKey: step),
-           let index = doc.annotationRuns.firstIndex(where: { $0.id == runID }) {
+        var finishedRun: AnnotationRun?
+        if let runID = activeRunIDs.removeValue(forKey: step), let index = doc.annotationRuns.firstIndex(where: { $0.id == runID }) {
             let intent = doc.intents.first { $0.kind == .instruction && $0.step == step }
             if doc.annotationRuns[index].status == "working" { doc.annotationRuns[index].status = intent?.status.rawValue ?? "done" }
             doc.annotationRuns[index].refinements = intent?.refinements ?? []
             if let error = intent?.error, !doc.annotationRuns[index].notes.contains(error) { doc.annotationRuns[index].notes.append(error) }
             doc.annotationRuns[index].steps = doc.annotationRuns[index].steps.map { var s = $0; if s.status == .running { s.status = failed ? .failed : .done }; return s }
+            finishedRun = doc.annotationRuns[index]
         }
-        inFlight = max(0, inFlight - 1)
-        scheduleSave()
+        notifyAgentRunFinished(step: step, run: finishedRun, failed: failed, cancelled: Task.isCancelled)
+        inFlight = max(0, inFlight - 1); scheduleSave()
     }
 
     private func beginRun(step: Int, config: ProviderConfig, refinement: String? = nil) -> UUID {
+        prepareAgentNotifications()
         let intent = doc.intents.first { $0.kind == .instruction && $0.step == step }!
         let parent = refinement == nil ? nil : doc.annotationRuns.last(where: { $0.intentId == intent.id && $0.status != "failed" })?.id
         let run = AnnotationRun(intentId: intent.id, step: step, provider: config.name, model: config.model,

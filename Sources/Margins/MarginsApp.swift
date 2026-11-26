@@ -131,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Needed when launched as a bare SwiftPM executable (no Info.plist).
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        AgentNotifications.shared.installDelegate()
         installZoomKeys()
         NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose(_:)),
                                                name: NSWindow.willCloseNotification, object: nil)
@@ -148,7 +149,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func windowSessionChanged(_ notification: Notification) {
-        MainActor.assumeIsolated { DocumentWindows.shared.persistSession() }
+        MainActor.assumeIsolated {
+            DocumentWindows.shared.persistSession()
+            if notification.name == NSWindow.didBecomeKeyNotification,
+               let url = DocumentWindows.shared.keyState?.fileURL {
+                AgentNotifications.shared.clearNotifications(forDocumentURL: url)
+            }
+        }
     }
 
     private var awaitingTermination = false

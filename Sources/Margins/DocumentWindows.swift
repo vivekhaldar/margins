@@ -20,6 +20,7 @@ final class DocumentWindows {
     /// Closed windows leave the restoration session immediately, while their last
     /// editor snapshot drains asynchronously. Quit waits for these saves too.
     private var closingSaves: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var pendingFocus: [URL: (threadID: UUID?, intentID: UUID?)] = [:]
     private static let sessionKey = "openDocumentWindows"
 
     init(defaults: UserDefaults = .standard) {
@@ -127,6 +128,9 @@ final class DocumentWindows {
             }
             state.saveNow(includeEmpty: true)
             self.persistSession()
+            if let target = self.pendingFocus.removeValue(forKey: state.fileURL.standardizedFileURL) {
+                self.reveal(in: state, threadID: target.threadID, intentID: target.intentID)
+            }
         }
     }
 
@@ -184,6 +188,26 @@ final class DocumentWindows {
             openWindow(url)
         } else {
             pendingURLs.append(url)
+        }
+    }
+
+    func focus(_ url: URL, threadID: UUID? = nil, intentID: UUID? = nil) {
+        let standardized = url.standardizedFileURL
+        if let entry = states.first(where: { $0.value.fileURL.standardizedFileURL == standardized }) {
+            windows[entry.key]?.makeKeyAndOrderFront(nil)
+            reveal(in: entry.value, threadID: threadID, intentID: intentID)
+        } else {
+            if threadID != nil || intentID != nil { pendingFocus[standardized] = (threadID, intentID) }
+            open(standardized)
+        }
+    }
+
+    private func reveal(in state: AppState, threadID: UUID?, intentID: UUID?) {
+        if let threadID {
+            state.openThread(threadID)
+        } else if let intentID {
+            state.revealedIntentID = intentID
+            state.instructionRevealRequest = UUID()
         }
     }
 
