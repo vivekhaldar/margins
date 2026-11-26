@@ -25,6 +25,15 @@ extension AppState {
 
     var projectName: String? { projectFolderPath.map { URL(fileURLWithPath: $0).lastPathComponent } }
 
+    /// Recently opened project folders that still exist on disk, excluding the active folder.
+    var recentProjectFolders: [URL] {
+        _ = projectFolderRevision
+        let currentPath = projectURL?.standardizedFileURL.path
+        return projectFolderStore.existingRecentFolders()
+            .filter { $0 != currentPath }
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
     func chooseProjectFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -34,8 +43,16 @@ extension AppState {
         panel.message = "The agent will work in this folder: it can read it and, with Full agent tools, change files and run commands there."
         if let p = projectFolderPath { panel.directoryURL = URL(fileURLWithPath: p) }
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        selectProjectFolder(url)
+    }
+
+    func selectProjectFolder(_ url: URL) {
         setProjectFolder(url)
         if !toolPolicy.canWrite { offerFullAgent(for: url) }
+    }
+
+    func clearRecentProjectFolders() {
+        projectFolderStore.clearRecentFolders()
     }
 
     func setProjectFolder(_ url: URL?) {

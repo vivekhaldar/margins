@@ -71,6 +71,7 @@ final class AppState: ObservableObject {
     let defaults: UserDefaults
     var saveTask: Task<Void, Never>?
     private var settingsObserver: NSObjectProtocol?
+    private var projectFolderObserver: NSObjectProtocol?
     let projectFolderStore: ProjectFolderStore
     var fileWatcher: FileChangeWatcher?
     @Published var projectFolderRevision = 0
@@ -112,6 +113,13 @@ final class AppState: ObservableObject {
                 self?.reloadFontPreferences()
             }
         }
+        projectFolderObserver = NotificationCenter.default.addObserver(
+            forName: ProjectFolderStore.didChangeNotification, object: projectFolderStore, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.projectFolderRevision += 1
+            }
+        }
 
         if restoreLastDocument, let last = defaults.url(forKey: "lastDocument"), FileManager.default.fileExists(atPath: last.path) {
             open(last)
@@ -122,6 +130,7 @@ final class AppState: ObservableObject {
     deinit {
         fileWatcher?.stop()
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
+        if let projectFolderObserver { NotificationCenter.default.removeObserver(projectFolderObserver) }
     }
 
     // MARK: - zoom

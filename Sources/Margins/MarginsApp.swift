@@ -100,6 +100,20 @@ struct MarginsApp: App {
                 Divider()
                 Button("Project Folder…") { state.chooseProjectFolder() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
+                Menu("Recent Projects") {
+                    let recent = state.recentProjectFolders
+                    if recent.isEmpty {
+                        Button("No Recent Projects") {}.disabled(true)
+                    } else {
+                        ForEach(recent, id: \.self) { url in
+                            Button(ProjectFolderStore.displayLabel(for: url, among: recent)) {
+                                state.selectProjectFolder(url)
+                            }
+                        }
+                        Divider()
+                        Button("Clear Recent Projects") { state.clearRecentProjectFolders() }
+                    }
+                }
                 Button("Stop Using Project Folder") { state.setProjectFolder(nil) }
                     .disabled(state.projectFolderPath == nil)
                 Button(state.projectURL == nil ? "Reveal Agent Workspace" : "Show Project in Finder") { state.revealWorkspace() }

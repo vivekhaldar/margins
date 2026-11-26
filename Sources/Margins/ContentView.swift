@@ -118,6 +118,19 @@ struct ProjectMenu: View {
                 Button("Choose Project Folder…") { state.chooseProjectFolder() }
                 Text("Pick a folder (e.g. a code repo) and the agent can write code, run builds and edit files there.")
             }
+            let recent = state.recentProjectFolders
+            if !recent.isEmpty {
+                Section("Recent Projects") {
+                    ForEach(recent, id: \.self) { url in
+                        Button {
+                            state.selectProjectFolder(url)
+                        } label: {
+                            Label(ProjectFolderStore.displayLabel(for: url, among: recent), systemImage: "folder")
+                        }
+                    }
+                    Button("Clear Recent Projects") { state.clearRecentProjectFolders() }
+                }
+            }
             Divider()
             Text(hint)
         } label: {
