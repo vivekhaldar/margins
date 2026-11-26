@@ -7,6 +7,14 @@ enum ComposerTarget: String, CaseIterable {
     case cloud
 }
 
+/// The selected passage an inline thread is anchored to; cloud tasks launched from a thread carry it.
+struct CloudThreadAnchor {
+    var id: UUID
+    var quote: String
+    var focus: [String]
+    var anchor: String
+}
+
 extension AppState {
     private static let cloudQueuedPollIntervalNanoseconds: UInt64 = 10_000_000_000
     private static let cloudReconnectDelayNanoseconds: UInt64 = 5_000_000_000
@@ -46,7 +54,34 @@ extension AppState {
 
     // MARK: - Launch
 
-    func submitCloud(_ raw: String) {
+    /// Editor "ask" message from an inline thread: local agents discuss in place; `cloud: true` launches a
+    /// Copilot Cloud task anchored to the thread instead.
+    func routeThreadMessage(_ body: [String: Any]) {
+        guard let thread = (body["thread"] as? String).flatMap(UUID.init(uuidString:)),
+              let message = body["message"] as? String else { return }
+        let quote = body["quote"] as? String ?? ""
+        let focus = body["focus"] as? [String] ?? []
+        let anchor = body["anchor"] as? String ?? ""
+        guard body["cloud"] as? Bool == true else {
+            discuss(thread: thread, quote: quote, focus: focus, anchor: anchor, message: message)
+            return
+        }
+        // Later messages stay anchored where the thread started, like local discussions.
+        let first = doc.intents.first { $0.kind == .instruction && $0.thread == thread }
+        submitCloud(message, thread: CloudThreadAnchor(
+            id: thread,
+            quote: first?.quote ?? quote,
+            focus: first?.focus ?? focus,
+            anchor: first?.anchor ?? anchor
+        ))
+        if !doc.intents.contains(where: { $0.thread == thread && $0.step == doc.nextStep - 1 }) {
+            // Launch was refused (e.g. no repo): drop the editor's optimistic "working" bubble.
+            lastThreadsJSON = ""
+            scheduleThreads()
+        }
+    }
+
+    func submitCloud(_ raw: String, thread: CloudThreadAnchor? = nil) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let repo = cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -64,7 +99,13 @@ extension AppState {
         prepareAgentNotifications()
         let step = doc.nextStep
         doc.nextStep += 1
-        let intent = Intent(step: step, text: text, status: .working, provider: "Copilot Cloud")
+        var intent = Intent(step: step, text: text, status: .working, provider: CloudInsertionPlan.provider)
+        if let thread {
+            intent.thread = thread.id
+            intent.quote = thread.quote
+            intent.focus = thread.focus
+            intent.anchor = thread.anchor
+        }
         doc.intents.append(intent)
         let intentID = intent.id
         let session = documentSessionID
@@ -73,7 +114,7 @@ extension AppState {
 
         Task {
             do {
-                let excerpt = await cloudDocumentExcerpt()
+                let excerpt = await cloudExcerpt(thread: thread)
                 guard documentSessionID == session else { return }
                 let request = CloudTaskRequest(
                     repo: repo,
@@ -230,30 +271,19 @@ extension AppState {
     @discardableResult
     private func applyCloudSnapshot(_ snapshot: CloudTaskSnapshot, to intentID: UUID, session: UUID) async -> Bool {
         guard documentSessionID == session,
-              let existing = doc.intents.first(where: { $0.id == intentID }),
-              var ref = existing.cloudTask else { return false }
+              let index = doc.intents.lastIndex(where: { $0.id == intentID }),
+              let transition = CloudTaskLifecycle.apply(snapshot, to: &doc.intents[index]),
+              let ref = doc.intents[index].cloudTask else { return false }
 
-        let previousState = CloudTaskState(rawState: ref.cloudState)
-        let newState = CloudTaskState(rawState: snapshot.state)
-        ref.cloudState = snapshot.state
-        if !snapshot.htmlURL.isEmpty { ref.htmlURL = snapshot.htmlURL }
-        if let sessionID = snapshot.sessionID { ref.sessionID = sessionID }
-        ref.lastCheckedAt = Date()
-
-        updateCloudIntent(intentID) {
-            $0.cloudTask = ref
-            if $0.status != .pending && $0.status != .reviewed {
-                $0.status = newState.intentStatus
-            }
-        }
-
-        if newState.shouldPoll {
+        if transition.continuePolling {
             scheduleSave()
             return true
         }
 
         stopCloudLogStream(for: intentID)
-        await collectCloudOutputs(for: intentID, ref: ref, state: newState, previousState: previousState, session: session)
+        await collectCloudOutputs(
+            for: intentID, ref: ref, state: transition.newState, previousState: transition.previousState, session: session
+        )
         return false
     }
 
@@ -283,32 +313,19 @@ extension AppState {
         if !logText.isEmpty { cloudLogs[intentID] = logText }
         let excerpt = CloudTaskFormatter.extractSummary(fromLog: logText)
 
-        updateCloudIntent(intentID) { intent in
-            intent.cloudTask?.pullRequestURL = prURL
-            if state == .completed {
-                if !excerpt.isEmpty { intent.reply = excerpt }
-                if intent.summary.isEmpty {
-                    intent.summary = prURL != nil ? "Completed with pull request." : "Cloud task completed."
-                }
-            } else if state.needsAttention {
-                if !excerpt.isEmpty { intent.reply = excerpt }
-            } else if state.isTerminal {
-                if intent.error == nil || intent.error?.isEmpty == true {
-                    intent.error = excerpt.isEmpty ? "Cloud task \(state.displayLabel.lowercased())." : excerpt
-                }
-            }
+        updateCloudIntent(intentID) {
+            CloudTaskLifecycle.applyOutputs(to: &$0, state: state, excerpt: excerpt, pullRequestURL: prURL)
         }
         saveNow()
         notifyCloudTransition(intentID: intentID, state: state, previousState: previousState, excerpt: excerpt)
     }
 
     private func notifyCloudTransition(intentID: UUID, state: CloudTaskState, previousState: CloudTaskState, excerpt: String) {
-        guard let intent = doc.intents.first(where: { $0.id == intentID }) else { return }
-        if state.needsAttention {
-            guard cloudNotifiedAttention.insert(intentID).inserted else { return }
-        } else if previousState == state {
-            return
-        }
+        guard let intent = doc.intents.first(where: { $0.id == intentID }),
+              CloudTaskLifecycle.shouldNotify(
+                  state: state, previousState: previousState, alreadyNotifiedAttention: cloudNotifiedAttention.contains(intentID)
+              ) else { return }
+        if state.needsAttention { cloudNotifiedAttention.insert(intentID) }
         guard let outcome = state.notificationOutcome(summary: intent.summary, detail: excerpt, error: intent.error) else { return }
         AgentNotifications.shared.coordinator.notify(
             documentURL: fileURL,
@@ -362,47 +379,30 @@ extension AppState {
     // MARK: - Insert into Document (Tracked Edit)
 
     func insertCloudResultIntoDocument(intentID: UUID) {
-        guard let intent = doc.intents.first(where: { $0.id == intentID }),
-              let task = intent.cloudTask else { return }
-        let html = CloudTaskFormatter.insertionHTML(
-            intentText: intent.text,
-            reply: intent.reply,
-            log: cloudLogs[intentID],
-            summary: intent.summary,
-            pullRequestURL: task.pullRequestURL,
-            htmlURL: task.htmlURL
-        )
+        guard let intent = doc.intents.first(where: { $0.id == intentID }), intent.cloudTask != nil else { return }
+        let log = cloudLogs[intentID]
         let session = documentSessionID
-        let step = intent.step
         previewing = nil
 
         Task {
             do {
                 let snapshot = try await editor.blocks()
-                guard documentSessionID == session else { return }
-                let targetBlockID = snapshot.focus.last ?? snapshot.blocks.last?.id ?? "^"
-                let run = AnnotationRun(
-                    intentId: intent.id,
-                    step: step,
-                    provider: "Copilot Cloud",
-                    model: task.repo,
-                    instruction: intent.text,
-                    summary: intent.summary,
-                    status: "pending"
-                )
-                doc.annotationRuns.append(run)
-                let edit = EditOp(op: .insertAfter, blockId: targetBlockID, html: html)
+                guard documentSessionID == session,
+                      let plan = CloudInsertionPlan.make(
+                          intent: intent, log: log, focus: snapshot.focus, blockIDs: snapshot.blocks.map(\.id)
+                      ) else { return }
+                doc.annotationRuns.append(plan.run)
                 let result = try await editor.apply(
-                    step: step,
-                    edits: [edit],
+                    step: intent.step,
+                    edits: [plan.edit],
                     direct: false,
-                    runID: run.id,
+                    runID: plan.run.id,
                     expectedRevision: snapshot.revision,
                     blockStates: snapshot.blockStates
                 )
                 guard documentSessionID == session else { return }
                 updateCloudIntent(intentID) {
-                    $0.status = result.changes == 0 ? .done : .pending
+                    $0.status = CloudInsertionPlan.status(afterChanges: result.changes)
                 }
                 doc.snapshot(
                     html: result.html,
@@ -431,6 +431,13 @@ extension AppState {
     private func updateCloudIntent(_ id: UUID, _ body: (inout Intent) -> Void) {
         guard let index = doc.intents.lastIndex(where: { $0.id == id }) else { return }
         body(&doc.intents[index])
+    }
+
+    private func cloudExcerpt(thread: CloudThreadAnchor?) async -> String? {
+        if let quote = thread?.quote.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty {
+            return String(quote.prefix(3000))
+        }
+        return await cloudDocumentExcerpt()
     }
 
     private func cloudDocumentExcerpt() async -> String? {

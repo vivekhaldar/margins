@@ -82,10 +82,7 @@ extension AppState {
                 submit(text, paragraphBlockID: blockId)
             }
         case "ask":
-            if let t = (body["thread"] as? String).flatMap(UUID.init(uuidString:)), let message = body["message"] as? String {
-                discuss(thread: t, quote: body["quote"] as? String ?? "", focus: body["focus"] as? [String] ?? [],
-                        anchor: body["anchor"] as? String ?? "", message: message)
-            }
+            routeThreadMessage(body)
         case "stop":
             if let s = body["step"] as? NSNumber { stop(step: s.intValue) }
         case "refine":

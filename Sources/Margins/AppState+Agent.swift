@@ -239,7 +239,7 @@ extension AppState {
                         "reply": m.reply ?? "",
                         "summary": m.summary,
                         "notes": m.notes,
-                        "files": m.files ?? [],
+                        "files": m.files ?? [], "cloud": m.provider == CloudInsertionPlan.provider,
                         "changes": pending.byStep[m.step] ?? 0,
                         "error": m.error ?? "",
                         "waiting": permissionAsks[m.step] != nil,
@@ -256,7 +256,7 @@ extension AppState {
         if let t = liveThought[m.step]?.split(whereSeparator: \.isNewline).last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
             return String(t.trimmingCharacters(in: .whitespaces).suffix(140))
         }
-        return "Thinking…"
+        return m.cloudActivity ?? "Thinking…"
     }
 
     // MARK: - Agent Lifecycle

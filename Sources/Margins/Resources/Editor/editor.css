@@ -191,6 +191,9 @@ article.ro~#tmarks{display:none}
 .tpop textarea:focus{border-color:var(--accline);box-shadow:0 0 0 3px var(--accbg)}
 .tpop textarea:disabled{opacity:.5}
 .tpop .pf{font-size:11px;color:var(--mute);margin-top:5px}
+.tpop .tcloud{font:inherit;font-size:11px;border:1px dashed var(--line);background:var(--panel);border-radius:99px;padding:0 7px;margin-right:6px;cursor:pointer;color:var(--mute)}
+.tpop .tcloud:hover{border-color:var(--acc);color:var(--acc)}
+.tpop .tcloud.on{border-style:solid;border-color:var(--acc);background:var(--accbg);color:var(--acc)}
 
 /* Find highlights live outside the editable HTML and never enter saved documents. */
 .findbar{display:flex;align-items:center;gap:8px;padding:8px 20px;background:var(--panel);border-bottom:1px solid var(--line)}

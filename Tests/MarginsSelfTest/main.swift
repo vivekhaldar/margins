@@ -1661,6 +1661,80 @@ test("CloudLogStreamAccumulator buffers reconnect replay and CloudWatcherPolicy"
     check(!CloudWatcherPolicy.shouldStartWatcher(trigger: .open, watcherRunning: true), "open does not duplicate watchers")
 }
 
+test("CloudTaskLifecycle folds snapshots into intents and gates notifications") {
+    let checked = Date(timeIntervalSince1970: 1_730_000_500)
+    let ref = CloudTaskRef(repo: "octo/repo", baseRef: "main", taskID: "t1", htmlURL: "https://github.com/octo/repo/tasks/t1")
+    var intent = Intent(step: 3, text: "Audit parser", provider: "Copilot Cloud", cloudTask: ref)
+    var plain = Intent(step: 4, text: "Local")
+    check(CloudTaskLifecycle.apply(CloudTaskSnapshot(taskID: "x", htmlURL: "", state: "completed"), to: &plain) == nil,
+          "non-cloud intents are untouched")
+    check(plain.status == .working, "non-cloud status unchanged")
+
+    let running = CloudTaskLifecycle.apply(
+        CloudTaskSnapshot(taskID: "t1", htmlURL: "", state: "in_progress", sessionID: "s1"), to: &intent, at: checked)
+    check(running == CloudSnapshotTransition(previousState: .queued, newState: .inProgress), "queued → in_progress transition")
+    check(running?.continuePolling == true, "in-progress keeps polling")
+    check(intent.cloudTask?.sessionID == "s1" && intent.cloudTask?.lastCheckedAt == checked, "session id and check time recorded")
+    check(intent.cloudTask?.htmlURL == ref.htmlURL, "empty snapshot URL keeps the known task URL")
+
+    let done = CloudTaskLifecycle.apply(CloudTaskSnapshot(taskID: "t1", htmlURL: "", state: "completed"), to: &intent)
+    check(done?.continuePolling == false && intent.status == .done, "completed stops polling and marks done")
+    check(intent.cloudTask?.sessionID == "s1", "missing session id in snapshot keeps the previous one")
+    CloudTaskLifecycle.applyOutputs(to: &intent, state: .completed, excerpt: "Final answer.", pullRequestURL: "https://github.com/octo/repo/pull/9")
+    check(intent.reply == "Final answer." && intent.summary == "Completed with pull request.", "completion records answer and PR summary")
+    check(intent.cloudTask?.pullRequestURL == "https://github.com/octo/repo/pull/9", "PR URL stored on the task ref")
+
+    intent.status = .pending
+    CloudTaskLifecycle.apply(CloudTaskSnapshot(taskID: "t1", htmlURL: "", state: "completed"), to: &intent)
+    check(intent.status == .pending, "inserted (pending review) result is not reset by a later poll")
+
+    var failed = Intent(step: 5, text: "Fail", cloudTask: ref)
+    CloudTaskLifecycle.applyOutputs(to: &failed, state: .timedOut, excerpt: "", pullRequestURL: nil)
+    check(failed.error == "Cloud task timed out.", "terminal failure without log gets a fallback error")
+    failed.error = "Original"
+    CloudTaskLifecycle.applyOutputs(to: &failed, state: .failed, excerpt: "log tail", pullRequestURL: nil)
+    check(failed.error == "Original", "existing error is preserved")
+    var waiting = Intent(step: 6, text: "Ask", cloudTask: ref)
+    CloudTaskLifecycle.applyOutputs(to: &waiting, state: .waitingForUser, excerpt: "Which branch?", pullRequestURL: nil)
+    check(waiting.reply == "Which branch?" && waiting.error == nil && waiting.summary.isEmpty, "attention state surfaces the question")
+
+    check(CloudTaskLifecycle.shouldNotify(state: .completed, previousState: .inProgress, alreadyNotifiedAttention: false), "completion notifies")
+    check(!CloudTaskLifecycle.shouldNotify(state: .completed, previousState: .completed, alreadyNotifiedAttention: false),
+          "re-polling a finished task does not re-notify")
+    check(CloudTaskLifecycle.shouldNotify(state: .idle, previousState: .idle, alreadyNotifiedAttention: false), "first attention notifies")
+    check(!CloudTaskLifecycle.shouldNotify(state: .idle, previousState: .inProgress, alreadyNotifiedAttention: true), "attention notifies once")
+    check(intent.cloudActivity == "Copilot Cloud · Completed" && plain.cloudActivity == nil, "cloud activity label for threads")
+}
+
+test("CloudInsertionPlan targets the right block and builds a tracked edit") {
+    let ref = CloudTaskRef(repo: "octo/repo", baseRef: "main", taskID: "t1", htmlURL: "https://github.com/octo/repo/tasks/t1")
+    var intent = Intent(step: 7, text: "Summarize", summary: "Cloud task completed.", provider: "Copilot Cloud", cloudTask: ref)
+    intent.reply = "Answer <b>here</b>."
+    let runID = UUID()
+    let plan = CloudInsertionPlan.make(intent: intent, log: nil, focus: ["b2"], blockIDs: ["b1", "b2", "b3"], runID: runID)
+    check(plan?.edit.op == .insertAfter && plan?.edit.blockId == "b2", "inserts after the selected block")
+    check(plan?.edit.html.contains("Answer &lt;b&gt;here&lt;/b&gt;.") == true, "inserted HTML is escaped")
+    check(plan?.run.id == runID && plan?.run.intentId == intent.id && plan?.run.step == 7, "run links the edit to the intent step")
+    check(plan?.run.status == "pending" && plan?.run.provider == "Copilot Cloud" && plan?.run.model == "octo/repo", "run attribution")
+
+    check(CloudInsertionPlan.targetBlockID(intent: intent, focus: [], blockIDs: ["b1", "b2"]) == "b2", "no selection → end of document")
+    check(CloudInsertionPlan.targetBlockID(intent: intent, focus: ["gone"], blockIDs: ["b1"]) == "b1", "stale selection ignored")
+    check(CloudInsertionPlan.targetBlockID(intent: intent, focus: [], blockIDs: []) == "^", "empty document inserts at start")
+    var threaded = intent
+    threaded.thread = UUID()
+    threaded.anchor = "b1"
+    threaded.focus = ["b1", "b2"]
+    check(CloudInsertionPlan.targetBlockID(intent: threaded, focus: ["b3"], blockIDs: ["b1", "b2", "b3"]) == "b2",
+          "thread result lands after the discussed passage, not the current selection")
+    threaded.focus = ["deleted"]
+    check(CloudInsertionPlan.targetBlockID(intent: threaded, focus: [], blockIDs: ["b0", "b1", "b9"]) == "b1",
+          "thread falls back to its anchor block")
+    check(CloudInsertionPlan.make(intent: Intent(step: 1, text: "local"), log: nil, focus: [], blockIDs: []) == nil,
+          "non-cloud intents have no insertion plan")
+    check(CloudInsertionPlan.status(afterChanges: 0) == .done && CloudInsertionPlan.status(afterChanges: 2) == .pending,
+          "insertion leaves the intent pending review only when it changed the document")
+}
+
 let cloudSem = DispatchSemaphore(value: 0)
 Task {
     // 1. Timeout / duplicate-launch recovery: never retry POST. List items omit `prompt`, so candidates
