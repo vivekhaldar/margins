@@ -1410,5 +1410,558 @@ Task {
 }
 syncSem.wait()
 
+// --- Copilot Cloud Agents (gh CLI) tests ---
+
+actor MockCloudCommandRunner: CloudCommandRunner {
+    struct Call: Sendable {
+        var executable: URL
+        var arguments: [String]
+        var stdin: String?
+        var cwd: URL?
+    }
+
+    private let ghURL: URL?
+    private var handlers: [@Sendable (Call, (@Sendable (String) -> Void)?) async throws -> ProcessResult]
+    private var recordedCalls: [Call] = []
+
+    init(
+        ghURL: URL? = URL(fileURLWithPath: "/usr/local/bin/gh"),
+        handlers: [@Sendable (Call, (@Sendable (String) -> Void)?) async throws -> ProcessResult] = []
+    ) {
+        self.ghURL = ghURL
+        self.handlers = handlers
+    }
+
+    nonisolated func locate(_ name: String) -> URL? {
+        name == "gh" ? ghURL : nil
+    }
+
+    func calls() -> [Call] { recordedCalls }
+
+    func run(
+        _ executable: URL,
+        arguments: [String],
+        stdin: String?,
+        cwd: URL?,
+        onLine: (@Sendable (String) -> Void)?
+    ) async throws -> ProcessResult {
+        let call = Call(executable: executable, arguments: arguments, stdin: stdin, cwd: cwd)
+        recordedCalls.append(call)
+        guard !handlers.isEmpty else {
+            throw CopilotCloudError.invalidResponse("Unexpected CLI call: \(arguments.joined(separator: " "))")
+        }
+        let handler = handlers.removeFirst()
+        return try await handler(call, onLine)
+    }
+}
+
+test("CloudTaskRef persistence round-trip and legacy document backward compatibility") {
+    let checkedAt = Date(timeIntervalSince1970: 1_730_000_000)
+    let ref = CloudTaskRef(
+        repo: "vivekhaldar/margins",
+        baseRef: "main",
+        taskID: "task-123",
+        htmlURL: "https://github.com/vivekhaldar/margins/tasks/task-123",
+        sessionID: "sess-9",
+        cloudState: "in_progress",
+        pullRequestURL: "https://github.com/vivekhaldar/margins/pull/42",
+        lastCheckedAt: checkedAt,
+        createPullRequest: true
+    )
+    let intent = Intent(step: 1, text: "Audit sync engine", status: .working, provider: "Copilot Cloud", cloudTask: ref)
+    let doc = MarginsDocument(html: "<h1>Notes</h1>", intents: [intent], versions: [], nextStep: 2)
+    let encoded = try doc.encoded()
+    let decoded = try MarginsDocument.decode(encoded)
+    check(decoded.intents.count == 1, "round-trip preserves intent count")
+    check(decoded.intents[0].cloudTask == ref, "round-trip preserves CloudTaskRef fields")
+
+    // Legacy document JSON without `cloudTask` must decode cleanly with `cloudTask == nil`.
+    let legacyJSON = """
+    {
+      "format": 2,
+      "html": "<h1>Legacy</h1>",
+      "intents": [{
+        "id": "11111111-1111-1111-1111-111111111111",
+        "kind": "instruction",
+        "step": 1,
+        "text": "Tighten prose",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "status": "done",
+        "summary": "Done",
+        "notes": [],
+        "refinements": [],
+        "provider": "Claude"
+      }],
+      "versions": [],
+      "nextStep": 2
+    }
+    """
+    let legacyDoc = try MarginsDocument.decode(Data(legacyJSON.utf8))
+    check(legacyDoc.intents.count == 1 && legacyDoc.intents[0].cloudTask == nil, "legacy intent decodes with cloudTask == nil")
+}
+
+test("CloudTask payload construction, excerpt packaging, and read-only guardrails") {
+    let roReq = CloudTaskRequest(
+        repo: "octo/repo",
+        baseRef: "main",
+        instruction: "Explain the sync conflict logic",
+        excerpt: "Selected passage from Margins",
+        createPullRequest: false,
+        model: "claude-sonnet-4.5",
+        customAgent: "reviewer"
+    )
+    let (roPrompt, roJSON) = try CopilotCloudClient.buildStartPayload(for: roReq)
+    let roObj = try JSONSerialization.jsonObject(with: Data(roJSON.utf8)) as? [String: Any]
+    check(roObj?["base_ref"] as? String == "main", "base_ref included")
+    check(roObj?["create_pull_request"] as? Bool == false, "create_pull_request false")
+    check(roObj?["model"] as? String == "claude-sonnet-4.5", "optional model included")
+    check(roObj?["custom_agent"] as? String == "reviewer", "optional custom_agent included")
+    check(roPrompt.contains("Selected passage from Margins"), "excerpt packaged into prompt")
+    check(roPrompt.contains(CopilotCloudClient.readOnlyGuardrail), "read-only guardrail appended when createPullRequest is false")
+
+    let prReq = CloudTaskRequest(
+        repo: "octo/repo",
+        baseRef: "develop",
+        instruction: "Fix typo in README",
+        createPullRequest: true
+    )
+    let (prPrompt, prJSON) = try CopilotCloudClient.buildStartPayload(for: prReq)
+    let prObj = try JSONSerialization.jsonObject(with: Data(prJSON.utf8)) as? [String: Any]
+    check(prObj?["create_pull_request"] as? Bool == true, "create_pull_request true")
+    check(prObj?["model"] == nil && prObj?["custom_agent"] == nil, "omitted optional fields not serialized")
+    check(!prPrompt.contains(CopilotCloudClient.readOnlyGuardrail), "read-only guardrail omitted when createPullRequest is true")
+}
+
+test("CloudTaskState mapping and AgentNotificationCoordinator outcomes") {
+    final class CloudMockDelivery: AgentNotificationDelivery {
+        var isAvailable = true
+        var delivered: [AgentNotificationPayload] = []
+        func requestAuthorization() {}
+        func deliver(_ payload: AgentNotificationPayload) { delivered.append(payload) }
+        func removeDelivered(forDocumentURL url: URL) {}
+    }
+
+    let cases: [(String, Intent.Status, Bool, Bool, Bool)] = [
+        ("queued", .working, true, false, false),
+        ("in_progress", .working, true, false, false),
+        ("waiting_for_user", .working, false, true, false),
+        ("idle", .working, false, true, false),
+        ("completed", .done, false, false, true),
+        ("failed", .failed, false, false, true),
+        ("cancelled", .failed, false, false, true),
+        ("timed_out", .failed, false, false, true),
+    ]
+    for (raw, expectedStatus, expectedPoll, expectedAttention, expectedTerminal) in cases {
+        let state = CloudTaskState(rawState: raw)
+        check(state.intentStatus == expectedStatus, "state \(raw) maps to intentStatus \(expectedStatus)")
+        check(state.shouldPoll == expectedPoll, "state \(raw) shouldPoll == \(expectedPoll)")
+        check(state.needsAttention == expectedAttention, "state \(raw) needsAttention == \(expectedAttention)")
+        check(state.isTerminal == expectedTerminal, "state \(raw) isTerminal == \(expectedTerminal)")
+    }
+
+    check(CloudTaskState.queued.notificationOutcome(summary: "", detail: "") == nil, "queued emits no notification")
+    check(CloudTaskState.inProgress.notificationOutcome(summary: "", detail: "") == nil, "in_progress emits no notification")
+
+    let suite = "margins.cloud.notify.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let delivery = CloudMockDelivery()
+    let coordinator = AgentNotificationCoordinator(delivery: delivery, defaults: defaults)
+    let docURL = URL(fileURLWithPath: "/tmp/Spec.margins")
+
+    if let attn = CloudTaskState.waitingForUser.notificationOutcome(summary: "", detail: "Confirm schema migration") {
+        coordinator.notify(documentURL: docURL, step: 1, outcome: attn, isDocumentFocused: false)
+    }
+    if let done = CloudTaskState.completed.notificationOutcome(summary: "PR ready", detail: "Opened PR #12") {
+        coordinator.notify(documentURL: docURL, step: 2, outcome: done, isDocumentFocused: false)
+    }
+    if let fail = CloudTaskState.timedOut.notificationOutcome(summary: "", detail: "", error: "Task timed out") {
+        coordinator.notify(documentURL: docURL, step: 3, outcome: fail, isDocumentFocused: false)
+    }
+    check(delivery.delivered.count == 3, "attention, completion, and failure notifications delivered")
+    check(delivery.delivered[0].title.contains("Approval needed"), "waiting_for_user uses attention notification")
+    check(delivery.delivered[1].body.contains("Opened PR #12"), "completed notification carries detail")
+    check(delivery.delivered[2].title.contains("Agent failed"), "timed_out uses failure notification")
+}
+
+test("CloudTaskFormatter escapes HTML and filters unsafe URLs") {
+    let html = CloudTaskFormatter.insertionHTML(
+        intentText: "Fallback",
+        reply: "Line 1 <script>alert(1)</script>\nLine 2\n\nSecond para",
+        log: nil,
+        summary: "",
+        pullRequestURL: "https://github.com/octo/repo/pull/7",
+        htmlURL: "javascript:alert(1)"
+    )
+    check(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"), "HTML tags are escaped")
+    check(html.contains("<br>"), "single newline converts to <br>")
+    check(html.contains("https://github.com/octo/repo/pull/7"), "https PR link preserved")
+    check(!html.contains("javascript:"), "unsafe URL scheme rejected")
+}
+
+test("CloudTaskFormatter.extractSummary keeps the final answer and drops tool steps") {
+    let log = """
+      I'll start by exploring the repository structure.
+
+    Bash: List files
+
+        $ ls -la
+        total 12
+
+    View README.md
+
+        # Project
+
+    Thought
+
+      ## Summary
+
+      The parser lives in Sources/Parser.swift and converts Markdown into
+      HTML using a two-pass approach.
+
+      │ File         │ Purpose │
+      │──────────────┼─────────│
+      │ Parser.swift │ parse   │
+
+      • Handles tables
+      • Handles footnotes and a long item that wraps onto the
+        next terminal line
+
+    """
+    let summary = CloudTaskFormatter.extractSummary(fromLog: log)
+    check(summary.hasPrefix("## Summary"), "summary starts at the final answer")
+    check(!summary.contains("ls -la") && !summary.contains("README") && !summary.contains("explor"), "tool steps and earlier chatter dropped")
+    check(summary.contains("converts Markdown into HTML using"), "terminal hard-wraps are unwrapped")
+    check(summary.contains("│ Parser.swift │ parse   │"), "table rows kept intact")
+    check(summary.contains("• Handles footnotes and a long item that wraps onto the next terminal line"), "wrapped list item joined")
+
+    let short = CloudTaskFormatter.extractSummary(fromLog: log, maxChars: 140)
+    check(!short.contains("│"), "truncation never splits a table")
+    check(short.hasSuffix("two-pass approach."), "truncation stops at a paragraph boundary")
+    let tiny = CloudTaskFormatter.extractSummary(fromLog: "  " + String(repeating: "word ", count: 50), maxChars: 30)
+    check(tiny.count <= 30 && tiny.hasSuffix("…") && !tiny.contains("wor…"), "oversized paragraph cut at a word boundary")
+
+    let withFooter = "  Final answer here.\n\nFor detailed session logs, try:\n\n  gh agent-task view 'abc' --log\n"
+    check(CloudTaskFormatter.extractSummary(fromLog: withFooter) == "Final answer here.", "gh footer is ignored")
+    check(CloudTaskFormatter.extractSummary(fromLog: "  \n\n") == "", "empty log yields empty summary")
+
+    let nestedBullets = """
+          "subject": "tool json"
+        }
+
+      Intro paragraph before nested bullets.
+
+      • Top-level item:
+          • Nested item that wraps onto the
+          next terminal line at indent 6
+          • Another nested item with a
+            hanging continuation at indent 8
+
+      Closing paragraph.
+    """
+    let nestedSummary = CloudTaskFormatter.extractSummary(fromLog: nestedBullets)
+    check(nestedSummary.hasPrefix("Intro paragraph before nested bullets."), "nested bullet continuations do not truncate earlier prose")
+    check(nestedSummary.contains("• Nested item that wraps onto the next terminal line at indent 6"), "wrapped nested bullet joined")
+    check(nestedSummary.contains("• Another nested item with a hanging continuation at indent 8"), "hanging nested bullet joined")
+    check(nestedSummary.hasSuffix("Closing paragraph."), "closing paragraph preserved after nested bullets")
+    check(!nestedSummary.contains("tool json"), "preceding indented JSON still dropped")
+}
+
+test("CloudLogStreamAccumulator buffers reconnect replay and CloudWatcherPolicy") {
+    var fresh = CloudLogStreamAccumulator(existing: nil)
+    check(fresh.append("a") == "a" && fresh.append("b") == "a\nb", "first stream publishes immediately")
+
+    var replay = CloudLogStreamAccumulator(existing: "a\nb\nc")
+    check(replay.append("a") == nil && replay.append("b") == nil, "replay of already-shown log is buffered")
+    check(replay.append("c") == "a\nb\nc", "publishes once replay catches up")
+    check(replay.append("d") == "a\nb\nc\nd", "then appends live lines without duplicates")
+
+    check(!CloudWatcherPolicy.shouldStartWatcher(trigger: .focus, watcherRunning: true), "focus leaves a live stream alone")
+    check(CloudWatcherPolicy.shouldStartWatcher(trigger: .focus, watcherRunning: false), "focus restarts a missing watcher")
+    check(CloudWatcherPolicy.shouldStartWatcher(trigger: .wake, watcherRunning: true), "wake restarts possibly-wedged streams")
+    check(!CloudWatcherPolicy.shouldStartWatcher(trigger: .open, watcherRunning: true), "open does not duplicate watchers")
+}
+
+test("CloudTaskLifecycle folds snapshots into intents and gates notifications") {
+    let checked = Date(timeIntervalSince1970: 1_730_000_500)
+    let ref = CloudTaskRef(repo: "octo/repo", baseRef: "main", taskID: "t1", htmlURL: "https://github.com/octo/repo/tasks/t1")
+    var intent = Intent(step: 3, text: "Audit parser", provider: "Copilot Cloud", cloudTask: ref)
+    var plain = Intent(step: 4, text: "Local")
+    check(CloudTaskLifecycle.apply(CloudTaskSnapshot(taskID: "x", htmlURL: "", state: "completed"), to: &plain) == nil,
+          "non-cloud intents are untouched")
+    check(plain.status == .working, "non-cloud status unchanged")
+
+    let running = CloudTaskLifecycle.apply(
+        CloudTaskSnapshot(taskID: "t1", htmlURL: "", state: "in_progress", sessionID: "s1"), to: &intent, at: checked)
+    check(running == CloudSnapshotTransition(previousState: .queued, newState: .inProgress), "queued → in_progress transition")
+    check(running?.continuePolling == true, "in-progress keeps polling")
+    check(intent.cloudTask?.sessionID == "s1" && intent.cloudTask?.lastCheckedAt == checked, "session id and check time recorded")
+    check(intent.cloudTask?.htmlURL == ref.htmlURL, "empty snapshot URL keeps the known task URL")
+
+    let done = CloudTaskLifecycle.apply(CloudTaskSnapshot(taskID: "t1", htmlURL: "", state: "completed"), to: &intent)
+    check(done?.continuePolling == false && intent.status == .done, "completed stops polling and marks done")
+    check(intent.cloudTask?.sessionID == "s1", "missing session id in snapshot keeps the previous one")
+    CloudTaskLifecycle.applyOutputs(to: &intent, state: .completed, excerpt: "Final answer.", pullRequestURL: "https://github.com/octo/repo/pull/9")
+    check(intent.reply == "Final answer." && intent.summary == "Completed with pull request.", "completion records answer and PR summary")
+    check(intent.cloudTask?.pullRequestURL == "https://github.com/octo/repo/pull/9", "PR URL stored on the task ref")
+
+    intent.status = .pending
+    CloudTaskLifecycle.apply(CloudTaskSnapshot(taskID: "t1", htmlURL: "", state: "completed"), to: &intent)
+    check(intent.status == .pending, "inserted (pending review) result is not reset by a later poll")
+
+    var failed = Intent(step: 5, text: "Fail", cloudTask: ref)
+    CloudTaskLifecycle.applyOutputs(to: &failed, state: .timedOut, excerpt: "", pullRequestURL: nil)
+    check(failed.error == "Cloud task timed out.", "terminal failure without log gets a fallback error")
+    failed.error = "Original"
+    CloudTaskLifecycle.applyOutputs(to: &failed, state: .failed, excerpt: "log tail", pullRequestURL: nil)
+    check(failed.error == "Original", "existing error is preserved")
+    var waiting = Intent(step: 6, text: "Ask", cloudTask: ref)
+    CloudTaskLifecycle.applyOutputs(to: &waiting, state: .waitingForUser, excerpt: "Which branch?", pullRequestURL: nil)
+    check(waiting.reply == "Which branch?" && waiting.error == nil && waiting.summary.isEmpty, "attention state surfaces the question")
+
+    check(CloudTaskLifecycle.shouldNotify(state: .completed, previousState: .inProgress, alreadyNotifiedAttention: false), "completion notifies")
+    check(!CloudTaskLifecycle.shouldNotify(state: .completed, previousState: .completed, alreadyNotifiedAttention: false),
+          "re-polling a finished task does not re-notify")
+    check(CloudTaskLifecycle.shouldNotify(state: .idle, previousState: .idle, alreadyNotifiedAttention: false), "first attention notifies")
+    check(!CloudTaskLifecycle.shouldNotify(state: .idle, previousState: .inProgress, alreadyNotifiedAttention: true), "attention notifies once")
+    check(intent.cloudActivity == "Copilot Cloud · Completed" && plain.cloudActivity == nil, "cloud activity label for threads")
+}
+
+test("CloudInsertionPlan targets the right block and builds a tracked edit") {
+    let ref = CloudTaskRef(repo: "octo/repo", baseRef: "main", taskID: "t1", htmlURL: "https://github.com/octo/repo/tasks/t1")
+    var intent = Intent(step: 7, text: "Summarize", summary: "Cloud task completed.", provider: "Copilot Cloud", cloudTask: ref)
+    intent.reply = "Answer <b>here</b>."
+    let runID = UUID()
+    let plan = CloudInsertionPlan.make(intent: intent, log: nil, focus: ["b2"], blockIDs: ["b1", "b2", "b3"], runID: runID)
+    check(plan?.edit.op == .insertAfter && plan?.edit.blockId == "b2", "inserts after the selected block")
+    check(plan?.edit.html.contains("Answer &lt;b&gt;here&lt;/b&gt;.") == true, "inserted HTML is escaped")
+    check(plan?.run.id == runID && plan?.run.intentId == intent.id && plan?.run.step == 7, "run links the edit to the intent step")
+    check(plan?.run.status == "pending" && plan?.run.provider == "Copilot Cloud" && plan?.run.model == "octo/repo", "run attribution")
+
+    check(CloudInsertionPlan.targetBlockID(intent: intent, focus: [], blockIDs: ["b1", "b2"]) == "b2", "no selection → end of document")
+    check(CloudInsertionPlan.targetBlockID(intent: intent, focus: ["gone"], blockIDs: ["b1"]) == "b1", "stale selection ignored")
+    check(CloudInsertionPlan.targetBlockID(intent: intent, focus: [], blockIDs: []) == "^", "empty document inserts at start")
+    var threaded = intent
+    threaded.thread = UUID()
+    threaded.anchor = "b1"
+    threaded.focus = ["b1", "b2"]
+    check(CloudInsertionPlan.targetBlockID(intent: threaded, focus: ["b3"], blockIDs: ["b1", "b2", "b3"]) == "b2",
+          "thread result lands after the discussed passage, not the current selection")
+    threaded.focus = ["deleted"]
+    check(CloudInsertionPlan.targetBlockID(intent: threaded, focus: [], blockIDs: ["b0", "b1", "b9"]) == "b1",
+          "thread falls back to its anchor block")
+    check(CloudInsertionPlan.make(intent: Intent(step: 1, text: "local"), log: nil, focus: [], blockIDs: []) == nil,
+          "non-cloud intents have no insertion plan")
+    check(CloudInsertionPlan.status(afterChanges: 0) == .done && CloudInsertionPlan.status(afterChanges: 2) == .pending,
+          "insertion leaves the intent pending review only when it changed the document")
+}
+
+let cloudSem = DispatchSemaphore(value: 0)
+Task {
+    // 1. Timeout / duplicate-launch recovery: never retry POST. List items omit `prompt`, so candidates
+    //    created since the POST are fetched individually and matched on `sessions[].prompt`.
+    do {
+        struct SimulatedTimeout: Error {}
+        let fixedNow = Date(timeIntervalSince1970: 1_730_000_000)
+        let iso = ISO8601DateFormatter()
+        let req = CloudTaskRequest(repo: "octo/repo", baseRef: "main", instruction: "Refactor parser", createPullRequest: false)
+        let expectedPrompt = CopilotCloudClient.packagePrompt(for: req)
+        func json(_ obj: Any) -> String { String(decoding: try! JSONSerialization.data(withJSONObject: obj), as: UTF8.self) }
+        let listJSON = json(["tasks": [
+            ["id": "task-other", "state": "queued", "creator": ["id": 7], "created_at": iso.string(from: fixedNow.addingTimeInterval(5))],
+            ["id": "task-recovered", "state": "queued", "creator": ["id": 42], "created_at": iso.string(from: fixedNow.addingTimeInterval(3))],
+            ["id": "task-sibling", "state": "queued", "creator": ["id": 42], "created_at": iso.string(from: fixedNow.addingTimeInterval(1))],
+            ["id": "task-old", "state": "completed", "creator": ["id": 42], "created_at": "2024-10-27T05:45:00Z"],
+        ]])
+        // GitHub may reflow whitespace; the initial session's prompt can also be empty.
+        let recoveredDetail = json(["id": "task-recovered", "state": "queued", "html_url": "https://github.com/octo/repo/tasks/task-recovered",
+                                    "sessions": [["id": "sess-a", "prompt": expectedPrompt.replacingOccurrences(of: "\n\n", with: "\n \n")],
+                                                 ["id": "sess-0", "prompt": ""]]])
+        let runner = MockCloudCommandRunner(handlers: [
+            { _, _ in throw SimulatedTimeout() },
+            { call, _ in
+                check(call.arguments == ["api", "agents/repos/octo/repo/tasks?per_page=20&sort=created_at&direction=desc"],
+                      "queries newest-created tasks on ambiguous POST")
+                return ProcessResult(status: 0, stdout: listJSON, stderr: "")
+            },
+            { call, _ in
+                check(call.arguments == ["api", "user", "--jq", ".id"], "looks up viewer to filter other users' tasks")
+                return ProcessResult(status: 0, stdout: "42\n", stderr: "")
+            },
+            { call, _ in
+                check(call.arguments == ["api", "agents/repos/octo/repo/tasks/task-recovered"], "skips other creators and fetches newest candidate")
+                return ProcessResult(status: 0, stdout: recoveredDetail, stderr: "")
+            },
+        ])
+        let client = CopilotCloudClient(runner: runner, now: { fixedNow })
+        let recovered = try await client.startTask(req)
+        check(recovered.taskID == "task-recovered", "recovered existing task instead of retrying POST")
+        check(recovered.sessionID == "sess-a" || recovered.sessionID == "sess-0", "recovered snapshot carries session")
+        let calls = await runner.calls()
+        check(calls.filter { $0.arguments.contains("POST") }.count == 1, "POST is invoked exactly once")
+    } catch {
+        check(false, "timeout recovery test threw \(error)")
+    }
+
+    // 1b. Recovery refuses to guess when several candidates exist and none exposes a matching prompt.
+    do {
+        let fixedNow = Date(timeIntervalSince1970: 1_730_000_000)
+        let created = ISO8601DateFormatter().string(from: fixedNow)
+        let listJSON = #"{"tasks":[{"id":"t1","state":"queued","created_at":"\#(created)"},{"id":"t2","state":"queued","created_at":"\#(created)"}]}"#
+        let empty: (String) -> String = { #"{"id":"\#($0)","state":"queued","sessions":[{"id":"s","prompt":""}]}"# }
+        let runner = MockCloudCommandRunner(handlers: [
+            { _, _ in ProcessResult(status: 1, stdout: "", stderr: "HTTP 502") },
+            { _, _ in ProcessResult(status: 0, stdout: listJSON, stderr: "") },
+            { _, _ in ProcessResult(status: 1, stdout: "", stderr: "no user scope") },
+            { _, _ in ProcessResult(status: 0, stdout: empty("t1"), stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: empty("t2"), stderr: "") },
+        ])
+        let client = CopilotCloudClient(runner: runner, now: { fixedNow })
+        do {
+            _ = try await client.startTask(CloudTaskRequest(repo: "octo/repo", baseRef: "main", instruction: "Hi"))
+            check(false, "ambiguous recovery should not attach to an arbitrary task")
+        } catch {
+            check(error.localizedDescription.contains("HTTP 502"), "surfaces original POST failure when recovery is ambiguous")
+        }
+    }
+
+    // 1c. A single fresh candidate whose prompt GitHub has not exposed yet is accepted.
+    do {
+        let fixedNow = Date(timeIntervalSince1970: 1_730_000_000)
+        let created = ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(2))
+        let runner = MockCloudCommandRunner(handlers: [
+            { _, _ in ProcessResult(status: 0, stdout: "not json", stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: #"{"tasks":[{"id":"only","state":"queued","created_at":"\#(created)"}]}"#, stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: "42", stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: #"{"id":"only","state":"queued","sessions":[{"id":"s1","prompt":""}]}"#, stderr: "") },
+        ])
+        let client = CopilotCloudClient(runner: runner, now: { fixedNow })
+        let task = try await client.startTask(CloudTaskRequest(repo: "octo/repo", baseRef: "main", instruction: "Hi"))
+        check(task.taskID == "only" && task.sessionID == "s1", "single unverified candidate is recovered")
+    } catch {
+        check(false, "single-candidate recovery threw \(error)")
+    }
+
+    // 2. Polling newest session selection, session metadata, log fetch, live log stream, and repo resolution
+    do {
+        let taskJSON = """
+        {
+          "id": "task-77",
+          "html_url": "https://github.com/octo/repo/tasks/task-77",
+          "state": "in_progress",
+          "sessions": [
+            {"id": "sess-1", "created_at": "2026-10-01T10:00:00Z"},
+            {"id": "sess-3", "created_at": "2026-10-01T10:05:00.500Z"},
+            {"id": "sess-2", "created_at": "2026-10-01T10:02:00Z"}
+          ]
+        }
+        """
+        let metaJSON = #"{"state":"completed","completedAt":"2026-10-01T10:12:00Z","pullRequestUrl":"https://github.com/octo/repo/pull/99"}"#
+        let repoJSON = #"{"nameWithOwner":"octo/repo","defaultBranchRef":{"name":"trunk"}}"#
+
+        final class LineCollector: @unchecked Sendable {
+            private let lock = NSLock()
+            private var lines: [String] = []
+            func append(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+            var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
+        }
+        let streamed = LineCollector()
+
+        let runner = MockCloudCommandRunner(handlers: [
+            { _, _ in ProcessResult(status: 0, stdout: repoJSON, stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: taskJSON, stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: metaJSON, stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: "Final summary line\n", stderr: "") },
+            { _, onLine in
+                onLine?("step 1")
+                onLine?("step 2")
+                return ProcessResult(status: 0, stdout: "step 1\nstep 2\n", stderr: "")
+            },
+        ])
+        let client = CopilotCloudClient(runner: runner)
+        let repoInfo = try await client.resolveRepo(in: URL(fileURLWithPath: "/tmp"))
+        check(repoInfo == CloudRepoInfo(repo: "octo/repo", defaultBranch: "trunk"), "resolveRepo parses owner/repo and default branch")
+
+        let polled = try await client.fetchTask(repo: "octo/repo", id: "task-77")
+        check(polled.sessionID == "sess-3", "fetchTask selects newest session by timestamp")
+
+        let meta = try await client.fetchSessionMetadata(repo: "octo/repo", sessionID: "sess-3")
+        check(meta.state == "completed" && meta.pullRequestURL == "https://github.com/octo/repo/pull/99" && meta.completedAt != nil, "fetchSessionMetadata parses state, completedAt, pullRequestUrl")
+
+        let log = try await client.fetchSessionLog(repo: "octo/repo", sessionID: "sess-3")
+        check(log.contains("Final summary line"), "fetchSessionLog returns log output")
+
+        _ = try await client.streamSessionLog(repo: "octo/repo", sessionID: "sess-3") { streamed.append($0) }
+        check(streamed.all == ["step 1", "step 2"], "streamSessionLog delivers live lines")
+    } catch {
+        check(false, "polling and log parsing test threw \(error)")
+    }
+
+    // 3. Error handling: missing gh, unauthenticated, non-zero exit, malformed JSON, invalid repo
+    do {
+        let missingRunner = MockCloudCommandRunner(ghURL: nil)
+        let missingClient = CopilotCloudClient(runner: missingRunner)
+        let missingAuth = await missingClient.checkAuth()
+        check(missingAuth == .missingBinary, "missing gh reported by checkAuth")
+        do {
+            _ = try await missingClient.fetchTask(repo: "octo/repo", id: "t1")
+            check(false, "missing gh should throw")
+        } catch let err as CopilotCloudError {
+            check(err == .ghNotFound, "missing gh throws ghNotFound")
+        }
+
+        let errRunner = MockCloudCommandRunner(handlers: [
+            { _, _ in ProcessResult(status: 1, stdout: "", stderr: "You are not logged into any GitHub hosts.") },
+            { _, _ in ProcessResult(status: 1, stdout: "", stderr: "HTTP 403 Forbidden") },
+            { _, _ in ProcessResult(status: 0, stdout: "not json at all", stderr: "") },
+        ])
+        let errClient = CopilotCloudClient(runner: errRunner)
+        let unauth = await errClient.checkAuth()
+        if case .notAuthenticated(let msg) = unauth {
+            check(msg.contains("not logged into"), "unauthenticated gh auth status captured")
+        } else {
+            check(false, "expected notAuthenticated")
+        }
+
+        do {
+            _ = try await errClient.fetchTask(repo: "octo/repo", id: "t1")
+            check(false, "non-zero exit should throw")
+        } catch let err as CopilotCloudError {
+            if case .commandFailed(_, let status, let detail) = err {
+                check(status == 1 && detail.contains("403"), "commandFailed reports exit status and stderr")
+            } else {
+                check(false, "expected commandFailed")
+            }
+        }
+
+        do {
+            _ = try await errClient.fetchTask(repo: "octo/repo", id: "t1")
+            check(false, "malformed JSON should throw")
+        } catch let err as CopilotCloudError {
+            if case .invalidResponse = err {
+                check(true, "malformed JSON throws invalidResponse")
+            } else {
+                check(false, "expected invalidResponse")
+            }
+        }
+
+        do {
+            _ = try await errClient.fetchTask(repo: "bad repo!", id: "t1")
+            check(false, "invalid repo should throw")
+        } catch let err as CopilotCloudError {
+            if case .invalidInput = err {
+                check(true, "invalid repo throws invalidInput")
+            } else {
+                check(false, "expected invalidInput")
+            }
+        }
+    } catch {
+        check(false, "error handling test threw \(error)")
+    }
+
+    cloudSem.signal()
+}
+cloudSem.wait()
+
 print(failures == 0 ? "✓ \(passes) checks passed" : "\(failures) failed, \(passes) passed")
 exit(failures == 0 ? 0 : 1)

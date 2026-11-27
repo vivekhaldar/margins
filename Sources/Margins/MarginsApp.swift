@@ -144,11 +144,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installZoomKeys()
         NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose(_:)),
                                                name: NSWindow.willCloseNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemDidWake(_:)),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification,
                      NSWindow.didBecomeKeyNotification, NSWindow.didMiniaturizeNotification,
                      NSWindow.didDeminiaturizeNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowSessionChanged(_:)),
                                                    name: name, object: nil)
+        }
+    }
+
+    @objc private func systemDidWake(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            DocumentWindows.shared.reconcileCloudTasksAfterWake()
         }
     }
 
@@ -161,8 +173,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             DocumentWindows.shared.persistSession()
             if notification.name == NSWindow.didBecomeKeyNotification,
-               let url = DocumentWindows.shared.keyState?.fileURL {
-                AgentNotifications.shared.clearNotifications(forDocumentURL: url)
+               let keyState = DocumentWindows.shared.keyState {
+                AgentNotifications.shared.clearNotifications(forDocumentURL: keyState.fileURL)
+                keyState.pollActiveCloudTasksImmediately(trigger: .focus)
             }
         }
     }

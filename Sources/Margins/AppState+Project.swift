@@ -58,6 +58,7 @@ extension AppState {
     func setProjectFolder(_ url: URL?) {
         projectFolderStore.setFolder(url?.standardizedFileURL.path, for: doc.id)
         projectFolderRevision += 1
+        refreshCloudContext(forceRepoResolve: true)
         if doc.projectFolder != nil {
             doc.projectFolder = nil
             scheduleSave()

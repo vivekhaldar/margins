@@ -82,6 +82,40 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
     }
 }
 
+public struct CloudTaskRef: Codable, Equatable, Sendable {
+    public var repo: String
+    public var baseRef: String
+    public var taskID: String
+    public var htmlURL: String
+    public var sessionID: String?
+    public var cloudState: String
+    public var pullRequestURL: String?
+    public var lastCheckedAt: Date?
+    public var createPullRequest: Bool
+
+    public init(
+        repo: String,
+        baseRef: String,
+        taskID: String,
+        htmlURL: String,
+        sessionID: String? = nil,
+        cloudState: String = "queued",
+        pullRequestURL: String? = nil,
+        lastCheckedAt: Date? = nil,
+        createPullRequest: Bool = false
+    ) {
+        self.repo = repo
+        self.baseRef = baseRef
+        self.taskID = taskID
+        self.htmlURL = htmlURL
+        self.sessionID = sessionID
+        self.cloudState = cloudState
+        self.pullRequestURL = pullRequestURL
+        self.lastCheckedAt = lastCheckedAt
+        self.createPullRequest = createPullRequest
+    }
+}
+
 public struct Intent: Codable, Equatable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable { case instruction, edit }
     public enum Status: String, Codable, Sendable { case working, pending, reviewed, failed, done }
@@ -115,10 +149,13 @@ public struct Intent: Codable, Equatable, Identifiable, Sendable {
     public var reply: String?
     /// Project files the agent created, changed or deleted while working on this (relative paths).
     public var files: [String]?
+    /// Persisted reference to an asynchronous GitHub Copilot Cloud Agent task, if launched in the cloud.
+    public var cloudTask: CloudTaskRef?
 
     public init(id: UUID = UUID(), kind: Kind = .instruction, step: Int, text: String, createdAt: Date = Date(),
                 status: Status = .working, summary: String = "", notes: [String] = [],
-                refinements: [Refinement] = [], provider: String = "", error: String? = nil) {
+                refinements: [Refinement] = [], provider: String = "", error: String? = nil,
+                cloudTask: CloudTaskRef? = nil) {
         self.id = id
         self.kind = kind
         self.step = step
@@ -130,6 +167,7 @@ public struct Intent: Codable, Equatable, Identifiable, Sendable {
         self.refinements = refinements
         self.provider = provider
         self.error = error
+        self.cloudTask = cloudTask
     }
 }
 

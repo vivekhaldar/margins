@@ -82,10 +82,7 @@ extension AppState {
                 submit(text, paragraphBlockID: blockId)
             }
         case "ask":
-            if let t = (body["thread"] as? String).flatMap(UUID.init(uuidString:)), let message = body["message"] as? String {
-                discuss(thread: t, quote: body["quote"] as? String ?? "", focus: body["focus"] as? [String] ?? [],
-                        anchor: body["anchor"] as? String ?? "", message: message)
-            }
+            routeThreadMessage(body)
         case "stop":
             if let s = body["step"] as? NSNumber { stop(step: s.intValue) }
         case "refine":
@@ -178,6 +175,7 @@ extension AppState {
             self.previewing = nil
             self.pending = PendingInfo()
             self.defaults.removeObject(forKey: "lastDocument")
+            self.refreshCloudContext(forceRepoResolve: true)
             let installedSession = self.documentSessionID
             Task { await self.loadEditorDocument(session: installedSession) }
         }
@@ -221,6 +219,8 @@ extension AppState {
                 self.projectFolderRevision += 1
                 self.fileURL = url
                 self.startWatchingCurrentFile()
+                self.resumeCloudPolling()
+                self.refreshCloudContext(forceRepoResolve: true)
                 self.previewing = nil
                 self.pending = PendingInfo()
                 self.defaults.set(url, forKey: "lastDocument")
@@ -355,6 +355,7 @@ extension AppState {
         doc = incoming
         projectFolderStore.migrateIfNeeded(docID: incoming.id, legacyFolder: incoming.projectFolder)
         projectFolderRevision += 1
+        resumeCloudPolling()
         pending = PendingInfo()
         let session = documentSessionID
         Task { await loadEditorDocument(session: session) }

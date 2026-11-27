@@ -842,8 +842,8 @@
   // Select text → "Ask" chip (or ⌘J) → a popover thread anchored to that passage. The agent answers
   // in the thread; any edits it makes land as ordinary tracked changes. Threads persist as 💬 markers.
   const chip = $('#askchip'), tpop = $('#tpop'), tquote = $('#tquote'), tmsgs = $('#tmsgs'), tchips = $('#tchips'),
-    tin = $('#tin'), tmarks = $('#tmarks');
-  let threads = [], openT = null, chipFor = null, chipTimer = null, marksTimer = null;
+    tin = $('#tin'), tmarks = $('#tmarks'), tcloud = $('#tcloud');
+  let threads = [], openT = null, chipFor = null, chipTimer = null, marksTimer = null, cloudMode = false;
   const hasHL = !!(window.CSS && CSS.highlights && window.Highlight);
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
     : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
@@ -955,6 +955,7 @@
     tquote.textContent = '“' + trunc(openT.quote, 220) + '”';
     tquote.title = openT.quote;
     tin.value = '';
+    setCloudMode(false);
     renderThread();
     placeThread();
     setHL(openT.range);
@@ -1012,7 +1013,7 @@
         const a = bubble('ai working');
         a.innerHTML = '<span class="spin"></span><span class="act"></span>';
         a.querySelector('.act').textContent = m.waiting ? 'Waiting for your permission — see the panel on the left' : (m.activity || 'Thinking…');
-        if (m.step) {
+        if (m.step && !m.cloud) {
           const b = document.createElement('button');
           b.className = 'stop'; b.textContent = 'Stop';
           b.addEventListener('click', () => post('stop', { step: m.step }));
@@ -1042,14 +1043,19 @@
       (m.notes || []).forEach((n) => { const s = document.createElement('span'); s.className = 'sum'; s.textContent = n; a.appendChild(s); });
     }
     tin.disabled = working;
-    tin.placeholder = working ? 'Working…' : (msgs.length ? 'Reply…' : 'Ask about this, or say how to change it…');
+    tin.placeholder = threadPlaceholder(working, msgs.length > 0);
     tmsgs.scrollTop = tmsgs.scrollHeight;
+  }
+  function threadPlaceholder(working, replying) {
+    if (working) return 'Working…';
+    if (cloudMode) return 'Task for the Copilot cloud agent…';
+    return replying ? 'Reply…' : 'Ask about this, or say how to change it…';
   }
   function sendThread(text) {
     text = (text || '').trim();
     if (!openT || !text || tin.disabled) return;
     const t = openT;
-    post('ask', { thread: t.id, quote: t.quote, focus: t.focus, anchor: t.anchor, message: text });
+    post('ask', { thread: t.id, quote: t.quote, focus: t.focus, anchor: t.anchor, message: text, cloud: cloudMode });
     let th = threads.find((x) => x.id === t.id);
     if (!th) { th = { id: t.id, anchor: t.anchor, focus: t.focus, quote: t.quote, messages: [] }; threads.push(th); }
     th.messages.push({ text, status: 'working', activity: 'Starting…' });
@@ -1059,6 +1065,14 @@
     placeThread();
     drawMarks();
   }
+  // ☁ toggle: send this thread's next message to a Copilot Cloud task instead of the local agent.
+  function setCloudMode(on) {
+    cloudMode = !!on;
+    tcloud.classList.toggle('on', cloudMode);
+    tcloud.setAttribute('aria-pressed', String(cloudMode));
+    renderThread();
+  }
+  tcloud.addEventListener('click', () => { setCloudMode(!cloudMode); tin.focus(); });
   function autosize() { tin.style.height = 'auto'; tin.style.height = Math.min(120, tin.scrollHeight + 2) + 'px'; }
   tin.addEventListener('input', autosize);
   tin.addEventListener('keydown', (e) => {

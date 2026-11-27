@@ -161,6 +161,12 @@ final class DocumentWindows {
         terminating = true
     }
 
+    func reconcileCloudTasksAfterWake() {
+        for state in states.values {
+            state.pollActiveCloudTasksImmediately(trigger: .wake)
+        }
+    }
+
     func reloadOpenWindowIfNeeded(at url: URL) {
         let standardized = url.standardizedFileURL
         for state in states.values where state.fileURL.standardizedFileURL == standardized {
