@@ -11,9 +11,19 @@ extension AmpCloudClient {
               let type = object["type"] as? String else { return .ignored }
         switch type {
         case "system":
-            guard object["subtype"] as? String == "init" else { return .ignored }
-            let id = (object["session_id"] as? String) ?? (object["thread_id"] as? String) ?? ""
-            return isValidThreadID(id) ? .initialized(threadID: id) : .ignored
+            let subtype = object["subtype"] as? String
+            if subtype == "init" {
+                let id = (object["session_id"] as? String) ?? (object["thread_id"] as? String) ?? ""
+                return isValidThreadID(id) ? .initialized(threadID: id) : .ignored
+            }
+            if object["is_error"] as? Bool == true || subtype?.hasPrefix("error") == true {
+                let text = (object["error"] as? String)
+                    ?? (object["message"] as? String)
+                    ?? (object["result"] as? String)
+                    ?? ""
+                return .error(message: text, subtype: subtype)
+            }
+            return .ignored
         case "assistant":
             return progressEvent(from: object)
         case "result":
@@ -112,11 +122,17 @@ extension AmpCloudClient {
         return trimmed
     }
 
-    /// Prompt for a new thread (instruction + document context, read-only guardrail) or a follow-up.
+    /// Prompt for a new Amp thread (instruction + optional document context) or a follow-up.
     public static func packagePrompt(instruction: String, excerpt: String?) -> String {
-        CopilotCloudClient.packagePrompt(for: CloudTaskRequest(
-            repo: "", baseRef: "", instruction: instruction, excerpt: excerpt, createPullRequest: false
-        ))
+        var sections: [String] = []
+        let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { sections.append(trimmed) }
+        if let excerpt = excerpt?.trimmingCharacters(in: .whitespacesAndNewlines), !excerpt.isEmpty {
+            sections.append(
+                "Document context (from Margins; the cloud agent only sees the repository):\n\(excerpt)"
+            )
+        }
+        return sections.joined(separator: "\n\n")
     }
 }
 

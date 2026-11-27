@@ -36,7 +36,7 @@ public enum AmpStreamEvent: Equatable, Sendable {
     case progress(String)
     /// `result` with `is_error: false`.
     case result(String)
-    /// `result` with `is_error: true`.
+    /// `result` with `is_error: true`, or a `system` error event.
     case error(message: String, subtype: String?)
     case ignored
 }

@@ -2109,6 +2109,18 @@ test("Amp NDJSON decoding and chunking: only result is terminal") {
     check(AmpCloudClient.decodeEvent(#"{"type":"mystery","x":1}"#) == .ignored, "unknown event types ignored")
     check(AmpCloudClient.decodeEvent(#"{"type":"user","message":{"content":[]}}"#) == .ignored, "tool results ignored")
     check(AmpCloudClient.decodeEvent(ampErrorLine) == .error(message: "Too many turns", subtype: "error_max_turns"), "is_error result")
+    check(AmpCloudClient.decodeEvent(#"{"type":"system","subtype":"error_during_execution","error":"Orb crashed"}"#)
+          == .error(message: "Orb crashed", subtype: "error_during_execution"), "system error event decoded")
+    check(AmpCloudClient.decodeEvent(#"{"type":"system","subtype":"error_max_turns","error":"Hit turn limit"}"#)
+          == .error(message: "Hit turn limit", subtype: "error_max_turns"), "system max-turns error decoded")
+    check(AmpCloudClient.decodeEvent(#"{"type":"system","subtype":"status","message":"ok"}"#) == .ignored, "non-error system subtype ignored")
+
+    let packaged = AmpCloudClient.packagePrompt(instruction: "Fix the bug", excerpt: "Selected text")
+    check(packaged.contains("Fix the bug") && packaged.contains("Selected text"), "Amp prompt includes instruction and excerpt")
+    check(!packaged.contains("Read-only mode") && !packaged.contains(CopilotCloudClient.readOnlyGuardrail),
+          "Amp prompt does not inject Copilot read-only guardrail")
+    check(AmpCloudClient.packagePrompt(instruction: "Follow up", excerpt: nil) == "Follow up",
+          "Amp follow-up prompt is not wrapped in read-only guardrail")
 
     let tracker = AmpStreamTracker()
     events.prefix(3).forEach(tracker.observe)
@@ -2188,18 +2200,25 @@ Task {
         check(false, "Amp streamed turn threw \(error)")
     }
 
-    // is_error result → failed (with subtype); a result is terminal regardless of exit status.
+    // is_error result and system error events → failed (with subtype); a result is terminal regardless of exit status.
     do {
+        let systemErrLine = #"{"type":"system","subtype":"error_during_execution","error":"Orb crashed"}"#
         let runner = MockCloudCommandRunner(binaries: ampBinaries, handlers: [
-            ampPass, ampStream([ampInitLine, ampErrorLine], status: 1), ampStream([ampInitLine, ampResultLine], status: 2)
+            ampPass,
+            ampStream([ampInitLine, ampErrorLine], status: 1),
+            ampStream([ampInitLine, systemErrLine], status: 1),
+            ampStream([ampInitLine, ampResultLine], status: 2)
         ])
         let client = ampClient(runner)
         let failed = try await client.streamTurn(project: "o/r", prompt: "p") { _ in }
         check(failed == .failed(threadID: ampThreadA, message: "error_max_turns: Too many turns"), "is_error result fails")
+        let sysFailed = try await client.streamTurn(project: "o/r", prompt: "p") { _ in }
+        check(sysFailed == .failed(threadID: ampThreadA, message: "error_during_execution: Orb crashed"),
+              "system error event without result fails instead of disconnecting")
         let ok = try await client.streamTurn(project: "o/r", prompt: "p") { _ in }
         check(ok == .completed(threadID: ampThreadA, result: "The answer."), "result wins over exit status")
-        let awaited1 = await runner.calls().count == 3
-        check(awaited1, "cached key: pass called once for two turns")
+        let awaited1 = await runner.calls().count == 4
+        check(awaited1, "cached key: pass called once for three turns")
     } catch {
         check(false, "Amp terminal semantics threw \(error)")
     }
@@ -2333,7 +2352,7 @@ Task {
         check(false, "Amp serialization tests threw \(error)")
     }
 
-    // Opt-in live smoke test (needs `amp` and a key): MARGINS_TEST_AMP_LIVE=1 [MARGINS_TEST_AMP_PROJECT=owner/repo]
+    // Opt-in live two-turn smoke test (needs `amp` and a key): MARGINS_TEST_AMP_LIVE=1 [MARGINS_TEST_AMP_PROJECT=owner/repo]
     let liveEnv = ProcessInfo.processInfo.environment
     if liveEnv["MARGINS_TEST_AMP_LIVE"] == "1" {
         let client = AmpCloudClient()
@@ -2343,9 +2362,24 @@ Task {
             let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             var project = liveEnv["MARGINS_TEST_AMP_PROJECT"] ?? ""
             if project.isEmpty { project = try await client.resolveProject(in: cwd) }
-            let outcome = try await client.streamTurn(project: project, prompt: "Reply with exactly: margins-amp-smoke", cwd: cwd) { _ in }
-            guard case .completed(let id, let text) = outcome else { check(false, "live: expected completion, got \(outcome)"); return }
-            check(id.map(AmpCloudClient.isValidThreadID) == true && text.contains("margins-amp-smoke"), "live: streamed turn completes")
+            let turn1 = try await client.streamTurn(
+                project: project,
+                prompt: "Remember the marker orch-718 for our next message. Reply with exactly: noted",
+                cwd: cwd
+            ) { _ in }
+            guard case .completed(let id1, let text1) = turn1, let threadID = id1 else {
+                check(false, "live: turn 1 expected completion with thread ID, got \(turn1)"); return
+            }
+            check(AmpCloudClient.isValidThreadID(threadID) && !text1.isEmpty, "live: turn 1 completes with valid thread ID")
+            let turn2 = try await client.continueTurn(
+                threadID: threadID,
+                prompt: "What marker did I ask you to remember? Reply with just the marker.",
+                cwd: cwd
+            ) { _ in }
+            guard case .completed(let id2, let text2) = turn2 else {
+                check(false, "live: turn 2 expected completion, got \(turn2)"); return
+            }
+            check((id2 == nil || id2 == threadID) && text2.contains("orch-718"), "live: turn 2 continues same thread and recalls marker")
         } catch {
             check(false, "live Amp smoke test threw \(error)")
         }

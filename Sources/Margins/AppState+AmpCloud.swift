@@ -46,10 +46,32 @@ extension AppState {
         let live = Array(ampStreamTasks.keys)
         ampStreamTasks.values.forEach { $0.cancel() }
         ampStreamTasks.removeAll()
+        var changed = false
         for id in live {
-            updateCloudIntent(id) { _ = AmpCloudLifecycle.markStopped(&$0) }
+            updateCloudIntent(id) {
+                if AmpCloudLifecycle.markStopped(&$0) != nil { changed = true }
+            }
             cloudStreamingIntentIDs.remove(id)
         }
+        if changed { saveNow() }
+    }
+
+    /// Cancels a single running Amp turn (e.g. from the Stop button on a card, thread, or paragraph).
+    func stopAmpTurn(step: Int) {
+        guard let intent = doc.intents.last(where: {
+            $0.step == step && $0.cloudTask?.resolvedBackend == .amp && ampStreamTasks[$0.id] != nil
+        }) else { return }
+        let id = intent.id
+        ampStreamTasks.removeValue(forKey: id)?.cancel()
+        cloudStreamingIntentIDs.remove(id)
+        var changed = false
+        updateCloudIntent(id) {
+            if AmpCloudLifecycle.markStopped(&$0) != nil { changed = true }
+        }
+        if intent.cloudTask?.paragraphBlockID != nil {
+            Task { await editor.setParagraphWorking(step: step, blockID: nil) }
+        }
+        if changed { saveNow() }
     }
 
     // MARK: - Context & Preflight
