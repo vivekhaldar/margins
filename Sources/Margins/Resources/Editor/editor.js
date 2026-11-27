@@ -1430,6 +1430,7 @@
     revealStep(step) { const c = select({ step })[0]; if (c) { c.scrollIntoView({ block: 'center', behavior: 'smooth' }); flash(c); } },
     preview,
     endPreview,
+    setSemanticZoomLoading: previewState.setSemanticZoomLoading,
     setSemanticZoom: previewState.setSemanticZoom,
     clearSemanticZoom: previewState.clearSemanticZoom,
     visibleAnchorHeading: previewState.visibleAnchorHeading,

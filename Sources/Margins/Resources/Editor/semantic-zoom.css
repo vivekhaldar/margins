@@ -4,6 +4,11 @@ body.semantic-zoom #doc {
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
+  transition: opacity 150ms ease;
+}
+body.semantic-zoom.semantic-zoom-loading #doc {
+  opacity: .45;
+  pointer-events: none;
 }
 body.semantic-zoom #doc :is(h1,h2,h3,h4,h5,h6,p) { cursor: pointer; }
 body.semantic-zoom #doc :is(h1,h2,h3,h4,h5,h6,p):hover {

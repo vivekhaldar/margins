@@ -5,7 +5,10 @@
   const HEADINGS = 'h1,h2,h3,h4,h5,h6';
   const SOURCE_ATTRS = ['data-source-bid', 'data-source-block-id', 'data-source-block', 'data-source-heading'];
   const EXCLUDED = '.chg > del,.diff-removed,.tools,.rb,pre,table,figure,img,script,style,svg,math,input,button';
-  const TAGS = new Set('h1 h2 h3 h4 h5 h6 p ul ol li blockquote pre table thead tbody tfoot tr th td figure figcaption strong em b i s u code a img br hr span div'.split(' '));
+  const TAGS = new Set('h1 h2 h3 h4 h5 h6 p ul ol li blockquote pre table thead tbody tfoot tr th td caption figure figcaption dl dt dd strong em b i s u mark small sub sup del ins q cite abbr time kbd code a img br hr span div'.split(' '));
+  const UNWRAP_TAGS = new Set('section article main header footer aside nav'.split(' '));
+  const SVG_TAGS = new Set('svg g title desc path rect circle ellipse line polyline polygon text tspan defs marker lineargradient radialgradient stop'.split(' '));
+  const SVG_ATTRS = new Set('xmlns viewbox width height x y x1 y1 x2 y2 cx cy r rx ry d points fill stroke stroke-width stroke-dasharray stroke-linecap stroke-linejoin opacity fill-opacity stroke-opacity transform text-anchor dominant-baseline font-size font-family font-weight dx dy offset stop-color stop-opacity marker-end marker-start markerwidth markerheight refx refy orient preserveaspectratio aria-label role id'.split(' '));
 
   function countWords(text) {
     return (String(text || '').match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || []).length;
@@ -31,28 +34,43 @@
     } catch (_) { return false; }
   }
 
-  function keepAttribute(node, attr) {
-    if (SOURCE_ATTRS.includes(attr.name)) return true;
-    if (['title', 'id'].includes(attr.name)) return true;
+  function keepAttribute(node, attr, inSVG) {
+    const attrName = attr.name.toLowerCase();
+    if (inSVG) {
+      if (attrName === 'xmlns') return attr.value === 'http://www.w3.org/2000/svg';
+      return SVG_ATTRS.has(attrName);
+    }
+    if (SOURCE_ATTRS.includes(attrName)) return true;
+    if (['title', 'id'].includes(attrName)) return true;
     const tag = node.tagName.toLowerCase();
-    if (attr.name === 'href') return tag === 'a' && safeURL(attr.value, false);
-    if (attr.name === 'src') return tag === 'img' && safeURL(attr.value, true);
-    if (tag === 'img') return ['alt', 'width', 'height'].includes(attr.name);
-    if (['td', 'th'].includes(tag)) return ['colspan', 'rowspan', 'scope'].includes(attr.name);
-    return tag === 'ol' && attr.name === 'start';
+    if (attrName === 'href') return tag === 'a' && safeURL(attr.value, false);
+    if (attrName === 'src') return tag === 'img' && safeURL(attr.value, true);
+    if (tag === 'img') return ['alt', 'width', 'height'].includes(attrName);
+    if (['td', 'th'].includes(tag)) return ['colspan', 'rowspan', 'scope'].includes(attrName);
+    return tag === 'ol' && attrName === 'start';
   }
 
   function summaryHTML(html) {
     const template = document.createElement('template');
     template.innerHTML = html || '';
-    template.content.querySelectorAll('script,style,iframe,object,embed,link,meta,svg,math,form,input,button')
+    template.content.querySelectorAll('script,style,iframe,object,embed,link,meta,math,form,input,button,foreignObject,use,image,animate,set')
       .forEach(node => node.remove());
-    template.content.querySelectorAll('*').forEach(node => {
-      if (!TAGS.has(node.tagName.toLowerCase())) { node.remove(); return; }
+    template.content.querySelectorAll('svg a').forEach(node => node.remove());
+    // Walk bottom-up so unwrapping benign container tags preserves sanitized children.
+    const nodes = [...template.content.querySelectorAll('*')].reverse();
+    for (const node of nodes) {
+      const tag = node.tagName.toLowerCase();
+      const inSVG = tag === 'svg' || !!node.closest('svg');
+      if (!inSVG && UNWRAP_TAGS.has(tag)) {
+        node.replaceWith(...node.childNodes);
+        continue;
+      }
+      const allowed = inSVG ? SVG_TAGS.has(tag) : TAGS.has(tag);
+      if (!allowed) { node.remove(); continue; }
       [...node.attributes].forEach(attr => {
-        if (!keepAttribute(node, attr)) node.removeAttribute(attr.name);
+        if (!keepAttribute(node, attr, inSVG)) node.removeAttribute(attr.name);
       });
-    });
+    }
     return template.innerHTML;
   }
 
@@ -135,7 +153,7 @@
 
     reset() {
       this.saved = this.savedNodes = this.mode = null;
-      document.body.classList.remove('previewing');
+      document.body.classList.remove('previewing', 'semantic-zoom-loading');
       this.controls(false);
       this.doc.removeAttribute('aria-readonly');
       this.lastCount = null;
@@ -159,10 +177,32 @@
       this.display(html, annotations, 'history');
     }
 
+    setSemanticZoomLoading(percentage) {
+      if (![10, 25, 50, 75].includes(Number(percentage))) return false;
+      if (this.mode === 'history') this.endPreview();
+      if (!this.isSemanticZoom()) {
+        this.capture();
+        this.mode = 'semantic';
+        const previewClone = this.savedNodes.cloneNode(true);
+        previewClone.querySelectorAll('.tools').forEach(node => node.remove());
+        this.doc.replaceChildren(previewClone);
+        this.doc.contentEditable = 'false';
+        this.doc.classList.add('ro');
+        document.body.classList.remove('previewing');
+        this.controls(true);
+        this.deps.dismiss();
+        this.deps.refresh();
+        this.scroll.scrollTop = this.scrollPosition;
+      }
+      document.body.classList.add('semantic-zoom-loading');
+      return true;
+    }
+
     setSemanticZoom(html, percentage, anchorHeading) {
       if (![10, 25, 50, 75].includes(Number(percentage))) return false;
       const anchor = anchorHeading || this.visibleAnchorHeading();
       if (this.mode === 'history') this.endPreview();
+      document.body.classList.remove('semantic-zoom-loading');
       this.display(summaryHTML(html), {spans: [], runs: [], comments: []}, 'semantic');
       this.scrollTo(null, anchor);
       return true;
@@ -235,7 +275,7 @@
 
   function create(deps) {
     const display = new Display(deps);
-    return Object.fromEntries(['preview', 'endPreview', 'reset', 'setSemanticZoom', 'clearSemanticZoom',
+    return Object.fromEntries(['preview', 'endPreview', 'reset', 'setSemanticZoomLoading', 'setSemanticZoom', 'clearSemanticZoom',
       'visibleAnchorHeading', 'liveWordCount', 'savedSnapshot', 'savedHTML', 'isSemanticZoom', 'reportWords']
       .map(name => [name, display[name].bind(display)]));
   }

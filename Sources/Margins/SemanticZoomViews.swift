@@ -40,19 +40,28 @@ struct SemanticZoomControl: View {
                 .accessibilityLabel("Document size")
                 .accessibilityValue("\(Int(preview.value.rounded())) percent")
                 .disabled(disabled)
-                HStack {
-                    Text("10%")
-                    Spacer()
-                    Text("100% · Full document")
+                HStack(spacing: 6) {
+                    ForEach(SemanticZoomStop.allCases.reversed(), id: \.rawValue) { stop in
+                        let selected = state.semanticZoomStop == stop
+                        Button("\(stop.rawValue)%") {
+                            preview.value = Double(stop.rawValue)
+                            if stop != state.semanticZoomStop { state.setSemanticZoom(stop) }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(selected ? .accentColor : nil)
+                        .fontWeight(selected ? .semibold : .regular)
+                        .monospacedDigit()
+                        .disabled(disabled)
+                        .help("\(stop.rawValue)% · \(stop.label)")
+                    }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                Text("Release to select 10%, 25%, 50%, 75%, or 100%. Summaries are read-only.")
+                Text("Drag or click a stop (10%–100%). Summaries are read-only.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .padding(16)
-            .frame(width: 280)
+            .frame(width: 300)
         }
         .onChange(of: state.semanticZoomStop.rawValue) { _, value in
             if !editing.value { preview.value = Double(value) }

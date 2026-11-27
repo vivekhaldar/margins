@@ -27,7 +27,9 @@ func runSemanticZoomTests() {
         check(SemanticZoom.liveWordCount(in: "<p>one<strong>two</strong>three</p>") == 3, "inline boundaries")
         check(SemanticZoom.liveWordCount(in: "<p>你好 café 42</p>") == 3, "Unicode prose and numbers")
         check(SemanticZoom.liveWordCount(in: "") == 0, "empty source")
-        check(SemanticZoom.liveWordCount(in: "<p>bad <") == 0, "malformed source fails closed")
+        check(SemanticZoom.liveWordCount(in: "<p>bad <") == 1, "malformed source falls back to counting prose words")
+        check(SemanticZoom.liveWordCount(in: "<p>keep</p><svg viewBox=\"0 0 10 10\"><title>ignored</title><text>diagram</text></svg>") == 1,
+              "inline SVG text excluded from live prose count")
         check(SemanticZoom.documentHash(for: "") ==
               "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
               "canonical HTML hash is SHA256")
@@ -64,6 +66,22 @@ func runSemanticZoomTests() {
         check(clean.contains("data-source-block=\"b2\"") && clean.contains("margins-asset://img/abcdef.png"), "anchors and assets retained")
         check(!clean.contains("class=") && !clean.contains("data-other"), "transient editor attributes stripped")
         check(clean.contains("a=1&amp;b=2"), "safe query entities retained")
+        let fenced = """
+        ```html
+        <section><h2 data-source-block="b1">Section</h2><p>Key <mark>point</mark>.</p></section>
+        ```
+        """
+        let sanitizedFenced = try SemanticZoomHTMLSanitizer.sanitize(fenced)
+        check(sanitizedFenced == "<h2 data-source-block=\"b1\">Section</h2><p>Key <mark>point</mark>.</p>",
+              "strips Markdown fences, unwraps benign structural containers, keeps mark")
+        let inlineSVG = """
+        <figure><svg viewBox="0 0 200 80" width="200"><title>Flow</title><rect x="0" y="0" width="80" height="40" stroke="#222" fill="none"/></svg><figcaption>Flow</figcaption></figure>
+        """
+        let sanitizedSVG = try SemanticZoomHTMLSanitizer.sanitize(inlineSVG)
+        check(sanitizedSVG.contains("viewBox=\"0 0 200 80\"") && sanitizedSVG.contains("<rect") && sanitizedSVG.contains("<title>Flow</title>"),
+              "safe inline SVG diagrams retained")
+        check(SemanticZoom.liveHTML(inlineSVG).contains("<svg") && SemanticZoom.liveHTML(inlineSVG).contains("<rect"),
+              "liveHTML preserves inline SVG diagrams for prompting")
         let promoted = try SemanticZoomHTMLSanitizer.sanitize(html, forPromotion: true)
         check(!promoted.contains("data-source") && !promoted.contains("data-bid"), "promotion strips transient source IDs")
         check(promoted.contains("<strong>clean</strong>"), "promotion preserves semantic formatting")
@@ -77,6 +95,9 @@ func runSemanticZoomTests() {
             "<p style=\"color:red\">styled</p>", "<a href=\"javascript:evil()\">x</a>",
             "<a href=\"java&#x73;cript:evil()\">x</a>", "<a href=\"javascript&colon;evil()\">x</a>",
             "<img src=\"data:image/svg+xml,test\">", "<svg><a href=\"x\">x</a></svg>",
+            "<svg><foreignObject><div>bad</div></foreignObject></svg>",
+            "<svg onload=\"evil()\"><rect width=\"10\" height=\"10\"/></svg>",
+            "<section onclick=\"evil()\"><p>x</p></section>",
             "<iframe srcdoc=\"evil\"></iframe>", "<img srcset=\"evil\">",
             "<a href=\"java&#10;script:evil()\">x</a>", "<p onclick=x>x</p>",
             "<p><strong>x</p></strong>", "<p title=\"unterminated>x</p>",
@@ -107,6 +128,9 @@ func runSemanticZoomTests() {
         check(cache.value(for: key()) != nil, "recent cache hit retained")
         cache.insert("replacement", for: key())
         check(cache.count == 2 && cache.value(for: key()) == "replacement", "overwrite does not duplicate recency")
+        cache.remove(for: key())
+        check(cache.count == 1 && cache.value(for: key()) == nil && cache.value(for: key("source", 10)) == "executive",
+              "targeted remove evicts only the active key")
         cache.removeAll()
         check(cache.count == 0 && cache.value(for: key()) == nil, "clear window cache")
         var disabled = SemanticZoomCache(capacity: -1)

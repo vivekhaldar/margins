@@ -68,6 +68,8 @@ if [[ "$LINT_ONLY" == "false" ]]; then
     swift build
     echo "==> [check] swift run MarginsSelfTest"
     swift run MarginsSelfTest
+    echo "==> [check] swift scripts/test-editor-semantic-zoom.swift"
+    swift scripts/test-editor-semantic-zoom.swift
   else
     echo "==> [check] skipping Swift build/tests on ${OS} (macOS required)"
   fi

@@ -71,6 +71,12 @@
     api.endPreview();
     const restored = api.snapshot(), expected = JSON.parse(original);
     assert(restored.html === expected.html && JSON.stringify(restored.annotations.comments) === JSON.stringify(expected.annotations.comments), 'Mutually exclusive previews preserve source and comments');
+    api.setSemanticZoomLoading(50);
+    assert(document.body.classList.contains('semantic-zoom') && document.body.classList.contains('semantic-zoom-loading'), 'Loading dims without blanking');
+    assert(doc.textContent.includes('Title') && doc.contentEditable === 'false', 'Loading keeps prior view visible and read-only');
+    assert(api.html() === originalHTML, 'Loading state still saves source');
+    api.clearSemanticZoom();
+    assert(!document.body.classList.contains('semantic-zoom-loading') && doc.firstChild === firstNode, 'Cancelling loading restores exact original nodes');
     api.setSemanticZoom('', 75);
     assert(doc.textContent === '' && doc.contentEditable === 'false', 'Loading can show a read-only blank');
     assert(api.html() === originalHTML, 'Blank loading state still saves source');
@@ -93,6 +99,10 @@
     assert(!/javascript:|onclick|style=|script|iframe/.test(safe), 'Unsafe content and transient attrs removed');
     const safeTable = window.MarginsSemanticZoom.summaryHTML('<table><tr><td colspan="2" scope="col">Cell</td></tr></table><ol start="3"><li>Item</li></ol>');
     assert(/colspan="2"/.test(safeTable) && /start="3"/.test(safeTable), 'Semantic table/list attributes retained');
+    const safeStruct = window.MarginsSemanticZoom.summaryHTML('<section><p>Keep <mark>this</mark></p><figure><svg viewBox="0 0 100 40" width="100" onload="bad()"><title>Chart</title><rect x="0" y="0" width="50" height="20"/><foreignObject><div>bad</div></foreignObject><a href="javascript:bad()">bad</a></svg></figure></section>');
+    assert(!/<section/i.test(safeStruct) && /<mark>this<\/mark>/.test(safeStruct), 'Benign containers unwrapped and mark kept');
+    assert(/<svg[^>]*viewBox="0 0 100 40"/i.test(safeStruct) && /<rect/.test(safeStruct), 'Safe inline SVG retained');
+    assert(!/onload|foreignObject|javascript:/i.test(safeStruct), 'Unsafe SVG elements and handlers stripped');
     annotationUI.setEnabled(false);
     api.load('<p>Done.</p>');
     return 'Semantic zoom editor checks passed';

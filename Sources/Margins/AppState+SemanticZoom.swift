@@ -16,10 +16,10 @@ extension AppState {
         setSemanticZoom(stops[next])
     }
 
-    func setSemanticZoom(_ stop: SemanticZoomStop) {
+    func setSemanticZoom(_ stop: SemanticZoomStop, bypassCache: Bool = false) {
         if stop == .full { cancelSemanticZoom(); return }
         guard canSemanticZoom, let config = activeProvider else { return }
-        if stop == semanticZoomStop && semanticZoomError == nil { return }
+        if !bypassCache && stop == semanticZoomStop && semanticZoomError == nil { return }
         semanticZoomTask?.cancel()
         let requestID = UUID(), session = documentSessionID
         semanticZoomRequestID = requestID
@@ -31,7 +31,8 @@ extension AppState {
         semanticZoomTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.generateSemanticZoom(stop, config: config, requestID: requestID, session: session)
+                try await self.generateSemanticZoom(stop, config: config, requestID: requestID,
+                                                    session: session, bypassCache: bypassCache)
             } catch {
                 guard self.semanticZoomIsCurrent(requestID, session: session) else { return }
                 self.semanticZoomLoading = false
@@ -46,7 +47,7 @@ extension AppState {
     }
 
     private func generateSemanticZoom(_ stop: SemanticZoomStop, config: ProviderConfig,
-                                      requestID: UUID, session: UUID) async throws {
+                                      requestID: UUID, session: UUID, bypassCache: Bool) async throws {
         let anchor = await editor.visibleAnchorHeading() ?? semanticZoomAnchorHeading
         guard semanticZoomIsCurrent(requestID, session: session) else { return }
         semanticZoomAnchorHeading = anchor
@@ -60,15 +61,16 @@ extension AppState {
         guard semanticZoomSourceWordCount >= 200 else { cancelSemanticZoom(); return }
         let key = SemanticZoomCache.Key(documentHash: SemanticZoom.documentHash(for: source), stopPercentage: stop.rawValue,
                                         providerID: config.id.uuidString, modelID: config.model)
+        if bypassCache { semanticZoomCache.remove(for: key) }
         previewing = nil
         await editor.endPreview()
-        guard semanticZoomIsCurrent(requestID, session: session) else { return }
-        await editor.setSemanticZoom(html: semanticZoomHTML ?? "", stop: stop.rawValue, anchorHeading: anchor)
         guard semanticZoomIsCurrent(requestID, session: session) else { return }
         let html: String
         if let cached = semanticZoomCache.value(for: key) {
             html = cached
         } else {
+            await editor.setSemanticZoomLoading(stop: stop.rawValue)
+            guard semanticZoomIsCurrent(requestID, session: session) else { return }
             let agent = semanticZoomAgent(requestID: requestID, session: session)
             let request = GenerationRequest(
                 system: SemanticZoomPromptBuilder.system,
@@ -127,9 +129,7 @@ extension AppState {
     func regenerateSemanticZoom() {
         let stop = semanticZoomStop
         guard stop != .full else { return }
-        semanticZoomCache.removeAll()
-        semanticZoomError = "Regenerating"
-        setSemanticZoom(stop)
+        setSemanticZoom(stop, bypassCache: true)
     }
 
     func handleSemanticZoomMessage(_ type: String, _ body: [String: Any]) -> Bool {

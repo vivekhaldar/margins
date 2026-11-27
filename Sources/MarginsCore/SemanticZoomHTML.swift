@@ -13,56 +13,134 @@ public enum SemanticZoomHTMLSanitizer {
 
     static let allowedTags: Set<String> = [
         "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "blockquote", "pre",
-        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "figure", "figcaption",
-        "strong", "em", "b", "i", "s", "u", "code", "a", "img", "br", "hr", "span", "div"
+        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "figure", "figcaption",
+        "dl", "dt", "dd", "strong", "em", "b", "i", "s", "u", "mark", "small", "sub", "sup",
+        "del", "ins", "q", "cite", "abbr", "time", "kbd", "code", "a", "img", "br", "hr", "span", "div"
     ]
 
+    static let unwrappedContainerTags: Set<String> = [
+        "section", "article", "main", "header", "footer", "aside", "nav"
+    ]
+
+    static let svgTags: Set<String> = [
+        "svg", "g", "title", "desc", "path", "rect", "circle", "ellipse", "line",
+        "polyline", "polygon", "text", "tspan", "defs", "marker",
+        "lineargradient", "radialgradient", "stop"
+    ]
+
+    static let svgAllowedAttributes: Set<String> = [
+        "xmlns", "viewbox", "width", "height", "x", "y", "x1", "y1", "x2", "y2",
+        "cx", "cy", "r", "rx", "ry", "d", "points", "fill", "stroke", "stroke-width",
+        "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity", "fill-opacity",
+        "stroke-opacity", "transform", "text-anchor", "dominant-baseline", "font-size",
+        "font-family", "font-weight", "dx", "dy", "offset", "stop-color", "stop-opacity",
+        "marker-end", "marker-start", "markerwidth", "markerheight", "refx", "refy",
+        "orient", "preserveaspectratio", "aria-label", "role", "id"
+    ]
+
+    static let canonicalSVGTagNames: [String: String] = [
+        "lineargradient": "linearGradient",
+        "radialgradient": "radialGradient"
+    ]
+
+    private static let canonicalSVGAttrNames: [String: String] = [
+        "viewbox": "viewBox",
+        "markerwidth": "markerWidth",
+        "markerheight": "markerHeight",
+        "refx": "refX",
+        "refy": "refY",
+        "preserveaspectratio": "preserveAspectRatio"
+    ]
+
+    static func stripMarkdownFences(_ html: String) -> String {
+        let trimmed = html.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("```") else { return html }
+        var lines = trimmed.components(separatedBy: .newlines)
+        guard lines.count >= 2,
+              lines.first?.trimmingCharacters(in: .whitespaces).hasPrefix("```") == true,
+              lines.last?.trimmingCharacters(in: .whitespaces) == "```" else { return html }
+        lines.removeFirst()
+        lines.removeLast()
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public static func sanitize(_ html: String, forPromotion: Bool = false) throws -> String {
-        let tokens = try SemanticZoomHTMLParser.parse(html)
-        var stack: [String] = []
+        let tokens = try SemanticZoomHTMLParser.parse(stripMarkdownFences(html))
+        var stack: [(name: String, emit: Bool)] = []
+        var svgDepth = 0
         var output = ""
         for token in tokens {
             switch token {
             case .text(let text): output += SemanticZoomHTMLParser.escape(text)
             case .open(let name, let attributes, let isVoid):
-                guard allowedTags.contains(name) else { throw Failure.unsafeHTML }
-                try validate(attributes, tag: name)
-                output += renderTag(name, attributes: attributes, forPromotion: forPromotion)
-                if !isVoid { stack.append(name) }
+                output += try sanitizeOpen(name, attributes: attributes, isVoid: isVoid,
+                                           forPromotion: forPromotion, stack: &stack, svgDepth: &svgDepth)
             case .close(let name):
-                guard stack.last == name else { throw Failure.malformedHTML }
+                guard let top = stack.last, top.name == name else { throw Failure.malformedHTML }
                 stack.removeLast()
-                output += "</\(name)>"
+                if name == "svg" && svgDepth > 0 { svgDepth -= 1 }
+                if top.emit { output += "</\(canonicalSVGTagNames[name] ?? name)>" }
             }
         }
         guard stack.isEmpty else { throw Failure.malformedHTML }
         return output
     }
 
-    private static func validate(_ attributes: [String: String], tag: String) throws {
+    private static func sanitizeOpen(_ name: String, attributes: [String: String], isVoid: Bool,
+                                     forPromotion: Bool, stack: inout [(name: String, emit: Bool)],
+                                     svgDepth: inout Int) throws -> String {
+        let inSVG = svgDepth > 0 || name == "svg"
+        if inSVG {
+            guard svgTags.contains(name) else { throw Failure.unsafeHTML }
+            try validate(attributes, tag: name, inSVG: true)
+            if !isVoid {
+                stack.append((name, true))
+                if name == "svg" { svgDepth += 1 }
+            }
+            return renderTag(name, attributes: attributes, forPromotion: forPromotion, inSVG: true, selfClosing: isVoid)
+        }
+        if unwrappedContainerTags.contains(name) {
+            try validate(attributes, tag: name, inSVG: false)
+            if !isVoid { stack.append((name, false)) }
+            return ""
+        }
+        guard allowedTags.contains(name) else { throw Failure.unsafeHTML }
+        try validate(attributes, tag: name, inSVG: false)
+        if !isVoid { stack.append((name, true)) }
+        return renderTag(name, attributes: attributes, forPromotion: forPromotion)
+    }
+
+    private static func validate(_ attributes: [String: String], tag: String, inSVG: Bool) throws {
         for (name, value) in attributes {
             guard !name.hasPrefix("on"), !["style", "srcdoc", "srcset"].contains(name) else {
                 throw Failure.unsafeHTML
             }
             if ["href", "src", "action", "formaction", "poster", "background", "xlink:href"].contains(name) {
-                guard (name == "href" && tag == "a") || (name == "src" && tag == "img"),
+                guard !inSVG,
+                      (name == "href" && tag == "a") || (name == "src" && tag == "img"),
                       safeURL(value, image: name == "src") else { throw Failure.unsafeHTML }
             }
         }
     }
 
-    static func renderTag(_ name: String, attributes: [String: String], forPromotion: Bool) -> String {
+    static func renderTag(_ name: String, attributes: [String: String], forPromotion: Bool,
+                          inSVG: Bool = false, selfClosing: Bool = false) -> String {
+        let renderedName = inSVG ? (canonicalSVGTagNames[name] ?? name) : name
         let attrs = attributes.keys.sorted().compactMap { key -> String? in
-            guard let value = attributes[key], allowedAttribute(key, tag: name, promotion: forPromotion) else { return nil }
+            guard let value = attributes[key],
+                  allowedAttribute(key, tag: name, promotion: forPromotion, inSVG: inSVG) else { return nil }
             if key == "src" || key == "href", !safeURL(value, image: key == "src") { return nil }
             if key == "data-source-block" || key == "data-bid",
                value.range(of: #"^b[0-9]+$"#, options: .regularExpression) == nil { return nil }
-            return " \(key)=\"\(SemanticZoomHTMLParser.escape(value))\""
+            if inSVG && key == "xmlns" && value != "http://www.w3.org/2000/svg" { return nil }
+            let renderedKey = inSVG ? (canonicalSVGAttrNames[key] ?? key) : key
+            return " \(renderedKey)=\"\(SemanticZoomHTMLParser.escape(value))\""
         }.joined()
-        return "<\(name)\(attrs)>"
+        return selfClosing && inSVG ? "<\(renderedName)\(attrs)/>" : "<\(renderedName)\(attrs)>"
     }
 
-    private static func allowedAttribute(_ name: String, tag: String, promotion: Bool) -> Bool {
+    private static func allowedAttribute(_ name: String, tag: String, promotion: Bool, inSVG: Bool) -> Bool {
+        if inSVG { return svgAllowedAttributes.contains(name) }
         if ["title", "id"].contains(name) { return true }
         if ["data-source-block", "data-bid"].contains(name) { return !promotion }
         if tag == "a" { return name == "href" }
@@ -147,10 +225,11 @@ enum SemanticZoomHTMLParser {
             return .close(name)
         }
         let selfClosing = suffix.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("/")
-        guard !selfClosing || voidTags.contains(name) else { throw failure }
-        let attributeText = selfClosing
-            ? " " + String(suffix.trimmingCharacters(in: .whitespacesAndNewlines).dropLast()) : suffix
-        return .open(name, try parseAttributes(attributeText), voidTags.contains(name))
+        let isSVG = SemanticZoomHTMLSanitizer.svgTags.contains(name)
+        guard !selfClosing || voidTags.contains(name) || isSVG else { throw failure }
+        let trimmedSuffix = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attributeText = selfClosing ? " " + String(trimmedSuffix.dropLast()) : suffix
+        return .open(name, try parseAttributes(attributeText), voidTags.contains(name) || (selfClosing && isSVG))
     }
 
     private static func parseAttributes(_ input: String) throws -> [String: String] {

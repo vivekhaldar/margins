@@ -180,6 +180,10 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("window.margins.preview(html, annotations)", ["html": html, "annotations": Self.jsonObject(annotations)])
     }
     func endPreview() async { _ = try? await call("window.margins.endPreview()") }
+    /// Keep the prior document or summary visible and dimmed while generating a new summary.
+    func setSemanticZoomLoading(stop: Int) async {
+        _ = try? await call("return window.margins.setSemanticZoomLoading(stop)", ["stop": stop])
+    }
     /// Display a read-only summary while serialization continues to return the full document.
     func setSemanticZoom(html: String, stop: Int, anchorHeading: String? = nil) async {
         _ = try? await call("return window.margins.setSemanticZoom(html, stop, anchorHeading)",
