@@ -61,7 +61,7 @@ public struct CloudInsertionPlan: Equatable, Sendable {
     public var edit: EditOp
     public var run: AnnotationRun
 
-    public static let provider = "Copilot Cloud"
+    public static let provider = CloudBackend.copilot.providerName
 
     /// - Parameters:
     ///   - focus: block ids currently selected in the editor.
@@ -81,13 +81,14 @@ public struct CloudInsertionPlan: Equatable, Sendable {
             log: log,
             summary: intent.summary,
             pullRequestURL: task.pullRequestURL,
-            htmlURL: task.htmlURL
+            htmlURL: task.htmlURL,
+            backend: task.resolvedBackend
         )
         let run = AnnotationRun(
             id: runID,
             intentId: intent.id,
             step: intent.step,
-            provider: provider,
+            provider: task.resolvedBackend.providerName,
             model: task.repo,
             createdAt: createdAt,
             instruction: intent.text,
@@ -137,6 +138,6 @@ public struct CloudInsertionPlan: Equatable, Sendable {
 extension Intent {
     /// One-line status for a cloud-backed intent (nil for local agents), e.g. "Copilot Cloud · In progress".
     public var cloudActivity: String? {
-        cloudTask.map { "\(CloudInsertionPlan.provider) · \(CloudTaskState(rawState: $0.cloudState).displayLabel)" }
+        cloudTask.map { "\($0.resolvedBackend.providerName) · \(CloudTaskState(rawState: $0.cloudState).displayLabel)" }
     }
 }

@@ -39,6 +39,12 @@ public enum CloudWatcherPolicy {
         case .wake: return true
         }
     }
+
+    /// Only Copilot tasks are polled. Amp runs are watched solely through their launch stream, so
+    /// focus, wake and reopen never re-invoke `amp` (`threads continue` would send a new prompt).
+    public static func shouldWatch(_ task: CloudTaskRef) -> Bool {
+        task.resolvedBackend == .copilot && CloudTaskState(rawState: task.cloudState).shouldPoll
+    }
 }
 
 /// Extracts the agent's final prose answer from a `gh agent-task view --log` transcript.

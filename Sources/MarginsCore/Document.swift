@@ -82,6 +82,39 @@ public struct MarginsDocument: Codable, Equatable, Sendable {
     }
 }
 
+/// Which remote agent service runs a cloud intent. Cloud-only: never a local `ProviderKind`.
+public enum CloudBackend: String, Codable, Equatable, CaseIterable, Sendable {
+    case copilot
+    case amp
+
+    public var displayName: String {
+        switch self {
+        case .copilot: return "Copilot"
+        case .amp: return "Amp"
+        }
+    }
+
+    /// Provider attribution on intents and tracked-edit runs.
+    public var providerName: String {
+        switch self {
+        case .copilot: return "Copilot Cloud"
+        case .amp: return "Amp Cloud"
+        }
+    }
+
+    /// Label for the link back to the remote run in inserted results.
+    public var taskLinkTitle: String {
+        switch self {
+        case .copilot: return "Copilot Cloud Task"
+        case .amp: return "Amp Thread"
+        }
+    }
+
+    public static func isCloudProvider(_ provider: String) -> Bool {
+        allCases.contains { $0.providerName == provider }
+    }
+}
+
 public struct CloudTaskRef: Codable, Equatable, Sendable {
     public var repo: String
     public var baseRef: String
@@ -94,6 +127,10 @@ public struct CloudTaskRef: Codable, Equatable, Sendable {
     public var createPullRequest: Bool
     /// Block ID of the document paragraph when launched via direct `⌘↩` prompt.
     public var paragraphBlockID: String?
+    /// Nil in documents written before Amp support; read through `resolvedBackend`.
+    public var backend: CloudBackend?
+
+    public var resolvedBackend: CloudBackend { backend ?? .copilot }
 
     public init(
         repo: String,
@@ -105,7 +142,8 @@ public struct CloudTaskRef: Codable, Equatable, Sendable {
         pullRequestURL: String? = nil,
         lastCheckedAt: Date? = nil,
         createPullRequest: Bool = false,
-        paragraphBlockID: String? = nil
+        paragraphBlockID: String? = nil,
+        backend: CloudBackend? = nil
     ) {
         self.repo = repo
         self.baseRef = baseRef
@@ -117,6 +155,7 @@ public struct CloudTaskRef: Codable, Equatable, Sendable {
         self.lastCheckedAt = lastCheckedAt
         self.createPullRequest = createPullRequest
         self.paragraphBlockID = paragraphBlockID
+        self.backend = backend
     }
 }
 
@@ -153,7 +192,7 @@ public struct Intent: Codable, Equatable, Identifiable, Sendable {
     public var reply: String?
     /// Project files the agent created, changed or deleted while working on this (relative paths).
     public var files: [String]?
-    /// Persisted reference to an asynchronous GitHub Copilot Cloud Agent task, if launched in the cloud.
+    /// Persisted reference to an asynchronous cloud agent run (Copilot task or Amp thread), if launched in the cloud.
     public var cloudTask: CloudTaskRef?
 
     public init(id: UUID = UUID(), kind: Kind = .instruction, step: Int, text: String, createdAt: Date = Date(),
