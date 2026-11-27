@@ -1418,22 +1418,26 @@ actor MockCloudCommandRunner: CloudCommandRunner {
         var arguments: [String]
         var stdin: String?
         var cwd: URL?
+        var environment: [String: String]? = nil
     }
 
     private let ghURL: URL?
+    private let binaries: [String: URL]
     private var handlers: [@Sendable (Call, (@Sendable (String) -> Void)?) async throws -> ProcessResult]
     private var recordedCalls: [Call] = []
 
     init(
         ghURL: URL? = URL(fileURLWithPath: "/usr/local/bin/gh"),
+        binaries: [String: URL] = [:],
         handlers: [@Sendable (Call, (@Sendable (String) -> Void)?) async throws -> ProcessResult] = []
     ) {
         self.ghURL = ghURL
+        self.binaries = binaries
         self.handlers = handlers
     }
 
     nonisolated func locate(_ name: String) -> URL? {
-        name == "gh" ? ghURL : nil
+        name == "gh" ? ghURL : binaries[name]
     }
 
     func calls() -> [Call] { recordedCalls }
@@ -1443,9 +1447,10 @@ actor MockCloudCommandRunner: CloudCommandRunner {
         arguments: [String],
         stdin: String?,
         cwd: URL?,
+        environment: [String: String]?,
         onLine: (@Sendable (String) -> Void)?
     ) async throws -> ProcessResult {
-        let call = Call(executable: executable, arguments: arguments, stdin: stdin, cwd: cwd)
+        let call = Call(executable: executable, arguments: arguments, stdin: stdin, cwd: cwd, environment: environment)
         recordedCalls.append(call)
         guard !handlers.isEmpty else {
             throw CopilotCloudError.invalidResponse("Unexpected CLI call: \(arguments.joined(separator: " "))")
@@ -1985,6 +1990,404 @@ Task {
     cloudSem.signal()
 }
 cloudSem.wait()
+
+// --- Amp Cloud Agents (amp -ox) tests ---
+
+typealias AmpHandler = @Sendable (MockCloudCommandRunner.Call, (@Sendable (String) -> Void)?) async throws -> ProcessResult
+
+let ampBin = URL(fileURLWithPath: "/opt/amp/bin/amp")
+let ampBinaries = ["amp": ampBin, "pass": URL(fileURLWithPath: "/usr/local/bin/pass"), "git": URL(fileURLWithPath: "/usr/bin/git")]
+let ampSecret = "fake-amp-key-for-tests-0123456789"
+let ampThreadA = "T-0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+let ampThreadB = "T-99999999-aaaa-bbbb-cccc-dddddddddddd"
+let ampInitLine = #"{"type":"system","subtype":"init","session_id":"\#(ampThreadA)","cwd":"/workspace","tools":["Read"]}"#
+let ampAssistantLine = #"{"type":"assistant","message":{"content":[{"type":"text","text":"Looking into it — café\nsecond line"},{"type":"tool_use","id":"tu1","name":"Grep","input":{}}],"stop_reason":"end_turn"},"session_id":"\#(ampThreadA)"}"#
+let ampResultLine = #"{"type":"result","subtype":"success","is_error":false,"result":"The answer.","session_id":"\#(ampThreadA)"}"#
+let ampErrorLine = #"{"type":"result","subtype":"error_max_turns","is_error":true,"error":"Too many turns","session_id":"\#(ampThreadA)"}"#
+
+let ampPass: AmpHandler = { _, _ in ProcessResult(status: 0, stdout: "\(ampSecret)\nlogin: me\n", stderr: "") }
+
+/// Replays NDJSON through `LineBuffer` in awkward chunk sizes, like a real pipe.
+func ampStream(_ lines: [String], status: Int32 = 0, chunk: Int = 7) -> AmpHandler {
+    { _, onLine in
+        let bytes = Array((lines.joined(separator: "\n") + "\n").utf8)
+        var buffer = LineBuffer()
+        var index = 0
+        while index < bytes.count {
+            let end = min(index + chunk, bytes.count)
+            buffer.append(Data(bytes[index..<end])).forEach { onLine?($0) }
+            index = end
+        }
+        if let rest = buffer.finish() { onLine?(rest) }
+        return ProcessResult(status: status, stdout: lines.joined(separator: "\n"), stderr: "")
+    }
+}
+
+func ampClient(_ runner: MockCloudCommandRunner, env: [String: String] = [:]) -> AmpCloudClient {
+    AmpCloudClient(runner: runner, credentials: AmpCredentialProvider(runner: runner, environment: env))
+}
+
+final class AmpEventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    func add(_ item: String) { lock.lock(); items.append(item); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return items }
+}
+
+test("Amp backend model: legacy refs, cloud-only backend, states, attribution") {
+    let legacyJSON = #"{"repo":"o/r","baseRef":"main","taskID":"t1","htmlURL":"","cloudState":"in_progress","createPullRequest":false}"#
+    let legacy = try JSONDecoder().decode(CloudTaskRef.self, from: Data(legacyJSON.utf8))
+    check(legacy.backend == nil && legacy.resolvedBackend == .copilot, "legacy cloud refs decode as Copilot")
+    check(CloudWatcherPolicy.shouldWatch(legacy), "legacy Copilot task in progress is still watched")
+    let copilotJSON = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
+    check(!copilotJSON.contains("backend"), "refs without a backend stay byte-compatible with older builds")
+
+    var ref = AmpCloudLifecycle.newRef(project: "o/r", paragraphBlockID: "b1")
+    ref.cloudState = "in_progress"
+    let decoded = try JSONDecoder().decode(CloudTaskRef.self, from: JSONEncoder().encode(ref))
+    check(decoded == ref && decoded.resolvedBackend == .amp, "Amp refs round-trip with their backend")
+    check(!CloudWatcherPolicy.shouldWatch(decoded), "Amp tasks are never polled or re-invoked by watchers")
+
+    check(!ProviderKind.allCases.map(\.rawValue).contains { $0.lowercased().contains("amp") }, "Amp is not a local provider kind")
+    check(!ProviderKind.allCases.map(\.title).contains { $0.contains("Amp") }, "Amp never appears in local provider settings")
+    check(CloudBackend.isCloudProvider("Amp Cloud") && CloudBackend.isCloudProvider("Copilot Cloud"), "both cloud providers recognized")
+    check(!CloudBackend.isCloudProvider("Claude (Claude Code)"), "local providers are not cloud")
+
+    for state in [CloudTaskState.submitted, .disconnected] {
+        check(CloudTaskState(rawState: state.rawState) == state, "\(state.rawState) round-trips")
+        check(!state.shouldPoll && !state.needsAttention, "\(state.rawState) is never polled")
+    }
+    check(CloudTaskState.submitted.displayLabel == "Submitted" && CloudTaskState.submitted.intentStatus == .done, "submitted label/status")
+    check(CloudTaskState.disconnected.displayLabel == "Outcome unknown" && CloudTaskState.disconnected.intentStatus == .failed,
+          "disconnected label/status")
+
+    var intent = Intent(step: 1, text: "Explain the sync engine", provider: "Amp Cloud", cloudTask: ref)
+    AmpCloudLifecycle.apply(.completed(threadID: ampThreadA, result: "It syncs."), to: &intent)
+    check(intent.cloudActivity == "Amp Cloud · Completed", "activity line names Amp Cloud")
+    let plan = CloudInsertionPlan.make(intent: intent, log: nil, focus: [], blockIDs: ["b0", "b1"])
+    check(plan?.run.provider == "Amp Cloud", "inserted runs are attributed to Amp Cloud")
+    check(plan?.edit.html.contains("Amp Thread") == true && plan?.edit.html.contains("Copilot Cloud Task") == false,
+          "insertion links back to the Amp thread")
+    check(plan?.edit.html.contains("https://ampcode.com/threads/\(ampThreadA)") == true, "insertion carries the thread URL")
+    check(plan?.edit.op == .replace && plan?.edit.blockId == "b1", "⌘↩ Amp prompts replace their paragraph")
+    check(CloudInsertionPlan.provider == "Copilot Cloud", "Copilot attribution unchanged")
+}
+
+test("Amp remotes, thread URLs and project validation") {
+    check(AmpCloudClient.parseGitHubRemote("git@github.com:vivekhaldar/margins.git\n") == "vivekhaldar/margins", "SSH remote")
+    check(AmpCloudClient.parseGitHubRemote("ssh://git@github.com/vivekhaldar/margins") == "vivekhaldar/margins", "ssh:// remote")
+    check(AmpCloudClient.parseGitHubRemote("https://github.com/vivekhaldar/margins.git") == "vivekhaldar/margins", "HTTPS .git remote")
+    check(AmpCloudClient.parseGitHubRemote("https://github.com/vivekhaldar/margins/") == "vivekhaldar/margins", "HTTPS remote")
+    check(AmpCloudClient.parseGitHubRemote("https://gitlab.com/o/r.git") == nil, "non-GitHub remotes rejected")
+    check(AmpCloudClient.parseGitHubRemote("https://github.com/o/r/tree/main") == nil, "deep paths rejected")
+    check(AmpCloudClient.parseGitHubRemote("git@github.com:o/r;rm -rf.git") == nil, "unsafe names rejected")
+    check(AmpCloudClient.threadID(inText: "Started thread https://ampcode.com/threads/\(ampThreadA)\n") == ampThreadA, "thread URL parsed")
+    check(AmpCloudClient.threadID(inText: "https://example.com/threads/\(ampThreadA)") == nil, "only ampcode.com thread URLs")
+    check(AmpCloudClient.isValidThreadID(ampThreadA) && !AmpCloudClient.isValidThreadID("T-; rm"), "thread ID validation")
+    check(AmpCloudClient.streamArguments(project: "o/r") == ["-ox", "--project", "o/r", "--stream-json", "--no-archive-after-execute"],
+          "streamed launch command")
+    check(AmpCloudClient.detachedArguments(project: "o/r") == ["-ox", "--project", "o/r"], "detached launch command")
+    check(AmpCloudClient.continueArguments(threadID: ampThreadA) == ["threads", "continue", ampThreadA, "-ox", "--stream-json"],
+          "follow-up command")
+}
+
+test("Amp NDJSON decoding and chunking: only result is terminal") {
+    var buffer = LineBuffer()
+    let payload = Array(([ampInitLine, ampAssistantLine, "not json", ""].joined(separator: "\n") + "\n" + ampResultLine).utf8)
+    var lines: [String] = []
+    for start in stride(from: 0, to: payload.count, by: 3) {
+        lines += buffer.append(Data(payload[start..<min(start + 3, payload.count)]))
+    }
+    if let rest = buffer.finish() { lines.append(rest) }
+    check(lines == [ampInitLine, ampAssistantLine, "not json", ampResultLine], "lines reassembled across chunks (incl. UTF-8)")
+
+    let events = lines.map(AmpCloudClient.decodeEvent)
+    check(events[0] == .initialized(threadID: ampThreadA), "system/init carries the thread")
+    check(events[1] == .progress("Looking into it — café\n→ Grep"), "assistant text + tool use become progress")
+    check(events[2] == .ignored, "non-JSON ignored")
+    check(events[3] == .result("The answer."), "result decoded")
+    check(AmpCloudClient.decodeEvent(#"{"type":"mystery","x":1}"#) == .ignored, "unknown event types ignored")
+    check(AmpCloudClient.decodeEvent(#"{"type":"user","message":{"content":[]}}"#) == .ignored, "tool results ignored")
+    check(AmpCloudClient.decodeEvent(ampErrorLine) == .error(message: "Too many turns", subtype: "error_max_turns"), "is_error result")
+    check(AmpCloudClient.decodeEvent(#"{"type":"system","subtype":"error_during_execution","error":"Orb crashed"}"#)
+          == .error(message: "Orb crashed", subtype: "error_during_execution"), "system error event decoded")
+    check(AmpCloudClient.decodeEvent(#"{"type":"system","subtype":"error_max_turns","error":"Hit turn limit"}"#)
+          == .error(message: "Hit turn limit", subtype: "error_max_turns"), "system max-turns error decoded")
+    check(AmpCloudClient.decodeEvent(#"{"type":"system","subtype":"status","message":"ok"}"#) == .ignored, "non-error system subtype ignored")
+
+    let packaged = AmpCloudClient.packagePrompt(instruction: "Fix the bug", excerpt: "Selected text")
+    check(packaged.contains("Fix the bug") && packaged.contains("Selected text"), "Amp prompt includes instruction and excerpt")
+    check(!packaged.contains("Read-only mode") && !packaged.contains(CopilotCloudClient.readOnlyGuardrail),
+          "Amp prompt does not inject Copilot read-only guardrail")
+    check(AmpCloudClient.packagePrompt(instruction: "Follow up", excerpt: nil) == "Follow up",
+          "Amp follow-up prompt is not wrapped in read-only guardrail")
+
+    let tracker = AmpStreamTracker()
+    events.prefix(3).forEach(tracker.observe)
+    check(tracker.snapshot().terminal == nil, "end_turn is not terminal")
+    tracker.observe(events[3])
+    check(tracker.snapshot().terminal == .completed(threadID: ampThreadA, result: "The answer."), "result is terminal")
+}
+
+test("Amp lifecycle: stopping, continuation and notifications") {
+    var queued = Intent(step: 1, text: "q", provider: "Amp Cloud", cloudTask: AmpCloudLifecycle.newRef(project: "o/r"))
+    check(AmpCloudLifecycle.markStopped(&queued) == .cancelled && queued.status == .failed, "never-launched turn is cancelled")
+    var live = Intent(step: 2, text: "l", provider: "Amp Cloud", cloudTask: AmpCloudLifecycle.newRef(project: "o/r"))
+    AmpCloudLifecycle.applyThread(ampThreadA, to: &live)
+    check(AmpCloudLifecycle.markStopped(&live) == .disconnected, "live turn becomes outcome unknown")
+    check(live.cloudTask?.taskID == ampThreadA && live.cloudTask?.htmlURL.hasSuffix(ampThreadA) == true, "thread handle preserved")
+    check(AmpCloudLifecycle.markStopped(&live) == nil, "already-stopped turns are left alone")
+    AmpCloudLifecycle.applyThread(ampThreadB, to: &live)
+    check(live.cloudTask?.cloudState == "disconnected" && live.cloudTask?.taskID == ampThreadA, "late init never reopens a finished turn")
+    var copilot = Intent(step: 3, text: "c", cloudTask: CloudTaskRef(repo: "o/r", baseRef: "main", taskID: "t", htmlURL: "", cloudState: "in_progress"))
+    check(AmpCloudLifecycle.markStopped(&copilot) == nil && copilot.cloudTask?.cloudState == "in_progress", "Copilot tasks untouched")
+
+    let threadA = UUID(), threadB = UUID()
+    func amp(_ thread: UUID?, _ id: String) -> Intent {
+        var ref = AmpCloudLifecycle.newRef(project: "o/r")
+        ref.taskID = id
+        var intent = Intent(step: 1, text: "x", provider: "Amp Cloud", cloudTask: ref)
+        intent.thread = thread
+        return intent
+    }
+    var copilotInA = copilot
+    copilotInA.thread = threadA
+    let intents = [amp(threadA, ampThreadA), amp(threadB, ampThreadB), amp(threadA, ""), copilotInA]
+    check(AmpCloudLifecycle.continuationThreadID(in: intents, thread: threadA) == ampThreadA, "thread A continues its own Amp thread")
+    check(AmpCloudLifecycle.continuationThreadID(in: intents, thread: threadB) == ampThreadB, "thread B continues its own Amp thread")
+    check(AmpCloudLifecycle.continuationThreadID(in: intents, thread: UUID()) == nil, "new Margins threads start new Amp threads")
+    check(AmpCloudLifecycle.continuationThreadID(in: intents, thread: nil) == nil, "composer prompts start new threads")
+
+    var done = amp(threadA, ampThreadA)
+    done.status = .reviewed
+    AmpCloudLifecycle.apply(.failed(threadID: ampThreadA, message: "boom"), to: &done)
+    check(done.status == .reviewed && done.cloudTask?.cloudState == "failed", "review status is never overwritten")
+    check(AmpCloudLifecycle.notificationOutcome(for: done, state: .submitted) == nil, "submitted runs do not notify")
+    let log = (0..<450).reduce(nil as String?) { AmpCloudLifecycle.appendingProgress("line \($1)", to: $0) }
+    check(log?.hasPrefix("line 50\n") == true && log?.hasSuffix("line 449") == true, "progress log keeps the latest lines")
+    check(AmpCloudLifecycle.notificationOutcome(for: done, state: .failed) == .failed(error: "boom"), "failures notify")
+}
+
+let ampSem = DispatchSemaphore(value: 0)
+Task {
+    // Streamed run: chunked NDJSON → completed; secret only in the child environment.
+    do {
+        let runner = MockCloudCommandRunner(binaries: ampBinaries, handlers: [
+            ampPass, ampStream([ampInitLine, ampAssistantLine, #"{"type":"telemetry"}"#, ampResultLine])
+        ])
+        let events = AmpEventLog()
+        let outcome = try await ampClient(runner).streamTurn(project: "o/r", prompt: "Summarize sync") { event in
+            switch event {
+            case .initialized(let id): events.add("init:\(id)")
+            case .progress(let text): events.add("progress:\(text)")
+            case .result(let text): events.add("result:\(text)")
+            case .error(let message, _): events.add("error:\(message)")
+            case .ignored: events.add("ignored")
+            }
+        }
+        check(outcome == .completed(threadID: ampThreadA, result: "The answer."), "streamed turn completes on result")
+        check(events.all.first == "init:\(ampThreadA)" && events.all.last == "result:The answer.", "init first, result last")
+        check(!events.all.contains("ignored"), "ignored events are not forwarded")
+        let calls = await runner.calls()
+        check(calls.count == 2 && calls[0].arguments == ["show", "AMPCODE/API_KEY"], "key read once from pass")
+        let launch = calls[1]
+        check(launch.executable == ampBin && launch.arguments == AmpCloudClient.streamArguments(project: "o/r"), "launch argv")
+        check(launch.stdin == "Summarize sync", "prompt sent on stdin")
+        check(launch.environment?["AMP_API_KEY"] == ampSecret, "key passed via AMP_API_KEY")
+        check(launch.environment?["PATH"]?.isEmpty == false, "child environment keeps PATH")
+        check(!launch.arguments.joined().contains(ampSecret) && launch.stdin?.contains(ampSecret) == false, "key never in argv/stdin")
+    } catch {
+        check(false, "Amp streamed turn threw \(error)")
+    }
+
+    // is_error result and system error events → failed (with subtype); a result is terminal regardless of exit status.
+    do {
+        let systemErrLine = #"{"type":"system","subtype":"error_during_execution","error":"Orb crashed"}"#
+        let runner = MockCloudCommandRunner(binaries: ampBinaries, handlers: [
+            ampPass,
+            ampStream([ampInitLine, ampErrorLine], status: 1),
+            ampStream([ampInitLine, systemErrLine], status: 1),
+            ampStream([ampInitLine, ampResultLine], status: 2)
+        ])
+        let client = ampClient(runner)
+        let failed = try await client.streamTurn(project: "o/r", prompt: "p") { _ in }
+        check(failed == .failed(threadID: ampThreadA, message: "error_max_turns: Too many turns"), "is_error result fails")
+        let sysFailed = try await client.streamTurn(project: "o/r", prompt: "p") { _ in }
+        check(sysFailed == .failed(threadID: ampThreadA, message: "error_during_execution: Orb crashed"),
+              "system error event without result fails instead of disconnecting")
+        let ok = try await client.streamTurn(project: "o/r", prompt: "p") { _ in }
+        check(ok == .completed(threadID: ampThreadA, result: "The answer."), "result wins over exit status")
+        let awaited1 = await runner.calls().count == 4
+        check(awaited1, "cached key: pass called once for three turns")
+    } catch {
+        check(false, "Amp terminal semantics threw \(error)")
+    }
+
+    // Interrupted stream → disconnected, handle kept, nothing relaunched.
+    do {
+        let runner = MockCloudCommandRunner(binaries: ampBinaries, handlers: [ampPass, ampStream([ampInitLine, ampAssistantLine], status: 143)])
+        let outcome = try await ampClient(runner).streamTurn(project: "o/r", prompt: "p") { _ in }
+        guard case .disconnected(let id, _) = outcome else { check(false, "expected disconnected, got \(outcome)"); return }
+        check(id == ampThreadA, "disconnected outcome keeps the thread")
+        var intent = Intent(step: 1, text: "p", provider: "Amp Cloud", cloudTask: AmpCloudLifecycle.newRef(project: "o/r"))
+        check(AmpCloudLifecycle.apply(outcome, to: &intent) == .disconnected, "intent marked outcome unknown")
+        check(intent.cloudTask?.htmlURL == "https://ampcode.com/threads/\(ampThreadA)", "thread link persisted")
+        check(intent.error?.hasPrefix("Outcome unknown") == true, "explains the unknown outcome")
+        check(!CloudWatcherPolicy.shouldWatch(intent.cloudTask!), "disconnected Amp runs are not re-watched")
+        let awaited2 = await runner.calls().count == 2
+        check(awaited2, "no retry after an interrupted stream")
+    } catch {
+        check(false, "Amp interrupted stream threw \(error)")
+    }
+
+    // Detached dispatch: exactly one amp call; submitted or unknown, never retried.
+    do {
+        let url = "https://ampcode.com/threads/\(ampThreadB)"
+        let runner = MockCloudCommandRunner(binaries: ampBinaries, handlers: [
+            ampPass,
+            { _, _ in ProcessResult(status: 0, stdout: "Thread started: \(url)\n", stderr: "") },
+            { _, _ in ProcessResult(status: 0, stdout: "ok\n", stderr: "") },
+            { _, _ in ProcessResult(status: 1, stdout: "", stderr: "auth failed for key \(ampSecret)") }
+        ])
+        let client = ampClient(runner)
+        let submitted = try await client.dispatchDetached(project: "o/r", prompt: "Long task")
+        check(submitted == .submitted(threadID: ampThreadB), "detached launch returns the thread")
+        let calls = await runner.calls()
+        check(calls.count == 2 && calls[1].arguments == AmpCloudClient.detachedArguments(project: "o/r"), "single detached amp call")
+        let unknown = try await client.dispatchDetached(project: "o/r", prompt: "Long task")
+        guard case .disconnected(nil, _) = unknown else { check(false, "unparseable detached output should be unknown"); return }
+        let awaited3 = await runner.calls().count == 3
+        check(awaited3, "unparseable detached output is not retried")
+        let failed = try await client.dispatchDetached(project: "o/r", prompt: "Long task")
+        guard case .failed(_, let message) = failed else { check(false, "expected failure"); return }
+        check(!message.contains(ampSecret) && message.contains("[REDACTED]"), "errors are redacted")
+        var intent = Intent(step: 1, text: "p", provider: "Amp Cloud", cloudTask: AmpCloudLifecycle.newRef(project: "o/r"))
+        check(AmpCloudLifecycle.apply(submitted, to: &intent) == .submitted && intent.status == .done, "submitted intent")
+        let saved = String(decoding: try JSONEncoder().encode(intent), as: UTF8.self)
+        check(!saved.contains(ampSecret), "key never persisted in the document")
+    } catch {
+        check(false, "Amp detached dispatch threw \(error)")
+    }
+
+    // Credentials: env fallback, timeout, invalidate, missing binary; key redacted from streamed text.
+    do {
+        let slowPass: AmpHandler = { _, _ in
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+            return ProcessResult(status: 0, stdout: ampSecret, stderr: "")
+        }
+        let started = Date()
+        let timed = AmpCredentialProvider(runner: MockCloudCommandRunner(binaries: ampBinaries, handlers: [slowPass]),
+                                          environment: [:], timeout: 0.2)
+        do {
+            _ = try await timed.apiKey()
+            check(false, "stuck pass should time out")
+        } catch let error as AmpCredentialError {
+            check(error == .timedOut, "pass timeout reported")
+            check(Date().timeIntervalSince(started) < 2, "timeout does not wait for pass to exit")
+        }
+        let fallback = AmpCredentialProvider(
+            runner: MockCloudCommandRunner(binaries: ampBinaries, handlers: [{ _, _ in ProcessResult(status: 2, stdout: "", stderr: "gpg: decryption failed") }]),
+            environment: ["AMP_API_KEY": " env-key \n"])
+        let awaited4 = try await fallback.apiKey() == "env-key"
+        check(awaited4, "AMP_API_KEY fallback")
+        let noPass = AmpCredentialProvider(runner: MockCloudCommandRunner(binaries: [:]), environment: [:])
+        do { _ = try await noPass.apiKey(); check(false, "no key source should throw") } catch { check(error is AmpCredentialError, "unavailable key") }
+
+        let runner = MockCloudCommandRunner(binaries: ampBinaries, handlers: [ampPass, ampPass])
+        let provider = AmpCredentialProvider(runner: runner, environment: [:])
+        _ = try await provider.apiKey()
+        _ = try await provider.apiKey()
+        let awaited5 = await runner.calls().count == 1
+        check(awaited5, "key cached in memory")
+        await provider.invalidate()
+        _ = try await provider.apiKey()
+        let awaited6 = await runner.calls().count == 2
+        check(awaited6, "invalidate re-reads pass")
+
+        let missing = MockCloudCommandRunner(binaries: [:])
+        let awaited7 = await ampClient(missing).preflight() == .missingBinary
+        check(awaited7, "preflight reports missing amp")
+        do { _ = try await ampClient(missing).streamTurn(project: "o/r", prompt: "p") { _ in }; check(false, "missing amp should throw") }
+        catch { check(error as? AmpCloudError == .missingBinary, "missing amp throws") }
+
+        let leaky = #"{"type":"result","subtype":"success","is_error":false,"result":"key=\#(ampSecret)"}"#
+        let leakRunner = MockCloudCommandRunner(binaries: ampBinaries, handlers: [ampPass, ampStream([ampInitLine, leaky])])
+        let leakEvents = AmpEventLog()
+        let leaked = try await ampClient(leakRunner).streamTurn(project: "o/r", prompt: "p") { event in
+            if case .result(let text) = event { leakEvents.add(text) }
+        }
+        check(leaked == .completed(threadID: ampThreadA, result: "key=[REDACTED]") && leakEvents.all == ["key=[REDACTED]"],
+              "key redacted from results and events")
+    } catch {
+        check(false, "Amp credential tests threw \(error)")
+    }
+
+    // Thread isolation: per-key serialization, other keys run concurrently; follow-ups continue their own thread.
+    do {
+        let serializer = AmpTurnSerializer()
+        let order = AmpEventLog()
+        let keyA = AmpTurnSerializer.key(thread: UUID(), intentID: UUID())
+        let keyB = AmpTurnSerializer.key(thread: nil, intentID: UUID())
+        async let first: Void = serializer.run(key: keyA) {
+            order.add("a1-start")
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            order.add("a1-end")
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        async let second: Void = serializer.run(key: keyA) { order.add("a2") }
+        async let other: Void = serializer.run(key: keyB) { order.add("b") }
+        _ = await (first, second, other)
+        let log = order.all
+        check(log.firstIndex(of: "a2")! > log.firstIndex(of: "a1-end")!, "follow-ups wait for the previous turn")
+        check(log.firstIndex(of: "b")! < log.firstIndex(of: "a1-end")!, "other threads are not blocked")
+
+        let runner = MockCloudCommandRunner(binaries: ampBinaries, handlers: [ampPass, ampStream([ampResultLine])])
+        let outcome = try await ampClient(runner).continueTurn(threadID: ampThreadB, prompt: "And then?") { _ in }
+        check(outcome == .completed(threadID: nil, result: "The answer."), "follow-up completes")
+        let awaited8 = await runner.calls().last?.arguments == AmpCloudClient.continueArguments(threadID: ampThreadB)
+        check(awaited8, "continues the saved thread")
+        do { _ = try await ampClient(runner).continueTurn(threadID: "T-x; rm", prompt: "p") { _ in }; check(false, "bad id") }
+        catch { check(error as? AmpCloudError != nil, "invalid thread IDs rejected before launch") }
+    } catch {
+        check(false, "Amp serialization tests threw \(error)")
+    }
+
+    // Opt-in live two-turn smoke test (needs `amp` and a key): MARGINS_TEST_AMP_LIVE=1 [MARGINS_TEST_AMP_PROJECT=owner/repo]
+    let liveEnv = ProcessInfo.processInfo.environment
+    if liveEnv["MARGINS_TEST_AMP_LIVE"] == "1" {
+        let client = AmpCloudClient()
+        let status = await client.preflight()
+        check(status.isReady, "live: amp preflight \(status)")
+        do {
+            let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            var project = liveEnv["MARGINS_TEST_AMP_PROJECT"] ?? ""
+            if project.isEmpty { project = try await client.resolveProject(in: cwd) }
+            let turn1 = try await client.streamTurn(
+                project: project,
+                prompt: "Remember the marker orch-718 for our next message. Reply with exactly: noted",
+                cwd: cwd
+            ) { _ in }
+            guard case .completed(let id1, let text1) = turn1, let threadID = id1 else {
+                check(false, "live: turn 1 expected completion with thread ID, got \(turn1)"); return
+            }
+            check(AmpCloudClient.isValidThreadID(threadID) && !text1.isEmpty, "live: turn 1 completes with valid thread ID")
+            let turn2 = try await client.continueTurn(
+                threadID: threadID,
+                prompt: "What marker did I ask you to remember? Reply with just the marker.",
+                cwd: cwd
+            ) { _ in }
+            guard case .completed(let id2, let text2) = turn2 else {
+                check(false, "live: turn 2 expected completion, got \(turn2)"); return
+            }
+            check((id2 == nil || id2 == threadID) && text2.contains("orch-718"), "live: turn 2 continues same thread and recalls marker")
+        } catch {
+            check(false, "live Amp smoke test threw \(error)")
+        }
+    }
+
+    ampSem.signal()
+}
+ampSem.wait()
 
 print(failures == 0 ? "✓ \(passes) checks passed" : "\(failures) failed, \(passes) passed")
 exit(failures == 0 ? 0 : 1)

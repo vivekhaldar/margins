@@ -237,6 +237,32 @@ public enum BinaryLocator {
     }
 }
 
+/// Splits a byte stream into newline-terminated lines across arbitrary read-chunk boundaries
+/// (NDJSON / streamed CLI output). Empty lines are dropped.
+public struct LineBuffer: Sendable {
+    private var pending = Data()
+
+    public init() {}
+
+    /// Appends a chunk and returns every line it completed.
+    public mutating func append(_ chunk: Data) -> [String] {
+        pending.append(chunk)
+        var lines: [String] = []
+        while let nl = pending.firstIndex(of: 0x0A) {
+            let line = String(decoding: pending[pending.startIndex..<nl], as: UTF8.self)
+            pending.removeSubrange(pending.startIndex...nl)
+            if !line.isEmpty { lines.append(line) }
+        }
+        return lines
+    }
+
+    /// The trailing partial line once the stream ends, if any.
+    public mutating func finish() -> String? {
+        defer { pending.removeAll() }
+        return pending.isEmpty ? nil : String(decoding: pending, as: UTF8.self)
+    }
+}
+
 public struct ProcessResult: Sendable {
     public var status: Int32
     public var stdout: String
@@ -267,19 +293,14 @@ public enum ProcessRunner {
                 DispatchQueue.global().async {
                     let h = outPipe.fileHandleForReading
                     if let onLine {
-                        var pending = Data()
+                        var lines = LineBuffer()
                         while true {
                             let chunk = h.availableData
                             if chunk.isEmpty { break }
                             outData.data.append(chunk)
-                            pending.append(chunk)
-                            while let nl = pending.firstIndex(of: 0x0A) {
-                                let line = String(decoding: pending[pending.startIndex..<nl], as: UTF8.self)
-                                pending.removeSubrange(pending.startIndex...nl)
-                                if !line.isEmpty { onLine(line) }
-                            }
+                            lines.append(chunk).forEach(onLine)
                         }
-                        if !pending.isEmpty { onLine(String(decoding: pending, as: UTF8.self)) }
+                        if let rest = lines.finish() { onLine(rest) }
                     } else {
                         outData.data = h.readDataToEndOfFile()
                     }

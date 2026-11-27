@@ -2,13 +2,28 @@ import Foundation
 
 public protocol CloudCommandRunner: Sendable {
     func locate(_ name: String) -> URL?
+    /// `environment` nil = the default child environment. A custom one must start from
+    /// `BinaryLocator.childEnvironment(for:)` so `PATH` (node, amp, …) is preserved.
     func run(
         _ executable: URL,
         arguments: [String],
         stdin: String?,
         cwd: URL?,
+        environment: [String: String]?,
         onLine: (@Sendable (String) -> Void)?
     ) async throws -> ProcessResult
+}
+
+extension CloudCommandRunner {
+    public func run(
+        _ executable: URL,
+        arguments: [String],
+        stdin: String?,
+        cwd: URL?,
+        onLine: (@Sendable (String) -> Void)?
+    ) async throws -> ProcessResult {
+        try await run(executable, arguments: arguments, stdin: stdin, cwd: cwd, environment: nil, onLine: onLine)
+    }
 }
 
 public struct ProcessCloudCommandRunner: CloudCommandRunner {
@@ -23,9 +38,12 @@ public struct ProcessCloudCommandRunner: CloudCommandRunner {
         arguments: [String],
         stdin: String?,
         cwd: URL?,
+        environment: [String: String]?,
         onLine: (@Sendable (String) -> Void)?
     ) async throws -> ProcessResult {
-        try await ProcessRunner.run(executable, arguments: arguments, stdin: stdin, cwd: cwd, onLine: onLine)
+        try await ProcessRunner.run(
+            executable, arguments: arguments, stdin: stdin, cwd: cwd, environment: environment, onLine: onLine
+        )
     }
 }
 
@@ -156,6 +174,10 @@ public enum CloudTaskState: Equatable, Sendable {
     case failed
     case cancelled
     case timedOut
+    /// Handed off without a live stream (Amp detached launch); Margins no longer watches it.
+    case submitted
+    /// The live stream closed before a result arrived; the remote outcome is unknown.
+    case disconnected
     case unknown(String)
 
     public init(rawState: String) {
@@ -168,6 +190,8 @@ public enum CloudTaskState: Equatable, Sendable {
         case "failed": self = .failed
         case "cancelled", "canceled": self = .cancelled
         case "timed_out": self = .timedOut
+        case "submitted": self = .submitted
+        case "disconnected": self = .disconnected
         default: self = .unknown(rawState)
         }
     }
@@ -182,6 +206,8 @@ public enum CloudTaskState: Equatable, Sendable {
         case .failed: return "failed"
         case .cancelled: return "cancelled"
         case .timedOut: return "timed_out"
+        case .submitted: return "submitted"
+        case .disconnected: return "disconnected"
         case .unknown(let raw): return raw
         }
     }
@@ -209,8 +235,8 @@ public enum CloudTaskState: Equatable, Sendable {
 
     public var intentStatus: Intent.Status {
         switch self {
-        case .completed: return .done
-        case .failed, .cancelled, .timedOut: return .failed
+        case .completed, .submitted: return .done
+        case .failed, .cancelled, .timedOut, .disconnected: return .failed
         case .queued, .inProgress, .waitingForUser, .idle, .unknown: return .working
         }
     }
@@ -224,6 +250,8 @@ public enum CloudTaskState: Equatable, Sendable {
         case .failed: return "Failed"
         case .cancelled: return "Cancelled"
         case .timedOut: return "Timed out"
+        case .submitted: return "Submitted"
+        case .disconnected: return "Outcome unknown"
         case .unknown(let raw): return raw.isEmpty ? "Unknown" : raw
         }
     }
@@ -235,7 +263,7 @@ public enum CloudTaskState: Equatable, Sendable {
         hasEdits: Bool = false
     ) -> AgentNotificationOutcome? {
         switch self {
-        case .queued, .inProgress, .unknown:
+        case .queued, .inProgress, .submitted, .disconnected, .unknown:
             return nil
         case .waitingForUser, .idle:
             let message = detail.isEmpty ? "Cloud task is waiting for your input on GitHub." : detail
@@ -261,7 +289,8 @@ public enum CloudTaskFormatter {
         log: String?,
         summary: String,
         pullRequestURL: String?,
-        htmlURL: String?
+        htmlURL: String?,
+        backend: CloudBackend = .copilot
     ) -> String {
         let bodyText = [reply, summary, log.map { extractSummary(fromLog: $0) }]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -281,7 +310,7 @@ public enum CloudTaskFormatter {
             links.append("<a href=\"\(escapeHTML(pr))\">Pull Request</a>")
         }
         if let task = safeWebURL(htmlURL) {
-            links.append("<a href=\"\(escapeHTML(task))\">Copilot Cloud Task</a>")
+            links.append("<a href=\"\(escapeHTML(task))\">\(escapeHTML(backend.taskLinkTitle))</a>")
         }
         if !links.isEmpty {
             blocks.append("<p><em>Source: \(links.joined(separator: " · "))</em></p>")

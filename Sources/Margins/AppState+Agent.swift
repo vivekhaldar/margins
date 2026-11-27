@@ -239,7 +239,7 @@ extension AppState {
                         "reply": m.reply ?? "",
                         "summary": m.summary,
                         "notes": m.notes,
-                        "files": m.files ?? [], "cloud": m.provider == CloudInsertionPlan.provider,
+                        "files": m.files ?? [], "cloud": CloudBackend.isCloudProvider(m.provider),
                         "changes": pending.byStep[m.step] ?? 0,
                         "error": m.error ?? "",
                         "waiting": permissionAsks[m.step] != nil,
@@ -357,7 +357,7 @@ extension AppState {
     /// Stop the agent working on an instruction.
     func stop(step: Int) {
         answerPermission(step: step, .deny)
-        running[step]?.cancel()
+        running[step]?.cancel(); stopAmpTurn(step: step)
         guard let runID = activeRunIDs[step], let index = doc.annotationRuns.firstIndex(where: { $0.id == runID }) else { return }
         doc.annotationRuns[index].status = "failed"
         if !doc.annotationRuns[index].notes.contains("Stopped.") { doc.annotationRuns[index].notes.append("Stopped.") }

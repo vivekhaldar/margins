@@ -47,6 +47,16 @@ A small `ModelProvider` protocol (`listModels()`, `complete(request)`) with four
 
 `claude /login` with a Claude Pro/Max account uses that plan. Print mode can't prompt for permission, so the policy pre-approves a fixed tool list (`--allowedTools … --permission-mode dontAsk`). Anything else is refused.
 
+### Cloud mode: Copilot Cloud or Amp remote orbs
+
+The composer's **Cloud** target has a backend picker. *Copilot* submits a GitHub Copilot coding-agent task through `gh`. *Amp* runs a remote orb against a GitHub project (`owner/repo`, pushed code only):
+
+`amp -ox --project <owner/repo> --stream-json --no-archive-after-execute` (prompt on stdin)
+
+Margins reads the NDJSON stream: the init event carries the thread ID (`T-…`), assistant and tool events become the run log, and the final `result` becomes the answer. Selection-thread follow-ups continue the same thread with `amp threads continue <T-…> -ox --stream-json`. **Detached** mode (`amp -ox --project <owner/repo>`) only records the thread link and returns; follow the run on ampcode.com. If the stream drops or Margins quits mid-run, the turn shows *Outcome unknown* with its thread link, since Margins can't reattach.
+
+The API key comes from `pass show AMPCODE/API_KEY` (first line), falling back to `AMP_API_KEY`. It is fetched only when you launch a turn or press Recheck, cached in memory, passed only through the `amp` child's environment, and redacted from logs and errors. Local execution is unchanged.
+
 ### Anything else: OpenAI-compatible HTTP
 
 Base URL + optional API key (stored in the macOS **Keychain**) + model. This covers OpenAI/Azure/OpenRouter API keys and **local** servers such as Ollama (`http://localhost:11434/v1`) and LM Studio with no key.

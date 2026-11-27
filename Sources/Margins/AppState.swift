@@ -76,7 +76,7 @@ final class AppState: ObservableObject {
     var fileWatcher: FileChangeWatcher?
     @Published var projectFolderRevision = 0
 
-    // Copilot Cloud Agent state (logic in AppState+CloudAgents.swift)
+    // Cloud agent state: Copilot (logic in AppState+CloudAgents.swift)
     @Published var composerTarget: ComposerTarget = .local {
         didSet {
             let isCloud = composerTarget == .cloud
@@ -94,6 +94,14 @@ final class AppState: ObservableObject {
     var cloudLogTasks: [UUID: Task<Void, Never>] = [:]
     var cloudNotifiedAttention: Set<UUID> = []
     let cloudClient = CopilotCloudClient()
+    // Amp Cloud state (logic in AppState+AmpCloud.swift); `cloudRepo` doubles as the Amp project.
+    @Published var cloudBackend: CloudBackend = .copilot
+    @Published var ampDetached = false
+    @Published var ampAuthStatus: AmpPreflightStatus?
+    var ampStreamTasks: [UUID: Task<Void, Never>] = [:]
+    let ampSerializer = AmpTurnSerializer()
+    /// Shared by every window so the key is read from `pass` (and pinentry shown) at most once per launch.
+    static let sharedAmpClient = AmpCloudClient()
 
     init(restoreLastDocument: Bool = false, untitledURL: URL? = nil, defaults: UserDefaults = .standard,
          projectFolderStore: ProjectFolderStore = .shared) {

@@ -21,9 +21,10 @@ extension AppState {
 
     // MARK: - Context & Preflight
 
-    func refreshCloudContext(forceRepoResolve: Bool = false) {
+    func refreshCopilotCloudContext(forceRepoResolve: Bool) {
         let project = projectURL
         let shouldResolve = forceRepoResolve || cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let session = documentSessionID
         let client = cloudClient
 
@@ -89,7 +90,7 @@ extension AppState {
         }
     }
 
-    func submitCloud(_ raw: String, thread: CloudThreadAnchor? = nil, paragraphBlockID: String? = nil) {
+    func submitCopilotCloud(_ raw: String, thread: CloudThreadAnchor?, paragraphBlockID: String?) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let repo = cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -166,10 +167,6 @@ extension AppState {
 
     // MARK: - Polling Lifecycle
 
-    func resumeCloudPolling() {
-        startCloudWatchers(trigger: .open)
-    }
-
     /// Focus only fills gaps (a live `--log --follow` stream is left alone); wake restarts every watcher
     /// because `gh` children may be stuck on sockets that died while the machine slept.
     func pollActiveCloudTasksImmediately(trigger: CloudReconcileTrigger) {
@@ -177,10 +174,10 @@ extension AppState {
         startCloudWatchers(trigger: trigger)
     }
 
-    private func startCloudWatchers(trigger: CloudReconcileTrigger) {
+    func startCloudWatchers(trigger: CloudReconcileTrigger) {
         for intent in doc.intents {
             guard let task = intent.cloudTask,
-                  CloudTaskState(rawState: task.cloudState).shouldPoll,
+                  CloudWatcherPolicy.shouldWatch(task),
                   CloudWatcherPolicy.shouldStartWatcher(trigger: trigger, watcherRunning: cloudPollTasks[intent.id] != nil)
             else { continue }
             if let blockID = task.paragraphBlockID {
@@ -200,7 +197,7 @@ extension AppState {
         }
     }
 
-    func cancelCloudPolling() {
+    func cancelCopilotCloudWatchers() {
         for task in cloudPollTasks.values { task.cancel() }
         cloudPollTasks.removeAll()
         for task in cloudLogTasks.values { task.cancel() }
@@ -270,7 +267,7 @@ extension AppState {
     private func pollCloudOnce(intentID: UUID, session: UUID) async -> Bool {
         guard documentSessionID == session,
               let intent = doc.intents.first(where: { $0.id == intentID }),
-              let task = intent.cloudTask else { return false }
+              let task = intent.cloudTask, task.resolvedBackend == .copilot else { return false }
         do {
             let snapshot = try await cloudClient.fetchTask(repo: task.repo, id: task.taskID)
             guard documentSessionID == session else { return false }
@@ -368,7 +365,7 @@ extension AppState {
     func setCloudLogExpanded(_ expanded: Bool, for intentID: UUID) {
         guard expanded else { return }
         guard let intent = doc.intents.first(where: { $0.id == intentID }),
-              let task = intent.cloudTask,
+              let task = intent.cloudTask, task.resolvedBackend == .copilot,
               let sessionID = task.sessionID else { return }
 
         let state = CloudTaskState(rawState: task.cloudState)
@@ -407,7 +404,7 @@ extension AppState {
         Task { await applyCloudResultToDocument(intentID: intentID, allowEndPreview: true) }
     }
 
-    private func applyCloudResultToDocument(intentID: UUID, allowEndPreview: Bool) async {
+    func applyCloudResultToDocument(intentID: UUID, allowEndPreview: Bool) async {
         if !allowEndPreview && previewing != nil { return }
         guard let intent = doc.intents.first(where: { $0.id == intentID }), intent.cloudTask != nil else { return }
         let log = cloudLogs[intentID]
@@ -456,12 +453,12 @@ extension AppState {
 
     // MARK: - Helpers
 
-    private func updateCloudIntent(_ id: UUID, _ body: (inout Intent) -> Void) {
+    func updateCloudIntent(_ id: UUID, _ body: (inout Intent) -> Void) {
         guard let index = doc.intents.lastIndex(where: { $0.id == id }) else { return }
         body(&doc.intents[index])
     }
 
-    private func cloudExcerpt(thread: CloudThreadAnchor?) async -> String? {
+    func cloudExcerpt(thread: CloudThreadAnchor?) async -> String? {
         if let quote = thread?.quote.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty {
             return String(quote.prefix(3000))
         }

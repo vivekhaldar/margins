@@ -41,45 +41,67 @@ struct CloudComposerOptions: View {
     @EnvironmentObject var state: AppState
     @Environment(\.interfaceZoom) private var zoom
 
+    private var isAmp: Bool { state.cloudBackend == .amp }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            Picker("Cloud agent", selection: $state.cloudBackend) {
+                ForEach(CloudBackend.allCases, id: \.self) { Text($0.displayName).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(UITypography.controlSize(for: zoom, compact: true))
+            .onChange(of: state.cloudBackend) { _, _ in state.refreshCloudContext(forceRepoResolve: false) }
+
             HStack(spacing: 6) {
                 TextField("owner/repo", text: $state.cloudRepo)
                     .textFieldStyle(.roundedBorder)
                     .uiFont(.caption, design: .monospaced)
-                    .help("GitHub repository (owner/repo)")
-                TextField("main", text: $state.cloudBaseRef)
-                    .textFieldStyle(.roundedBorder)
-                    .uiFont(.caption, design: .monospaced)
-                    .frame(maxWidth: 110 * zoom)
-                    .help("Base branch on GitHub")
+                    .help(isAmp ? "Amp project: GitHub repository (owner/repo)" : "GitHub repository (owner/repo)")
+                if !isAmp {
+                    TextField("main", text: $state.cloudBaseRef)
+                        .textFieldStyle(.roundedBorder)
+                        .uiFont(.caption, design: .monospaced)
+                        .frame(maxWidth: 110 * zoom)
+                        .help("Base branch on GitHub")
+                }
             }
 
-            HStack(spacing: 8) {
-                Toggle("Open PR", isOn: $state.cloudCreatePR)
-                    .toggleStyle(.switch)
-                    .controlSize(UITypography.controlSize(for: zoom, compact: true))
-                    .uiFont(.caption)
-                Spacer()
-                Text(state.cloudCreatePR ? "Creates a pull request" : "Read-only instructions")
-                    .uiFont(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+            modeToggle
 
             if state.cloudDirtyFilesCount > 0 {
                 let count = state.cloudDirtyFilesCount
+                let base = isAmp ? "the pushed default branch" : (state.cloudBaseRef.isEmpty ? "base branch" : state.cloudBaseRef)
                 Label(
-                    "\(count) uncommitted local \(count == 1 ? "change" : "changes") — cloud runs against pushed \(state.cloudBaseRef.isEmpty ? "base branch" : state.cloudBaseRef) on GitHub.",
+                    "\(count) uncommitted local \(count == 1 ? "change" : "changes") — cloud runs against \(base) on GitHub.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .uiFont(.caption2)
                 .foregroundStyle(.orange)
             }
 
-            authGuidance
+            if isAmp { ampAuthGuidance } else { authGuidance }
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+    }
+
+    private var modeToggle: some View {
+        HStack(spacing: 8) {
+            Toggle(isAmp ? "Detached (fire & forget)" : "Open PR", isOn: isAmp ? $state.ampDetached : $state.cloudCreatePR)
+                .toggleStyle(.switch)
+                .controlSize(UITypography.controlSize(for: zoom, compact: true))
+                .uiFont(.caption)
+            Spacer()
+            Text(modeCaption)
+                .uiFont(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var modeCaption: String {
+        if isAmp { return state.ampDetached ? "Submit only; follow on ampcode.com" : "Streams the answer back" }
+        return state.cloudCreatePR ? "Creates a pull request" : "Read-only instructions"
     }
 
     @ViewBuilder
@@ -93,17 +115,45 @@ struct CloudComposerOptions: View {
             .uiFont(.caption2)
             .foregroundStyle(.red)
         case .notAuthenticated:
-            HStack(spacing: 6) {
-                Label("Not logged in to GitHub CLI. Run `gh auth login` in Terminal.", systemImage: "person.crop.circle.badge.exclamationmark")
-                    .uiFont(.caption2)
-                    .foregroundStyle(.red)
-                Spacer()
-                Button("Recheck") { state.refreshCloudContext(forceRepoResolve: false) }
-                    .buttonStyle(.borderless)
-                    .uiFont(.caption2)
+            recheckRow("Not logged in to GitHub CLI. Run `gh auth login` in Terminal.") {
+                state.refreshCloudContext(forceRepoResolve: false)
             }
         case .authenticated, .none:
             EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var ampAuthGuidance: some View {
+        switch state.ampAuthStatus {
+        case .missingBinary:
+            recheckRow("Amp CLI (`amp`) not found. Install it from ampcode.com.") { recheckAmp() }
+        case .credentialUnavailable(let detail):
+            VStack(alignment: .leading, spacing: 3) {
+                recheckRow("Amp API key unavailable.") { recheckAmp() }
+                Text("\(detail)\nStore it with `pass insert AMPCODE/API_KEY`; if gpg is locked, Recheck opens pinentry-mac (`brew install pinentry-mac`).")
+                    .uiFont(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        case .ready, .none:
+            EmptyView()
+        }
+    }
+
+    private func recheckAmp() {
+        state.refreshAmpCloudContext(forceRepoResolve: false, recheck: true)
+    }
+
+    private func recheckRow(_ message: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 6) {
+            Label(message, systemImage: "person.crop.circle.badge.exclamationmark")
+                .uiFont(.caption2)
+                .foregroundStyle(.red)
+            Spacer()
+            Button("Recheck", action: action)
+                .buttonStyle(.borderless)
+                .uiFont(.caption2)
         }
     }
 }
@@ -117,13 +167,14 @@ struct CloudTaskCardSection: View {
     @StateObject private var logExpanded = Local(false)
 
     private var taskState: CloudTaskState { CloudTaskState(rawState: task.cloudState) }
+    private var isAmp: Bool { task.resolvedBackend == .amp }
     private var logText: String { state.cloudLogs[intent.id] ?? "" }
     private var isStreaming: Bool { state.cloudStreamingIntentIDs.contains(intent.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             headerRow
-            if taskState.needsAttention {
+            if taskState.needsAttention && !isAmp {
                 attentionBanner
             }
             linksAndActionsRow
@@ -139,7 +190,7 @@ struct CloudTaskCardSection: View {
                 ProgressView().controlSize(UITypography.controlSize(for: zoom, compact: true))
             }
             cloudPill
-            Text("\(task.repo) · \(task.baseRef)")
+            Text(isAmp || task.baseRef.isEmpty ? task.repo : "\(task.repo) · \(task.baseRef)")
                 .uiFont(.caption2, design: .monospaced)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -170,7 +221,8 @@ struct CloudTaskCardSection: View {
         switch taskState {
         case .queued, .inProgress: return .accentColor
         case .waitingForUser, .idle: return .orange
-        case .completed: return .green
+        case .completed, .submitted: return .green
+        case .disconnected: return .orange
         case .failed, .cancelled, .timedOut: return .red
         case .unknown: return .secondary
         }
@@ -202,7 +254,7 @@ struct CloudTaskCardSection: View {
                 Button {
                     state.openCloudURL(task.htmlURL)
                 } label: {
-                    Label("GitHub Task", systemImage: "arrow.up.right.square")
+                    Label(isAmp ? "Amp Thread" : "GitHub Task", systemImage: "arrow.up.right.square")
                 }
                 .buttonStyle(.link)
                 .uiFont(.caption)
@@ -223,7 +275,7 @@ struct CloudTaskCardSection: View {
                 }
                 .uiFont(.caption)
                 .controlSize(UITypography.controlSize(for: zoom))
-            } else if taskState.shouldPoll {
+            } else if taskState.shouldPoll && !isAmp {
                 Button {
                     state.refreshCloudTask(intentID: intent.id)
                 } label: {

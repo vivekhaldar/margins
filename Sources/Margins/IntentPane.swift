@@ -118,7 +118,7 @@ struct IntentPane: View {
 
     private var composerPlaceholder: String {
         if state.composerTarget == .cloud {
-            return "Describe a task for Copilot Cloud Agent…"
+            return state.cloudBackend == .amp ? "Describe a task for Amp (remote orb)…" : "Describe a task for Copilot Cloud Agent…"
         }
         return state.doc.intents.isEmpty
             ? "What do you want to write? e.g. “A design doc for rate limiting our public API”"
@@ -129,7 +129,7 @@ struct IntentPane: View {
         if draftBox.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         if state.composerTarget == .cloud {
             return state.cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || (state.cloudBackend == .copilot && state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         return false
     }
