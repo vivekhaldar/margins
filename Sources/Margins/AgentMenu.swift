@@ -30,7 +30,15 @@ struct AgentMenu: View {
             Section("Local") {
                 if state.enabledProviders.isEmpty { Text("No enabled providers") }
                 ForEach(state.enabledProviders) { provider in
-                    Menu(provider.name) { localModels(provider) }
+                    Menu {
+                        localModels(provider)
+                    } label: {
+                        if state.agentTarget == .local(provider.id) {
+                            Label(provider.name, systemImage: "checkmark")
+                        } else {
+                            Text(provider.name)
+                        }
+                    }
                 }
             }
             Section("Cloud") {

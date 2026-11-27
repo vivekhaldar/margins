@@ -137,7 +137,7 @@ final class AppState: ObservableObject {
         didSet {
             guard cloudDefaultCreatePR != oldValue else { return }
             defaults.set(cloudDefaultCreatePR, forKey: "cloudDefaultCreatePR")
-            cloudCreatePR = cloudDefaultCreatePR
+            if cloudCreatePR == oldValue { cloudCreatePR = cloudDefaultCreatePR }
         }
     }
     @Published var cloudAuthStatus: CopilotCloudAuthStatus?
@@ -154,7 +154,7 @@ final class AppState: ObservableObject {
         didSet {
             guard ampDefaultDetached != oldValue else { return }
             defaults.set(ampDefaultDetached, forKey: "ampDefaultDetached")
-            ampDetached = ampDefaultDetached
+            if ampDetached == oldValue { ampDetached = ampDefaultDetached }
         }
     }
     @Published var ampAuthStatus: AmpPreflightStatus?
