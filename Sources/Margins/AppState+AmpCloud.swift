@@ -62,6 +62,8 @@ extension AppState {
         let needsPreflight = recheck || ampAuthStatus == nil
         let session = documentSessionID
         let client = ampClient
+        // Amp has no base ref; clear it so switching back to Copilot re-resolves this project's branch.
+        if forceRepoResolve { cloudBaseRef = "" }
 
         Task {
             if let project {

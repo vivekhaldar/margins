@@ -24,6 +24,7 @@ extension AppState {
     func refreshCopilotCloudContext(forceRepoResolve: Bool) {
         let project = projectURL
         let shouldResolve = forceRepoResolve || cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let session = documentSessionID
         let client = cloudClient
 
