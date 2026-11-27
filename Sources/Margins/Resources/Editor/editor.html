@@ -4,38 +4,42 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="editor.css">
+<link rel="stylesheet" href="chrome.css">
 </head>
 <body>
 <div class="bar" id="bar">
-  <span id="pending">No pending changes</span>
-  <span class="selbar" id="selbar"><span id="selcount"></span>
-    <button data-act="acc-sel">Accept selected</button>
-    <button data-act="rej-sel">Reject selected</button>
-    <button data-act="clear-sel">Clear</button>
-  </span>
+  <div class="formatbar" id="formatbar" role="toolbar" aria-label="Text formatting and annotations">
+    <button class="btn" data-format="paragraph" title="Body (⌘⇧0)" aria-label="Body">Body</button>
+    <button class="btn" data-format="h1" title="Heading 1 (⌘⌥1)" aria-label="Heading 1"><strong>H1</strong></button>
+    <button class="btn" data-format="h2" title="Heading 2 (⌘⌥2)" aria-label="Heading 2"><strong>H2</strong></button>
+    <button class="btn" data-format="h3" title="Heading 3 (⌘⌥3)" aria-label="Heading 3"><strong>H3</strong></button>
+    <span class="formatbar-sep" aria-hidden="true"></span>
+    <button class="btn" data-format="bold" title="Bold (⌘B)" aria-label="Bold"><strong>B</strong></button>
+    <button class="btn" data-format="italic" title="Italic (⌘I)" aria-label="Italic"><em>I</em></button>
+    <button class="btn" data-format="underline" title="Underline (⌘U)" aria-label="Underline"><u>U</u></button>
+    <span class="formatbar-sep" aria-hidden="true"></span>
+    <button class="btn" data-format="bullets" title="Bulleted list (⌘⇧8)" aria-label="Bulleted list">•<span class="fl"> Bullets</span></button>
+    <button class="btn" data-format="numbers" title="Numbered list (⌘⇧7)" aria-label="Numbered list">1.<span class="fl"> Numbers</span></button>
+    <button class="btn" data-format="checklist" title="Checklist (⌘⇧9)" aria-label="Checklist">☐<span class="fl"> Checklist</span></button>
+    <button class="btn" data-format="toggleCheck" title="Toggle checked (⌘⇧X)" aria-label="Toggle checked">✓</button>
+    <button class="btn" data-format="removeFormat" title="Clear inline formatting (⌘⌥0)" aria-label="Clear formatting">T<sub>x</sub></button>
+    <span class="annotation-controls">
+      <label class="annotation-toggle" for="annotation-toggle" title="Attribution &amp; comments"><input type="checkbox" id="annotation-toggle" aria-label="Attribution &amp; comments" aria-controls="annotation-layer annotation-card"><span class="fl">Attribution &amp; comments</span></label>
+      <button class="btn" id="annotation-list-button" title="Browse attribution and local comments" aria-haspopup="dialog" aria-expanded="false">Browse <span id="annotation-count"></span></button>
+    </span>
+  </div>
   <span class="sp"></span>
-  <span class="kb" id="kb"><kbd>Esc</kbd> then <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>X</kbd> select · <kbd>A</kbd>/<kbd>R</kbd> accept/reject · <kbd>C</kbd> refine · <kbd>⌘J</kbd> discuss selection · <kbd>⌘</kbd>-click select · <kbd>⌘K</kbd> link</span>
-  <button class="btn" id="rejAll" data-act="rej-all" disabled>Reject all</button>
-  <button class="btn p" id="accAll" data-act="acc-all" disabled>Accept all</button>
-</div>
-<div class="formatbar" id="formatbar" role="toolbar" aria-label="Text formatting and annotations">
-  <button class="btn" data-format="paragraph" title="Body (⌘⇧0)" aria-label="Body">Body</button>
-  <button class="btn" data-format="h1" title="Heading 1 (⌘⌥1)" aria-label="Heading 1"><strong>H1</strong></button>
-  <button class="btn" data-format="h2" title="Heading 2 (⌘⌥2)" aria-label="Heading 2"><strong>H2</strong></button>
-  <button class="btn" data-format="h3" title="Heading 3 (⌘⌥3)" aria-label="Heading 3"><strong>H3</strong></button>
-  <span class="formatbar-sep" aria-hidden="true"></span>
-  <button class="btn" data-format="bold" title="Bold (⌘B)" aria-label="Bold"><strong>B</strong></button>
-  <button class="btn" data-format="italic" title="Italic (⌘I)" aria-label="Italic"><em>I</em></button>
-  <button class="btn" data-format="underline" title="Underline (⌘U)" aria-label="Underline">Underline</button>
-  <button class="btn" data-format="bullets" title="Bulleted list (⌘⇧8)">• Bullets</button>
-  <button class="btn" data-format="numbers" title="Numbered list (⌘⇧7)">1. Numbers</button>
-  <button class="btn" data-format="checklist" title="Checklist (⌘⇧9)">☐ Checklist</button>
-  <button class="btn" data-format="toggleCheck" title="Toggle checked (⌘⇧X)">✓ Toggle checked</button>
-  <button class="btn" data-format="removeFormat" title="Clear inline formatting (⌘⌥0)">Clear formatting</button>
-  <span class="annotation-controls">
-    <label class="annotation-toggle" for="annotation-toggle"><input type="checkbox" id="annotation-toggle" aria-controls="annotation-layer annotation-card">Attribution &amp; comments</label>
-    <button class="btn" id="annotation-list-button" title="Browse attribution and local comments" aria-haspopup="dialog" aria-expanded="false">Browse <span id="annotation-count"></span></button>
-  </span>
+  <div class="review" id="review" role="group" aria-label="Review tracked changes">
+    <span id="pending" role="status" aria-live="polite">No pending changes</span>
+    <span class="selbar" id="selbar"><span id="selcount"></span>
+      <button data-act="acc-sel">Accept selected</button>
+      <button data-act="rej-sel">Reject selected</button>
+      <button data-act="clear-sel">Clear</button>
+    </span>
+    <span class="kb" id="kb" title="Esc then J/K move · X select · A/R accept/reject · C refine · ⌘J discuss selection · ⌘-click select · ⌘K link"><kbd>J</kbd>/<kbd>K</kbd> · <kbd>A</kbd>/<kbd>R</kbd></span>
+    <button class="btn" id="rejAll" data-act="rej-all" disabled>Reject all</button>
+    <button class="btn p" id="accAll" data-act="acc-all" disabled>Accept all</button>
+  </div>
 </div>
 <div class="findbar" id="findbar" role="search" hidden>
   <input id="findin" type="search" aria-label="Find in document" placeholder="Find in document" spellcheck="false" autocomplete="off">
@@ -85,6 +89,15 @@
   <header class="annotation-card-head"><h2 id="annotation-card-title">Attribution &amp; comments</h2><button type="button" class="annotation-close" id="annotation-close" aria-label="Close attribution and comments" title="Close (Esc)">✕</button></header>
   <div id="annotation-card-content"></div>
 </aside>
+<div class="zenpill" id="zenpill" role="toolbar" aria-label="Zen Mode" hidden>
+  <span class="zwords" id="zenwords">0 words</span>
+  <button class="zpending" id="zenpending" title="Jump to the next pending change" hidden></button>
+  <button class="zaccept" id="zenaccept" title="Accept all pending changes" hidden>Accept all</button>
+  <span class="zsep" aria-hidden="true"></span>
+  <button id="zentype" aria-pressed="false" title="Keep the caret line centered">Typewriter</button>
+  <button id="zenfocus" aria-pressed="false" title="Dim paragraphs other than the one you are writing">Focus</button>
+  <button class="zexit" id="zenexit" title="Exit Zen Mode (Esc or ⇧⌘F)">Exit Zen</button>
+</div>
 <div class="visually-hidden" id="annotation-status" role="status" aria-live="polite"></div>
 <div class="tpop" id="tpop">
   <div class="thd"><span class="tq" id="tquote"></span><button id="tclose" title="Close (Esc)">✕</button></div>
@@ -98,10 +111,12 @@
   <textarea id="tin" rows="1" placeholder="Ask about this, or say how to change it…"></textarea>
   <div class="pf"><span id="tcloud" class="tcloud" hidden title="Using Cloud settings from the main composer">☁ Cloud</span>↩ send · ⇧↩ new line · Esc close · edits arrive as tracked changes</div>
 </div>
+<script src="theme.js"></script>
 <script src="annotations.js"></script>
 <script src="tracked-diff.js"></script>
 <script src="formatting.js"></script>
 <script src="editor.js"></script>
 <script src="annotations-ui.js"></script>
+<script src="zen.js"></script>
 </body>
 </html>

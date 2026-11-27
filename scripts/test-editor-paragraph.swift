@@ -43,7 +43,7 @@ final class Delegate: NSObject, WKNavigationDelegate {
           assert(promptBlock.classList.contains('paragraph-working'), 'Running paragraph gets a visible marker');
           const workingStyle = getComputedStyle(promptBlock);
           assert(workingStyle.backgroundImage.includes('linear-gradient'), 'Running paragraph has a gradient background');
-          assert(workingStyle.animationName === 'sh' && workingStyle.animationDuration === '1s', 'Running paragraph uses the refinement shimmer');
+          assert(workingStyle.animationName === 'working-shimmer' && workingStyle.animationDuration === '2.4s', 'Running paragraph uses the refinement shimmer');
           assert(api.html() === original, 'Working marker is excluded from saved HTML');
           assert(!api.getBlocks().blocks[1].html.includes('paragraph-working'), 'Working marker is excluded from agent context');
           api.setParagraphWorking(2, blockId);

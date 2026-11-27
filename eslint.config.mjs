@@ -45,6 +45,8 @@ export default [
         MarginsAnnotationUI: "writable",
         MarginsFormatting: "writable",
         MarginsTrackedDiff: "writable",
+        MarginsTheme: "writable",
+        MarginsZen: "writable",
         margins: "writable",
       },
     },

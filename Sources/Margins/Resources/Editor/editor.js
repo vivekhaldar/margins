@@ -323,6 +323,7 @@
       nodes.forEach((n) => { if (n.nodeType === 1) { if (first) { n.dataset.bid = ch.dataset.bid; first = false; } else n.removeAttribute('data-bid'); } });
     }
     ch.replaceWith(...nodes);
+    window.MarginsTheme?.settle(nodes, ok);
   }
 
   function select(filter) {
@@ -350,6 +351,7 @@
     const selected = all.filter((c) => c.classList.contains('sel')).length;
     $('#pending').textContent = all.length ? `${all.length} pending change${all.length > 1 ? 's' : ''}` : 'No pending changes';
     $('#accAll').disabled = $('#rejAll').disabled = !all.length;
+    document.body.classList.toggle('has-pending', all.length > 0);
     $('#selbar').classList.toggle('on', selected > 0);
     $('#selcount').textContent = `${selected} selected`;
     post('pending', { total: all.length, byStep, selected });
@@ -1430,6 +1432,8 @@
     insertImage: (src, alt) => insertImage(src, alt),
     setOutline: (on) => setOutline(on),
     setCloudMode: (on) => setCloudMode(on),
+    setTheme: (theme) => window.MarginsTheme?.apply(theme),
+    setZenMode: (options) => window.MarginsZen?.set(options),
     setFonts(docFont, uiFont) {
       const root = document.documentElement.style;
       if (docFont) root.setProperty('--doc-font', docFont);
