@@ -128,20 +128,24 @@
     post('zenPrefs', { typewriter: state.typewriter, paragraphFocus: state.paragraphFocus });
   }
 
-  // Inner overlays and active editing consume Escape first; only a "bare" Escape exits Zen.
+  // Inner overlays, form controls, and active diff-navigation consume Escape first;
+  // pressing Escape while writing in #doc exits Zen immediately.
   function escapeConsumed() {
     const shown = (id, display) => { const el = $(id); return !!el && el.style.display === display; };
-    if (!$('findbar').hidden || shown('pop', 'block') || shown('lpop', 'block') || shown('tpop', 'flex')) return true;
+    if (!$('findbar').hidden || shown('pop', 'block') || (shown('lpop', 'block') && $('lpop').dataset.mode === 'edit') || shown('tpop', 'flex')) return true;
     if (!$('annotation-card').hidden || document.querySelector('.annotation-context')) return true;
     const active = document.activeElement;
-    if (!active || active === body || pill.contains(active)) return false;
-    return doc.contains(active) || active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+    if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
+    if ((!active || !doc.contains(active)) && doc.querySelector('.chg.cur, .chg.sel')) return true;
+    if (!active || active === body || pill.contains(active) || doc.contains(active)) return false;
+    return active.isContentEditable;
   }
 
   window.addEventListener('keydown', (e) => {
     if (!state.enabled || e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
     if (escapeConsumed()) return;
     e.preventDefault();
+    e.stopPropagation();
     post('zenExit');
   }, true);
 
