@@ -1,0 +1,24 @@
+body.semantic-zoom #doc {
+  background: color-mix(in srgb, var(--acc) 7%, var(--bg));
+  border-radius: 10px;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+  transition: opacity 150ms ease;
+}
+body.semantic-zoom.semantic-zoom-loading #doc {
+  opacity: .45;
+  pointer-events: none;
+}
+body.semantic-zoom #doc :is(h1,h2,h3,h4,h5,h6,p) { cursor: pointer; }
+body.semantic-zoom #doc :is(h1,h2,h3,h4,h5,h6,p):hover {
+  background: color-mix(in srgb, var(--acc) 10%, transparent);
+}
+body.semantic-zoom :is(#bar,#annotation-layer,#annotation-card,#tmarks,#askchip,#commentchip,#zenpill,.annotation-context,.pop,.lpop,.tpop) {
+  display: none !important;
+}
+body.semantic-zoom.zen-focus #doc > * { opacity: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  body.semantic-zoom #doc { animation: semantic-zoom-in 120ms ease-out; }
+  @keyframes semantic-zoom-in { from { opacity: .75; } to { opacity: 1; } }
+}

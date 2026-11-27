@@ -68,6 +68,8 @@ if [[ "$LINT_ONLY" == "false" ]]; then
     swift build
     echo "==> [check] swift run MarginsSelfTest"
     swift run MarginsSelfTest
+    echo "==> [check] swift scripts/test-editor-semantic-zoom.swift"
+    swift scripts/test-editor-semantic-zoom.swift
   else
     echo "==> [check] skipping Swift build/tests on ${OS} (macOS required)"
   fi
@@ -79,6 +81,8 @@ if [[ "$LINT_ONLY" == "false" ]]; then
     node scripts/test-formatting.js
     echo "==> [check] node scripts/test-zen.js"
     node scripts/test-zen.js
+    echo "==> [check] node scripts/test-semantic-zoom.js"
+    node scripts/test-semantic-zoom.js
   elif [[ "$IS_CI" == "true" ]]; then
     echo "error: node is required in CI" >&2
     exit 1

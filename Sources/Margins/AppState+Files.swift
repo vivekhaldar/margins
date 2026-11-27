@@ -10,6 +10,7 @@ extension AppState {
         if let session = body["documentSession"] as? String,
            session.lowercased() != documentSessionID.uuidString.lowercased() { return }
         if handleZenMessage(type, body) { return }
+        if handleSemanticZoomMessage(type, body) { return }
         switch type {
         case "ready":
             lastThreadsJSON = ""
@@ -114,10 +115,12 @@ extension AppState {
 
     func preview(_ v: Version) {
         if v.id == doc.versions.last?.id { returnToLatest(); return }
+        cancelSemanticZoom()
         previewing = v
         let session = documentSessionID
         Task {
             guard documentSessionID == session else { return }
+            await editor.clearSemanticZoom()
             await editor.preview(v.html, annotations: v.annotations)
             guard documentSessionID == session else { return }
             await editor.setAnnotationRuns(v.annotationRuns, availableIntentIDs: Set(doc.intents.map(\.id)))
@@ -370,6 +373,7 @@ extension AppState {
         guard var incoming = try? readDocument(at: url).document else { return }
         incoming.pruneAssets()
         guard incoming != doc else { return }
+        cancelDocumentRuns()
         doc = incoming
         projectFolderStore.migrateIfNeeded(docID: incoming.id, legacyFolder: incoming.projectFolder)
         projectFolderRevision += 1

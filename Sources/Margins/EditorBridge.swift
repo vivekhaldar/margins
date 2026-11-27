@@ -180,6 +180,26 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("window.margins.preview(html, annotations)", ["html": html, "annotations": Self.jsonObject(annotations)])
     }
     func endPreview() async { _ = try? await call("window.margins.endPreview()") }
+    /// Keep the prior document or summary visible and dimmed while generating a new summary.
+    func setSemanticZoomLoading(stop: Int) async {
+        _ = try? await call("return window.margins.setSemanticZoomLoading(stop)", ["stop": stop])
+    }
+    /// Display a read-only summary while serialization continues to return the full document.
+    func setSemanticZoom(html: String, stop: Int, anchorHeading: String? = nil) async {
+        _ = try? await call("return window.margins.setSemanticZoom(html, stop, anchorHeading)",
+                            ["html": html, "stop": stop, "anchorHeading": anchorHeading.map { $0 as Any } ?? NSNull()])
+    }
+    func clearSemanticZoom(scrollToBlockId: String? = nil, anchorHeading: String? = nil) async {
+        _ = try? await call("window.margins.clearSemanticZoom(blockId, anchorHeading)",
+                            ["blockId": scrollToBlockId.map { $0 as Any } ?? NSNull(),
+                             "anchorHeading": anchorHeading.map { $0 as Any } ?? NSNull()])
+    }
+    func visibleAnchorHeading() async -> String? {
+        try? await call("return window.margins.visibleAnchorHeading()") as? String
+    }
+    func liveWordCount() async -> Int {
+        (try? await call("return window.margins.liveWordCount()") as? NSNumber)?.intValue ?? 0
+    }
     func insertImage(src: String, alt: String) async {
         _ = try? await call("window.margins.insertImage(src, alt)", ["src": src, "alt": alt])
     }

@@ -26,8 +26,8 @@ struct ContentView: View {
                     .frame(width: state.zenMode ? 0 : paneWidth, alignment: .trailing)
                     .opacity(state.zenMode ? 0 : 1)
                     .clipped()
-                    .disabled(state.zenMode)
-                    .allowsHitTesting(!state.zenMode)
+                    .disabled(state.zenMode || state.semanticZoomStop.rawValue < 100)
+                    .allowsHitTesting(!state.zenMode && state.semanticZoomStop.rawValue == 100)
                     .accessibilityHidden(state.zenMode)
                 if !state.zenMode {
                     Rectangle()
@@ -105,6 +105,11 @@ struct ContentView: View {
                     .environment(\.interfaceZoom, state.zoom)
                     .environment(\.uiFontFamily, state.effectiveFontPreferences.uiFont)
             }
+            if state.semanticZoomStop.rawValue < 100 {
+                SemanticZoomBanner()
+                    .environment(\.interfaceZoom, state.zoom)
+                    .environment(\.uiFontFamily, state.effectiveFontPreferences.uiFont)
+            }
             EditorView(bridge: state.editor)
         }
         .frame(minWidth: 360, maxWidth: .infinity)
@@ -126,6 +131,7 @@ struct ContentView: View {
             SyncStatusPill(sync: sync).interfaceZoom(state.zoom)
             ProjectMenu().interfaceZoom(state.zoom)
             ProviderMenu().interfaceZoom(state.zoom)
+            SemanticZoomControl().interfaceZoom(state.zoom)
             Button {
                 state.showOutline.toggle()
             } label: {

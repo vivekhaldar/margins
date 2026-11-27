@@ -11,6 +11,7 @@
   let nativeSession = null;
 
   const post = (type, data = {}) => {
+    if (document.body.classList.contains('semantic-zoom') && ['edited', 'reviewed', 'annotations'].includes(type)) return;
     const msg = Object.assign({ type }, data);
     if (nativeSession) msg.documentSession = nativeSession;
     if (annotations && ['edited', 'reviewed'].includes(type)) msg.annotations = annotations.snapshot();
@@ -184,6 +185,7 @@
   }
 
   function currentHTML() {
+    if (previewState.savedHTML() != null) return previewState.savedHTML();
     const c = doc.cloneNode(true);
     window.MarginsTrackedDiff?.strip(c);
     c.querySelectorAll('.sel,.cur,.peek,.flash,.refining,.paragraph-working').forEach((x) => {
@@ -335,7 +337,7 @@
     return [];
   }
   function resolveWhere(filter, ok) {
-    if (doc.classList.contains('ro')) return {count: 0, html: live?.html || currentHTML(), annotations: live?.annotations || annotations?.snapshot()};
+    if (doc.classList.contains('ro')) return {count: 0, ...previewState.savedSnapshot()};
     const list = select(filter);
     list.forEach((c) => resolve(c, ok));
     cur = -1;
@@ -1320,37 +1322,14 @@
     else if (k === 'escape') { closeThread(); closeRefine(); chgs().forEach((x) => x.classList.remove('cur', 'sel')); cur = -1; emitPending(); }
   });
 
-  // ---------- preview of historical versions ----------
-  let live = null;
-  function preview(html, annotationState) {
-    flushEdits();
-    flushReview();
-    if (live === null) live = {html: currentHTML(), annotations: annotations?.snapshot()};
-    doc.innerHTML = html;
-    doc.contentEditable = 'false';
-    doc.classList.add('ro');
-    trackedDiff?.refresh();
-    annotations?.load(annotationState);
-    document.body.classList.add('previewing');
-    closeRefine();
-    closeThread();
-    hideChip();
-    hideLinkPop();
-    buildOutline();
-    drawMarks();
-  }
-  function endPreview() {
-    if (live === null) return;
-    const saved = live;
-    doc.innerHTML = saved.html;
-    live = null;
-    doc.contentEditable = 'true';
-    doc.classList.remove('ro');
-    document.body.classList.remove('previewing');
-    normalize();
-    annotations?.load(saved.annotations);
-    emitPending();
-  }
+  const previewState = window.MarginsSemanticZoom.create({
+    doc, post, currentHTML, annotationEngine: () => annotations,
+    flush: () => { flushEdits(); flushReview(); },
+    dismiss: () => { closeRefine(); closeThread(); hideChip(); hideLinkPop(); },
+    refresh: () => { trackedDiff?.refresh(); buildOutline(); drawMarks(); },
+    restore: () => { normalize(); emitPending(); },
+  });
+  const {preview, endPreview} = previewState;
 
   // ---------- API for Swift ----------
   window.margins = {
@@ -1362,7 +1341,7 @@
       clearTimeout(editTimer); editSecs = new Set();
       clearTimeout(revTimer); rev = {ok: 0, no: 0, secs: new Set()};
       annotationInput = null; annotationPaste = null;
-      live = null;
+      previewState.reset();
       paragraphRuns.clear();
       formatting.reset();
       closeThread();
@@ -1382,8 +1361,8 @@
       drawParagraphRuns();
     },
     flushForSave: () => { flushEdits(); flushReview(); },
-    snapshot: () => { flushEdits(); annotations?.sync({silent: true}); return live ? JSON.parse(JSON.stringify(live)) : {html: currentHTML(), annotations: annotations?.snapshot()}; },
-    html: () => { flushEdits(); return currentHTML(); },
+    snapshot: () => { flushEdits(); if (previewState.savedSnapshot()) return previewState.savedSnapshot(); annotations?.sync({silent: true}); return {html: currentHTML(), annotations: annotations?.snapshot()}; },
+    html: () => { flushEdits(); return previewState.savedSnapshot()?.html ?? currentHTML(); },
     getBlocks() {
       endPreview();
       flushEdits();
@@ -1451,6 +1430,11 @@
     revealStep(step) { const c = select({ step })[0]; if (c) { c.scrollIntoView({ block: 'center', behavior: 'smooth' }); flash(c); } },
     preview,
     endPreview,
+    setSemanticZoomLoading: previewState.setSemanticZoomLoading,
+    setSemanticZoom: previewState.setSemanticZoom,
+    clearSemanticZoom: previewState.clearSemanticZoom,
+    visibleAnchorHeading: previewState.visibleAnchorHeading,
+    liveWordCount: previewState.liveWordCount,
     setThreads: (list) => setThreads(list),
     openThread: (id) => openThreadId(id),
     setAnnotationRuns: (runs) => annotations?.setRuns(runs),
@@ -1460,7 +1444,7 @@
   if (window.MarginsAnnotationEngine) {
     annotations = new window.MarginsAnnotationEngine(doc, {getRevisionHTML: currentHTML, onChange: state => post('annotations', {html: currentHTML(), annotations: state})});
     window.MarginsAnnotations = annotations;
-    window.editorGetAnnotationState = () => annotations.snapshot();
+    window.editorGetAnnotationState = () => previewState.savedSnapshot()?.annotations || annotations.snapshot();
     window.editorGetSnapshot = () => window.margins.snapshot();
     window.editorShowAnnotationIntent = runId => {
       const run = annotations.state.runs.find(value => value.id === runId || value.runId === runId);

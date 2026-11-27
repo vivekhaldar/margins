@@ -39,14 +39,7 @@ public final class OpenAICompatibleProvider: ModelProvider {
         }
         var r = req("chat/completions")
         r.httpMethod = "POST"
-        let body: [String: Any] = [
-            "model": model,
-            "messages": [["role": "system", "content": request.system],
-                         ["role": "user", "content": request.prompt]],
-            "response_format": ["type": "json_schema",
-                                "json_schema": ["name": "edit_plan", "strict": true, "schema": EditPlanSchema.object]],
-        ]
-        r.httpBody = try JSONSerialization.data(withJSONObject: body)
+        r.httpBody = try JSONSerialization.data(withJSONObject: Self.requestBody(request, model: model))
         let (data, resp) = try await session.data(for: r)
         try check(resp, data)
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -56,6 +49,22 @@ public final class OpenAICompatibleProvider: ModelProvider {
             throw ProviderError.protocolError("Unexpected response: \(String(decoding: data.prefix(300), as: UTF8.self))")
         }
         return content
+    }
+
+    static func requestBody(_ request: GenerationRequest, model: String) throws -> [String: Any] {
+        var body: [String: Any] = [
+            "model": model,
+            "messages": [["role": "system", "content": request.system],
+                         ["role": "user", "content": request.prompt]],
+        ]
+        if let json = request.outputSchema {
+            guard let schema = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+                throw ProviderError.protocolError("Output schema must be a JSON object.")
+            }
+            body["response_format"] = ["type": "json_schema",
+                                      "json_schema": ["name": "edit_plan", "strict": true, "schema": schema]]
+        }
+        return body
     }
 
     private func check(_ resp: URLResponse, _ data: Data) throws {
