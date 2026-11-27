@@ -1,21 +1,80 @@
 import Foundation
 
+private struct CodexModelsCache: Decodable {
+    let models: [CodexCachedModel]
+}
+
+private struct CodexCachedModel: Decodable {
+    let slug: String
+    let displayName: String?
+    let visibility: String?
+    let priority: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case slug
+        case displayName = "display_name"
+        case visibility
+        case priority
+    }
+}
+
 /// ChatGPT subscription via the official Codex CLI: `codex exec --json --output-schema … -`.
 public final class CodexExecProvider: ModelProvider {
     public let kind: ProviderKind = .codex
     public let displayName: String
     private let executable: URL
+    private let modelsCacheURL: URL
 
-    public init(displayName: String, executable: URL) {
+    public static var defaultModelsCacheURL: URL {
+        if let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"], !codexHome.isEmpty {
+            return URL(fileURLWithPath: codexHome).appendingPathComponent("models_cache.json")
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/models_cache.json")
+    }
+
+    private static let defaultModel = ModelInfo(id: "", name: "Default (from ~/.codex/config.toml)")
+    private static let fallbackModels = [
+        ModelInfo(id: "gpt-6.1-sol", name: "gpt-6.1-sol"),
+        ModelInfo(id: "gpt-6-luna", name: "gpt-6-luna")
+    ]
+
+    public init(displayName: String, executable: URL,
+                modelsCacheURL: URL = CodexExecProvider.defaultModelsCacheURL) {
         self.displayName = displayName
         self.executable = executable
+        self.modelsCacheURL = modelsCacheURL
     }
 
     public func availableModels() async throws -> [ModelInfo] {
-        // Codex has no machine-readable model list; empty id = the CLI's configured default.
-        [ModelInfo(id: "", name: "Default (from ~/.codex/config.toml)"),
-         ModelInfo(id: "gpt-6.1-sol", name: "gpt-6.1-sol"),
-         ModelInfo(id: "gpt-6-luna", name: "gpt-6-luna")]
+        Self.availableModels(cacheURL: modelsCacheURL)
+    }
+
+    static func availableModels(cacheURL: URL) -> [ModelInfo] {
+        if let data = try? Data(contentsOf: cacheURL) {
+            let cached = parseModelsCache(data)
+            if !cached.isEmpty { return [defaultModel] + cached }
+        }
+        return [defaultModel] + fallbackModels
+    }
+
+    static func parseModelsCache(_ data: Data) -> [ModelInfo] {
+        guard let cache = try? JSONDecoder().decode(CodexModelsCache.self, from: data) else { return [] }
+        let sorted = cache.models.enumerated()
+            .filter { $0.element.visibility == "list" && !$0.element.slug.isEmpty }
+            .sorted { lhs, rhs in
+                let lp = lhs.element.priority ?? Int.max
+                let rp = rhs.element.priority ?? Int.max
+                return lp != rp ? lp < rp : lhs.offset < rhs.offset
+            }
+        var seen = Set<String>()
+        var result: [ModelInfo] = []
+        for (_, entry) in sorted where seen.insert(entry.slug).inserted {
+            let trimmed = entry.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = (trimmed?.isEmpty == false) ? trimmed : entry.slug
+            result.append(ModelInfo(id: entry.slug, name: name))
+        }
+        return result
     }
 
     public func generate(_ request: GenerationRequest) async throws -> String {

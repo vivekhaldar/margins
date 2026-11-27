@@ -373,6 +373,53 @@ test("codex exec events") {
     check(CodexExecProvider.policyArguments(.research).contains("read-only"), "research sandbox")
 }
 
+test("codex models cache loading and fallback") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-codex-cache-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let cacheURL = dir.appendingPathComponent("models_cache.json")
+    let json = #"""
+    {
+      "models": [
+        {"slug": "gpt-6.2-astra", "display_name": "GPT-6.2-Astra", "visibility": "list", "priority": 2},
+        {"slug": "gpt-reserve", "display_name": "GPT-Reserve", "visibility": "hide", "priority": 0},
+        {"slug": "gpt-6.2-sol", "display_name": "GPT-6.2-Sol", "visibility": "list", "priority": 1},
+        {"slug": "gpt-no-name", "display_name": "  ", "visibility": "list", "priority": 5},
+        {"slug": "gpt-no-priority", "visibility": "list"},
+        {"slug": "gpt-6.2-sol", "display_name": "Duplicate", "visibility": "list", "priority": 9},
+        {"slug": "gpt-unlisted", "display_name": "Unlisted", "priority": 0}
+      ]
+    }
+    """#
+    try Data(json.utf8).write(to: cacheURL)
+    let loaded = CodexExecProvider.availableModels(cacheURL: cacheURL)
+    check(loaded == [
+        ModelInfo(id: "", name: "Default (from ~/.codex/config.toml)"),
+        ModelInfo(id: "gpt-6.2-sol", name: "GPT-6.2-Sol"),
+        ModelInfo(id: "gpt-6.2-astra", name: "GPT-6.2-Astra"),
+        ModelInfo(id: "gpt-no-name", name: "gpt-no-name"),
+        ModelInfo(id: "gpt-no-priority", name: "gpt-no-priority")
+    ], "filters visibility==list, sorts by priority, maps slug/display_name, prepends default")
+
+    let expectedFallback = [
+        ModelInfo(id: "", name: "Default (from ~/.codex/config.toml)"),
+        ModelInfo(id: "gpt-6.1-sol", name: "gpt-6.1-sol"),
+        ModelInfo(id: "gpt-6-luna", name: "gpt-6-luna")
+    ]
+    let missingURL = dir.appendingPathComponent("missing.json")
+    check(CodexExecProvider.availableModels(cacheURL: missingURL) == expectedFallback,
+          "falls back to hardcoded list when cache file is absent")
+
+    try Data("not valid json".utf8).write(to: cacheURL)
+    check(CodexExecProvider.availableModels(cacheURL: cacheURL) == expectedFallback,
+          "falls back to hardcoded list when cache file is unreadable/corrupt")
+
+    try Data(#"{"models":[{"slug":"hidden","visibility":"hide","priority":1}]}"#.utf8).write(to: cacheURL)
+    check(CodexExecProvider.availableModels(cacheURL: cacheURL) == expectedFallback,
+          "falls back to hardcoded list when no models have visibility==list")
+}
+
 test("claude stream-json events") {
     let names = ClaudeCodeProvider.ToolNames()
     let use = #"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"WebFetch","input":{"url":"https://a.b","prompt":"x"}}]}}"#
