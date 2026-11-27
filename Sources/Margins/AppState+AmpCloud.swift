@@ -12,11 +12,16 @@ extension AppState {
     /// Launches a cloud run. Follow-ups in a thread that already talks to Amp stay on Amp; everything
     /// else follows the selected cloud agent.
     func submitCloud(_ raw: String, thread: CloudThreadAnchor? = nil, paragraphBlockID: String? = nil) {
-        guard let backend = activeCloudBackend else { return }
         let ampThread = thread.map { anchor in
             doc.intents.contains { $0.thread == anchor.id && $0.cloudTask?.resolvedBackend == .amp }
         } ?? false
-        if ampThread || backend == .amp {
+        guard let backend = agentTarget.cloudBackendForSubmission(
+            continuingAmpThread: ampThread, enabledCloud: enabledCloudBackends
+        ) else {
+            lastError = ampThread ? "Enable Amp Cloud in Providers to continue this thread." : "Choose an enabled cloud agent."
+            return
+        }
+        if backend == .amp {
             submitAmpCloud(raw, thread: thread, paragraphBlockID: paragraphBlockID)
         } else {
             submitCopilotCloud(raw, thread: thread, paragraphBlockID: paragraphBlockID)
@@ -24,9 +29,15 @@ extension AppState {
     }
 
     func refreshCloudContext(forceRepoResolve: Bool = false) {
+        if forceRepoResolve {
+            // Never leave the previous project's destination launchable while resolution is in flight.
+            cloudRepo = ""
+            cloudBaseRef = projectURL == nil ? "main" : ""
+            cloudDirtyFilesCount = 0
+        }
         switch activeCloudBackend ?? .copilot {
-        case .copilot: refreshCopilotCloudContext(forceRepoResolve: forceRepoResolve)
-        case .amp: refreshAmpCloudContext(forceRepoResolve: forceRepoResolve, recheck: false)
+        case .copilot: refreshCopilotCloudContext()
+        case .amp: refreshAmpCloudContext(recheck: false)
         }
     }
 
@@ -79,18 +90,14 @@ extension AppState {
 
     /// Resolves the project from `git remote get-url origin` and counts dirty files. The CLI / key
     /// preflight (which may run `pass`) happens once per window, or when the user presses Recheck.
-    func refreshAmpCloudContext(forceRepoResolve: Bool, recheck: Bool, authOnly: Bool = false) {
+    func refreshAmpCloudContext(recheck: Bool, authOnly: Bool = false) {
         let project = projectURL
-        let shouldResolve = forceRepoResolve || cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let needsPreflight = recheck || ampAuthStatus == nil
         let session = documentSessionID
         let client = ampClient
-        // Amp has no base ref; clear it so switching back to Copilot re-resolves this project's branch.
-        if forceRepoResolve { cloudBaseRef = "" }
-
         Task {
             if !authOnly {
-                await resolveAmpContext(project: project, session: session, shouldResolve: shouldResolve, force: forceRepoResolve)
+                await resolveAmpContext(project: project, session: session)
             }
             guard needsPreflight else { return }
             if recheck { await client.credentials.invalidate() }
@@ -100,14 +107,16 @@ extension AppState {
         }
     }
 
-    private func resolveAmpContext(project: URL?, session: UUID, shouldResolve: Bool, force: Bool) async {
+    private func resolveAmpContext(project: URL?, session: UUID) async {
+        guard documentSessionID == session, activeCloudBackend == .amp, projectURL == project else { return }
         guard let project else {
             cloudDirtyFilesCount = 0
-            if force { cloudRepo = "" }
             return
         }
-        if shouldResolve, let resolved = try? await ampClient.resolveProject(in: project),
-           documentSessionID == session, activeCloudBackend == .amp, projectURL == project {
+        let repo = cloudRepo
+        if repo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let resolved = try? await ampClient.resolveProject(in: project),
+           documentSessionID == session, activeCloudBackend == .amp, projectURL == project, cloudRepo == repo {
             cloudRepo = resolved
         }
         let dirtyCount = await Task.detached { ProjectChanges.snapshot(project)?.count ?? 0 }.value

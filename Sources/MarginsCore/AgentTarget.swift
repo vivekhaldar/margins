@@ -19,4 +19,10 @@ public enum AgentTarget: Equatable, Hashable, Codable, Sendable {
         let backend = enabledCloud.contains(lastCloud) ? lastCloud : CloudBackend.allCases.first(where: enabledCloud.contains)
         return backend.map(Self.cloud) ?? self
     }
+
+    public func cloudBackendForSubmission(continuingAmpThread: Bool, enabledCloud: Set<CloudBackend>) -> CloudBackend? {
+        guard case .cloud(let selected) = self else { return nil }
+        let backend: CloudBackend = continuingAmpThread ? .amp : selected
+        return enabledCloud.contains(backend) ? backend : nil
+    }
 }

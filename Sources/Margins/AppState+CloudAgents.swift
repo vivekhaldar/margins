@@ -16,10 +16,12 @@ extension AppState {
 
     // MARK: - Context & Preflight
 
-    func refreshCopilotCloudContext(forceRepoResolve: Bool, authOnly: Bool = false) {
+    func refreshCopilotCloudContext(authOnly: Bool = false) {
         let project = projectURL
-        let shouldResolve = forceRepoResolve || cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let repo = cloudRepo
+        let baseRef = cloudBaseRef
+        let repoMissing = repo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let refMissing = baseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let session = documentSessionID
         let client = cloudClient
 
@@ -34,17 +36,13 @@ extension AppState {
                 guard documentSessionID == session, activeCloudBackend != .amp, projectURL == project else { return }
                 cloudDirtyFilesCount = dirtyCount
 
-                if shouldResolve, let info = try? await client.resolveRepo(in: project) {
+                if repoMissing || refMissing, let info = try? await client.resolveRepo(in: project) {
                     guard documentSessionID == session, activeCloudBackend != .amp, projectURL == project else { return }
-                    cloudRepo = info.repo
-                    cloudBaseRef = info.defaultBranch
+                    if repoMissing && cloudRepo == repo { cloudRepo = info.repo }
+                    if cloudRepo == info.repo && cloudBaseRef == baseRef { cloudBaseRef = info.defaultBranch }
                 }
             } else {
                 cloudDirtyFilesCount = 0
-                if forceRepoResolve {
-                    cloudRepo = ""
-                    cloudBaseRef = "main"
-                }
             }
         }
     }
@@ -64,13 +62,14 @@ extension AppState {
         }
         // Later messages stay anchored where the thread started, like local discussions.
         let first = doc.intents.first { $0.kind == .instruction && $0.thread == thread }
+        let step = doc.nextStep
         submitCloud(message, thread: CloudThreadAnchor(
             id: thread,
             quote: first?.quote ?? quote,
             focus: first?.focus ?? focus,
             anchor: first?.anchor ?? anchor
         ))
-        if !doc.intents.contains(where: { $0.thread == thread && $0.step == doc.nextStep - 1 }) {
+        if doc.nextStep == step {
             // Launch was refused (e.g. no repo): drop the editor's optimistic "working" bubble.
             lastThreadsJSON = ""
             scheduleThreads()

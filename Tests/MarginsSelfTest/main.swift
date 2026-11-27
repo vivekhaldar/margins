@@ -57,6 +57,13 @@ test("toggle agent targets and disable active cloud backend") {
           "disabling the active cloud backend falls back to local, not another cloud agent")
     check(cloud.resolvingDisabledCloud(lastLocal: providerID, enabledCloud: [.amp]) == cloud,
           "disabling a different backend leaves the active cloud agent alone")
+    let copilot = AgentTarget.cloud(.copilot)
+    check(copilot.cloudBackendForSubmission(continuingAmpThread: true, enabledCloud: all) == .amp,
+          "an Amp follow-up stays on Amp when another cloud backend is selected")
+    check(copilot.cloudBackendForSubmission(continuingAmpThread: true, enabledCloud: [.copilot]) == nil,
+          "a disabled Amp thread is neither submitted to Amp nor rerouted to Copilot")
+    check(copilot.cloudBackendForSubmission(continuingAmpThread: false, enabledCloud: [.copilot]) == .copilot,
+          "disabling Amp does not block ordinary Copilot requests")
 }
 
 test("open window session round trip and restoration") {

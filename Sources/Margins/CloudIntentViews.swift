@@ -117,8 +117,8 @@ struct CloudAuthCheck: View {
             }
             Button(checked ? "Recheck" : "Check auth") {
                 switch backend {
-                case .copilot: state.refreshCopilotCloudContext(forceRepoResolve: false, authOnly: authOnly)
-                case .amp: state.refreshAmpCloudContext(forceRepoResolve: false, recheck: true, authOnly: authOnly)
+                case .copilot: state.refreshCopilotCloudContext(authOnly: authOnly)
+                case .amp: state.refreshAmpCloudContext(recheck: true, authOnly: authOnly)
                 }
             }
             .buttonStyle(.borderless)
