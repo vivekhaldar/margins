@@ -239,7 +239,7 @@ extension AppState {
                         "reply": m.reply ?? "",
                         "summary": m.summary,
                         "notes": m.notes,
-                        "files": m.files ?? [], "cloud": m.provider == CloudInsertionPlan.provider,
+                        "files": m.files ?? [], "cloud": CloudBackend.isCloudProvider(m.provider),
                         "changes": pending.byStep[m.step] ?? 0,
                         "error": m.error ?? "",
                         "waiting": permissionAsks[m.step] != nil,

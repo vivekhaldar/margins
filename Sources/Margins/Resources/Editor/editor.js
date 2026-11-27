@@ -1047,7 +1047,7 @@
   }
   function threadPlaceholder(working, replying) {
     if (working) return 'Working…';
-    if (cloudMode) return 'Task for the Copilot cloud agent…';
+    if (cloudMode) return 'Task for the cloud agent…';
     return replying ? 'Reply…' : 'Ask about this, or say how to change it…';
   }
   function sendThread(text) {

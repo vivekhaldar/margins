@@ -2125,6 +2125,8 @@ test("Amp lifecycle: stopping, continuation and notifications") {
     check(AmpCloudLifecycle.markStopped(&live) == .disconnected, "live turn becomes outcome unknown")
     check(live.cloudTask?.taskID == ampThreadA && live.cloudTask?.htmlURL.hasSuffix(ampThreadA) == true, "thread handle preserved")
     check(AmpCloudLifecycle.markStopped(&live) == nil, "already-stopped turns are left alone")
+    AmpCloudLifecycle.applyThread(ampThreadB, to: &live)
+    check(live.cloudTask?.cloudState == "disconnected" && live.cloudTask?.taskID == ampThreadA, "late init never reopens a finished turn")
     var copilot = Intent(step: 3, text: "c", cloudTask: CloudTaskRef(repo: "o/r", baseRef: "main", taskID: "t", htmlURL: "", cloudState: "in_progress"))
     check(AmpCloudLifecycle.markStopped(&copilot) == nil && copilot.cloudTask?.cloudState == "in_progress", "Copilot tasks untouched")
 
@@ -2149,6 +2151,8 @@ test("Amp lifecycle: stopping, continuation and notifications") {
     AmpCloudLifecycle.apply(.failed(threadID: ampThreadA, message: "boom"), to: &done)
     check(done.status == .reviewed && done.cloudTask?.cloudState == "failed", "review status is never overwritten")
     check(AmpCloudLifecycle.notificationOutcome(for: done, state: .submitted) == nil, "submitted runs do not notify")
+    let log = (0..<450).reduce(nil as String?) { AmpCloudLifecycle.appendingProgress("line \($1)", to: $0) }
+    check(log?.hasPrefix("line 50\n") == true && log?.hasSuffix("line 449") == true, "progress log keeps the latest lines")
     check(AmpCloudLifecycle.notificationOutcome(for: done, state: .failed) == .failed(error: "boom"), "failures notify")
 }
 

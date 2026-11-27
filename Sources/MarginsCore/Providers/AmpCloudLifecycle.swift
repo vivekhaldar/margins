@@ -4,7 +4,7 @@ import Foundation
 public enum AmpCloudLifecycle {
     public static let disconnectedMessage =
         "Outcome unknown: the stream closed before Amp reported a result. Open the Amp thread to check; Margins will not relaunch it."
-    private static let maxStepLines = 200
+    private static let maxLogLines = 400
 
     /// A new, not-yet-launched Amp reference.
     public static func newRef(project: String, paragraphBlockID: String? = nil) -> CloudTaskRef {
@@ -15,8 +15,10 @@ public enum AmpCloudLifecycle {
     }
 
     /// Records the remote thread as soon as `system/init` arrives (persisted before any result).
+    /// Ignored once the turn has finished, so a late event never reopens it.
     public static func applyThread(_ threadID: String, to intent: inout Intent, at date: Date = Date()) {
-        guard var ref = intent.cloudTask, AmpCloudClient.isValidThreadID(threadID) else { return }
+        guard var ref = intent.cloudTask, AmpCloudClient.isValidThreadID(threadID),
+              CloudTaskState(rawState: ref.cloudState).shouldPoll else { return }
         ref.taskID = threadID
         ref.sessionID = threadID
         ref.htmlURL = AmpCloudClient.threadURL(for: threadID) ?? ref.htmlURL
@@ -29,7 +31,11 @@ public enum AmpCloudLifecycle {
     /// Folds a finished turn into the intent; returns the new state.
     @discardableResult
     public static func apply(_ outcome: AmpTurnOutcome, to intent: inout Intent, at date: Date = Date()) -> CloudTaskState {
-        if let id = outcome.threadID { applyThread(id, to: &intent, at: date) }
+        if let id = outcome.threadID, AmpCloudClient.isValidThreadID(id) {
+            intent.cloudTask?.taskID = id
+            intent.cloudTask?.sessionID = id
+            intent.cloudTask?.htmlURL = AmpCloudClient.threadURL(for: id) ?? ""
+        }
         let state: CloudTaskState
         switch outcome {
         case .completed(_, let result):
@@ -78,14 +84,11 @@ public enum AmpCloudLifecycle {
         }?.cloudTask?.taskID
     }
 
-    /// Appends progress lines to the intent's step log (bounded).
-    public static func appendProgress(_ text: String, to intent: inout Intent) {
-        var steps = intent.steps ?? []
-        for line in text.split(separator: "\n") where !line.isEmpty {
-            steps.append(AgentStep(id: UUID().uuidString, kind: .other, title: String(line), status: .done))
-        }
-        if steps.count > maxStepLines { steps.removeFirst(steps.count - maxStepLines) }
-        intent.steps = steps
+    /// Appends streamed progress to the in-memory session log, keeping only the most recent lines.
+    public static func appendingProgress(_ text: String, to log: String?) -> String {
+        let lines = (log ?? "").split(separator: "\n", omittingEmptySubsequences: true)
+            + text.split(separator: "\n", omittingEmptySubsequences: true)
+        return lines.suffix(maxLogLines).joined(separator: "\n")
     }
 
     /// Notification for a state change. Disconnects caused by the user (cancel/quit) stay silent.
