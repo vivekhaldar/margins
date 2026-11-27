@@ -91,6 +91,8 @@ final class AppState: ObservableObject {
     @Published var zenTypewriter = false { didSet { persistZenPreferences(changed: zenTypewriter != oldValue) } }
     @Published var zenParagraphFocus = false { didSet { persistZenPreferences(changed: zenParagraphFocus != oldValue) } }
     var zenRestoreHistory = false
+    /// Unsent instruction text; lives here so it survives the instruction pane being hidden (Zen Mode).
+    @Published var composerDraft = ""
 
     let editor = EditorBridge()
     var instances: [UUID: (config: ProviderConfig, provider: ModelProvider)] = [:]

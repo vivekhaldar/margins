@@ -41,6 +41,7 @@ body.zen article{border-color:transparent;box-shadow:none;border-radius:0}
 body.zen article:focus-within{box-shadow:none}
 body.zen.zen-typewriter .scroll{padding-bottom:55vh}
 body.zen.zen-focus #doc > *{opacity:.38;transition:opacity .18s ease}
+body.zen.zen-focus #doc > *:hover{opacity:1}
 
 .zenpill{position:fixed;top:8px;left:50%;transform:translate(-50%,-4px);z-index:30;display:flex;align-items:center;gap:4px;padding:3px 4px 3px 12px;font:12px var(--ui-font);color:var(--mute);background:var(--panel);border:1px solid var(--line);border-radius:999px;box-shadow:0 4px 18px rgba(0,0,0,.08);opacity:0;pointer-events:none;transition:opacity .22s ease,transform .22s ease}
 .zenpill[hidden]{display:none}

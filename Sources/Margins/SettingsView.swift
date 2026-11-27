@@ -129,6 +129,7 @@ private struct FontPicker: View {
     private var isCustomUnlisted: Bool {
         let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
+              trimmed != FontPreferences.systemSans,
               trimmed != FontPreferences.systemSerif,
               trimmed != FontPreferences.systemRounded,
               trimmed != FontPreferences.systemMonospace else { return false }
@@ -138,6 +139,7 @@ private struct FontPicker: View {
     var body: some View {
         Picker(label, selection: $selection) {
             Text("Default (Theme or System)").tag(FontPreferences.systemDefault)
+            Text("System Sans").tag(FontPreferences.systemSans)
             Text("System Serif").tag(FontPreferences.systemSerif)
             Text("System Rounded").tag(FontPreferences.systemRounded)
             Text("System Monospace").tag(FontPreferences.systemMonospace)

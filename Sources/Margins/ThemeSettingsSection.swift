@@ -101,6 +101,7 @@ struct FontSourceNote: View {
 
     private static func displayName(_ selection: String) -> String {
         switch selection {
+        case FontPreferences.systemSans: return "System Sans"
         case FontPreferences.systemSerif: return "System Serif"
         case FontPreferences.systemRounded: return "System Rounded"
         case FontPreferences.systemMonospace: return "System Monospace"

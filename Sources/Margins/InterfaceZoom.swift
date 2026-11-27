@@ -59,7 +59,7 @@ enum UITypography {
         }
         let trimmed = family.trimmingCharacters(in: .whitespacesAndNewlines)
         switch trimmed {
-        case "", FontPreferences.systemDefault:
+        case "", FontPreferences.systemDefault, FontPreferences.systemSans:
             return .system(size: pts, weight: w, design: design)
         case FontPreferences.systemSerif:
             return .system(size: pts, weight: w, design: .serif)

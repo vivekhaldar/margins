@@ -6,7 +6,6 @@ import SwiftUI
 struct IntentPane: View {
     @EnvironmentObject var state: AppState
     @Environment(\.interfaceZoom) private var zoom
-    @StateObject private var draftBox = Local("")
     @FocusState private var composerFocused: Bool
 
     private let suggestions = ["Tighten the prose", "Add an example", "Make it more concrete", "Add a summary at the top"]
@@ -69,7 +68,7 @@ struct IntentPane: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(suggestions, id: \.self) { s in
-                            Button(s) { draftBox.value = s; send() }
+                            Button(s) { state.composerDraft = s; send() }
                                 .buttonStyle(.plain)
                                 .uiFont(.caption)
                                 .padding(.horizontal, 8).padding(.vertical, 3)
@@ -80,7 +79,7 @@ struct IntentPane: View {
                 }
             }
             ZStack(alignment: .topLeading) {
-                TextEditor(text: $draftBox.value)
+                TextEditor(text: $state.composerDraft)
                     .uiFont(.body)
                     .scrollContentBackground(.hidden)
                     .focused($composerFocused)
@@ -91,7 +90,7 @@ struct IntentPane: View {
                         send()
                         return .handled
                     }
-                if draftBox.value.isEmpty {
+                if state.composerDraft.isEmpty {
                     Text(composerPlaceholder)
                         .uiFont(.body)
                         .foregroundStyle(.tertiary)
@@ -126,7 +125,7 @@ struct IntentPane: View {
     }
 
     private var sendDisabled: Bool {
-        if draftBox.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        if state.composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         if state.composerTarget == .cloud {
             return state.cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || (state.cloudBackend == .copilot && state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -137,11 +136,11 @@ struct IntentPane: View {
     private func send() {
         guard !sendDisabled else { return }
         if state.composerTarget == .cloud {
-            state.submitCloud(draftBox.value)
+            state.submitCloud(state.composerDraft)
         } else {
-            state.submit(draftBox.value)
+            state.submit(state.composerDraft)
         }
-        draftBox.value = ""
+        state.composerDraft = ""
     }
 }
 

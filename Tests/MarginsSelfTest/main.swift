@@ -620,6 +620,8 @@ test("theme font precedence") {
     check(effective.documentFont == FontPreferences.systemSerif && effective.uiFont == "", "theme suggestion applies when user has no choice")
     check(FontPreferences(documentFont: "Charter").effective(with: fonts).documentFont == "Charter", "explicit user font wins")
     check(FontPreferences().effective(with: nil) == FontPreferences(), "system default without theme")
+    let sans = FontPreferences(documentFont: FontPreferences.systemSans).effective(with: fonts)
+    check(sans.documentFont == FontPreferences.systemSans && sans.documentFontCSS == FontPreferences.defaultCSSStack, "explicit system sans overrides a serif theme")
     check(FontPreferences.source(user: "", theme: "Avenir") == .theme && FontPreferences.source(user: "X", theme: "Y") == .user, "font source")
 }
 
