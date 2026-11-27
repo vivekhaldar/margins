@@ -13,7 +13,7 @@ let package = Package(
         .executableTarget(
             name: "Margins",
             dependencies: ["MarginsCore"],
-            resources: [.copy("Resources/Editor")]
+            resources: [.copy("Resources/Editor"), .copy("Resources/Themes")]
         ),
         .executableTarget(name: "MarginsCLI", dependencies: ["MarginsCore"]),
         // Command Line Tools ship without XCTest / swift-testing macros, so tests run as an executable.

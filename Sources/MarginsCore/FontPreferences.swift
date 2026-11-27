@@ -5,6 +5,8 @@ import Foundation
 /// any other non-empty string is an installed font family name.
 public struct FontPreferences: Codable, Equatable, Sendable {
     public static let systemDefault = ""
+    /// Explicit system sans: a user choice that overrides a theme's suggested font.
+    public static let systemSans = "__system-sans__"
     public static let systemSerif = "__system-serif__"
     public static let systemRounded = "__system-rounded__"
     public static let systemMonospace = "__system-mono__"
@@ -25,7 +27,7 @@ public struct FontPreferences: Codable, Equatable, Sendable {
     public static func cssFontFamily(for selection: String) -> String {
         let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         switch trimmed {
-        case "", systemDefault:
+        case "", systemDefault, systemSans:
             return defaultCSSStack
         case systemSerif:
             return "ui-serif, Georgia, serif"

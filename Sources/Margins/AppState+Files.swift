@@ -9,6 +9,7 @@ extension AppState {
     func handle(_ type: String, _ body: [String: Any]) {
         if let session = body["documentSession"] as? String,
            session.lowercased() != documentSessionID.uuidString.lowercased() { return }
+        if handleZenMessage(type, body) { return }
         switch type {
         case "ready":
             lastThreadsJSON = ""
@@ -18,47 +19,17 @@ extension AppState {
             Task {
                 await editor.setOutline(showOutline)
                 await editor.setCloudMode(composerTarget == .cloud)
-                await editor.setFonts(document: fontPreferences.documentFontCSS, ui: fontPreferences.uiFontCSS)
+                await applyEditorChrome()
                 await loadEditorDocument(session: session)
             }
         case "outline":
             if (body["visible"] as? Bool) == false, showOutline { showOutline = false }
         case "pending":
-            var info = PendingInfo()
-            info.total = (body["total"] as? NSNumber)?.intValue ?? 0
-            info.selected = (body["selected"] as? NSNumber)?.intValue ?? 0
-            for (k, v) in body["byStep"] as? [String: Any] ?? [:] {
-                if let s = Int(k) { info.byStep[s] = (v as? NSNumber)?.intValue ?? 0 }
-            }
-            pending = info
-            for i in doc.intents.indices where doc.intents[i].kind == .instruction {
-                let n = info.byStep[doc.intents[i].step] ?? 0
-                if doc.intents[i].status == .pending && n == 0 { doc.intents[i].status = .reviewed }
-                else if doc.intents[i].status == .reviewed && n > 0 { doc.intents[i].status = .pending }
-            }
+            handlePendingMessage(body)
         case "edited":
-            let html = doc.internalizeImages(body["html"] as? String ?? doc.html)
-            let sections = body["sections"] as? [String] ?? []
-            let where_ = sections.isEmpty ? "the document" : sections.map { "§\($0)" }.joined(separator: ", ")
-            let text = "You edited \(where_)"
-            if let last = doc.intents.last, last.kind == .edit, last.text == text {
-                doc.intents[doc.intents.count - 1].createdAt = Date()
-            } else {
-                doc.intents.append(Intent(kind: .edit, step: 0, text: text, status: .done))
-            }
-            let annotations = captureAnnotations(in: body)
-            doc.snapshot(html: html, slug: "edited \(sections.first ?? "document")".lowercased(), author: .you, detail: where_, annotations: annotations)
-            scheduleSave()
+            handleEditedMessage(body)
         case "reviewed":
-            let a = (body["accepted"] as? NSNumber)?.intValue ?? 0
-            let r = (body["rejected"] as? NSNumber)?.intValue ?? 0
-            let sections = body["sections"] as? [String] ?? []
-            let parts = [a > 0 ? "accepted \(a)" : nil, r > 0 ? "rejected \(r)" : nil].compactMap { $0 }
-            let slug = parts.joined(separator: " · ") + " change\(a + r == 1 ? "" : "s")"
-            let annotations = captureAnnotations(in: body)
-            doc.snapshot(html: body["html"] as? String ?? doc.html, slug: slug, author: .review,
-                         detail: sections.map { "§\($0)" }.joined(separator: ", "), annotations: annotations)
-            scheduleSave()
+            handleReviewedMessage(body)
         case "annotations":
             guard previewing == nil, let annotations = captureAnnotations(in: body),
                   let html = body["html"] as? String else { return }
@@ -67,16 +38,7 @@ extension AppState {
                          detail: "Local comments and provenance", annotations: annotations)
             scheduleSave()
         case "showAnnotationInstruction", "showIntent":
-            let run = (body["runId"] as? String).flatMap(UUID.init(uuidString:)).flatMap { id in
-                (previewing?.annotationRuns ?? doc.annotationRuns).first { $0.id == id }
-            }
-            let id = run?.intentId ?? (body["intentId"] as? String).flatMap(UUID.init(uuidString:))
-            if let intent = doc.intents.first(where: {
-                $0.id == id || (id == nil && $0.kind == .instruction && $0.step == (body["step"] as? NSNumber)?.intValue)
-            }) {
-                revealedIntentID = intent.id
-                instructionRevealRequest = UUID()
-            }
+            handleShowIntentMessage(body)
         case "submitParagraph":
             if previewing == nil, let text = body["text"] as? String,
                let blockId = body["blockId"] as? String, !blockId.isEmpty {
@@ -90,6 +52,61 @@ extension AppState {
             if let cid = body["cid"] as? String, let text = body["instruction"] as? String { refine(cid: cid, instruction: text) }
         default:
             break
+        }
+    }
+
+    private func handlePendingMessage(_ body: [String: Any]) {
+        var info = PendingInfo()
+        info.total = (body["total"] as? NSNumber)?.intValue ?? 0
+        info.selected = (body["selected"] as? NSNumber)?.intValue ?? 0
+        for (k, v) in body["byStep"] as? [String: Any] ?? [:] {
+            if let s = Int(k) { info.byStep[s] = (v as? NSNumber)?.intValue ?? 0 }
+        }
+        pending = info
+        for i in doc.intents.indices where doc.intents[i].kind == .instruction {
+            let n = info.byStep[doc.intents[i].step] ?? 0
+            if doc.intents[i].status == .pending && n == 0 { doc.intents[i].status = .reviewed }
+            else if doc.intents[i].status == .reviewed && n > 0 { doc.intents[i].status = .pending }
+        }
+    }
+
+    private func handleEditedMessage(_ body: [String: Any]) {
+        let html = doc.internalizeImages(body["html"] as? String ?? doc.html)
+        let sections = body["sections"] as? [String] ?? []
+        let where_ = sections.isEmpty ? "the document" : sections.map { "§\($0)" }.joined(separator: ", ")
+        let text = "You edited \(where_)"
+        if let last = doc.intents.last, last.kind == .edit, last.text == text {
+            doc.intents[doc.intents.count - 1].createdAt = Date()
+        } else {
+            doc.intents.append(Intent(kind: .edit, step: 0, text: text, status: .done))
+        }
+        let annotations = captureAnnotations(in: body)
+        doc.snapshot(html: html, slug: "edited \(sections.first ?? "document")".lowercased(), author: .you, detail: where_, annotations: annotations)
+        scheduleSave()
+    }
+
+    private func handleReviewedMessage(_ body: [String: Any]) {
+        let a = (body["accepted"] as? NSNumber)?.intValue ?? 0
+        let r = (body["rejected"] as? NSNumber)?.intValue ?? 0
+        let sections = body["sections"] as? [String] ?? []
+        let parts = [a > 0 ? "accepted \(a)" : nil, r > 0 ? "rejected \(r)" : nil].compactMap { $0 }
+        let slug = parts.joined(separator: " · ") + " change\(a + r == 1 ? "" : "s")"
+        let annotations = captureAnnotations(in: body)
+        doc.snapshot(html: body["html"] as? String ?? doc.html, slug: slug, author: .review,
+                     detail: sections.map { "§\($0)" }.joined(separator: ", "), annotations: annotations)
+        scheduleSave()
+    }
+
+    private func handleShowIntentMessage(_ body: [String: Any]) {
+        let run = (body["runId"] as? String).flatMap(UUID.init(uuidString:)).flatMap { id in
+            (previewing?.annotationRuns ?? doc.annotationRuns).first { $0.id == id }
+        }
+        let id = run?.intentId ?? (body["intentId"] as? String).flatMap(UUID.init(uuidString:))
+        if let intent = doc.intents.first(where: {
+            $0.id == id || (id == nil && $0.kind == .instruction && $0.step == (body["step"] as? NSNumber)?.intValue)
+        }) {
+            revealedIntentID = intent.id
+            instructionRevealRequest = UUID()
         }
     }
 

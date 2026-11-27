@@ -6,7 +6,6 @@ import SwiftUI
 struct IntentPane: View {
     @EnvironmentObject var state: AppState
     @Environment(\.interfaceZoom) private var zoom
-    @StateObject private var draftBox = Local("")
     @FocusState private var composerFocused: Bool
 
     private let suggestions = ["Tighten the prose", "Add an example", "Make it more concrete", "Add a summary at the top"]
@@ -54,7 +53,7 @@ struct IntentPane: View {
             Divider()
             composer
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(ThemedRailBackground())
     }
 
     private var composer: some View {
@@ -69,7 +68,7 @@ struct IntentPane: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(suggestions, id: \.self) { s in
-                            Button(s) { draftBox.value = s; send() }
+                            Button(s) { state.composerDraft = s; send() }
                                 .buttonStyle(.plain)
                                 .uiFont(.caption)
                                 .padding(.horizontal, 8).padding(.vertical, 3)
@@ -80,7 +79,7 @@ struct IntentPane: View {
                 }
             }
             ZStack(alignment: .topLeading) {
-                TextEditor(text: $draftBox.value)
+                TextEditor(text: $state.composerDraft)
                     .uiFont(.body)
                     .scrollContentBackground(.hidden)
                     .focused($composerFocused)
@@ -91,7 +90,7 @@ struct IntentPane: View {
                         send()
                         return .handled
                     }
-                if draftBox.value.isEmpty {
+                if state.composerDraft.isEmpty {
                     Text(composerPlaceholder)
                         .uiFont(.body)
                         .foregroundStyle(.tertiary)
@@ -126,7 +125,7 @@ struct IntentPane: View {
     }
 
     private var sendDisabled: Bool {
-        if draftBox.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        if state.composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         if state.composerTarget == .cloud {
             return state.cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || (state.cloudBackend == .copilot && state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -137,11 +136,11 @@ struct IntentPane: View {
     private func send() {
         guard !sendDisabled else { return }
         if state.composerTarget == .cloud {
-            state.submitCloud(draftBox.value)
+            state.submitCloud(state.composerDraft)
         } else {
-            state.submit(draftBox.value)
+            state.submit(state.composerDraft)
         }
-        draftBox.value = ""
+        state.composerDraft = ""
     }
 }
 
@@ -185,12 +184,12 @@ struct IntentCard: View {
             if let quote = intent.quote, let thread = intent.thread {
                 Button { state.openThread(thread) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Image(systemName: "text.bubble").foregroundStyle(Color.accentColor)
+                        Image(systemName: "text.bubble").foregroundStyle(.themeThreadAccent)
                         Text("“\(quote)”").italic().lineLimit(2).foregroundStyle(.secondary)
                     }
                     .uiFont(.caption)
                     .padding(.leading, 6)
-                    .overlay(Rectangle().fill(Color.yellow.opacity(0.7)).frame(width: 2), alignment: .leading)
+                    .overlay(Rectangle().fill(.themeThreadAccent).frame(width: 2), alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -250,16 +249,16 @@ struct IntentCard: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(isActive ? Color.accentColor.opacity(0.1) : Color(nsColor: .controlBackgroundColor)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(isActive ? ThemeToken.themeAccentBg : ThemeToken.themeSheet))
         .overlay(alignment: .leading) {
             if isActive {
-                Capsule().fill(Color.accentColor)
+                Capsule().fill(.themeAccent)
                     .frame(width: 3)
                     .padding(.vertical, 10)
                     .allowsHitTesting(false)
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(isActive || state.revealedIntentID == intent.id ? Color.accentColor : (hoverBox.value && pendingCount > 0 ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.2)), lineWidth: isActive || state.revealedIntentID == intent.id ? 2 : 1).allowsHitTesting(false))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(isActive || state.revealedIntentID == intent.id ? AnyShapeStyle(.themeAccent) : (hoverBox.value && pendingCount > 0 ? AnyShapeStyle(ThemeToken.themeAccent.opacity(0.6)) : AnyShapeStyle(.themeLine)), lineWidth: isActive || state.revealedIntentID == intent.id ? 2 : 1).allowsHitTesting(false))
         .onHover { h in
             hoverBox.value = h
             if pendingCount > 0 || !h { state.hover(step: h ? intent.step : nil) }

@@ -1,11 +1,12 @@
-:root{--bg:#f6f5f2;--panel:#fff;--ink:#1d1d1f;--mute:#6b6b70;--line:#e4e2dc;--ins:#dcf5e3;--insb:#2f9e55;--insink:#1f6e3b;--del:#fde4e4;--delb:#c94a4a;--delink:#8f2d2d;--acc:#4f46e5;--accbg:#eeedfb;--accline:#d6d3ff;--ui-font:-apple-system,BlinkMacSystemFont,"Inter",sans-serif;--doc-font:-apple-system,BlinkMacSystemFont,"Inter",sans-serif}
+:root{--rail:#F3F0E9;--bg:#EFECE6;--panel:#FAF8F4;--ink:#1F1E1C;--mute:#7A746A;--line:#E2DCD1;--ins:#EDF5F0;--insb:#2D6A4F;--insink:#1E4D38;--del:#F9E6E6;--delb:#B43E3E;--delink:#8F2D2D;--acc:#C2410C;--accbg:#F7E3DA;--accline:#E8B59E;--thread-bg:#F6E8C8;--thread-acc:#C2410C;--sheet-radius:8px;--ui-font:-apple-system,BlinkMacSystemFont,"Inter",sans-serif;--doc-font:-apple-system,BlinkMacSystemFont,"Inter",sans-serif}
+/* Before Swift pushes a theme (window.margins.setTheme), follow the system appearance with Warm Editorial. */
 @media (prefers-color-scheme: dark){
-  :root{--bg:#1c1c1e;--panel:#252527;--ink:#ececee;--mute:#9a9aa2;--line:#3a3a3e;--ins:#1d3b29;--insb:#3fbf6c;--insink:#9fe0b4;--del:#43262a;--delb:#e06464;--delink:#f0a8a8;--acc:#8b85ff;--accbg:#2e2c52;--accline:#4a4690}
+  :root:not([data-color-scheme]){--rail:#151412;--bg:#1B1917;--panel:#22201D;--ink:#EFECE6;--mute:#9C958B;--line:#34302B;--ins:#1A2E24;--insb:#4AA67B;--insink:#AEE3C8;--del:#361E20;--delb:#D96B6B;--delink:#F2B3B3;--acc:#EA7B4A;--accbg:#3A241A;--accline:#6B3B24;--thread-bg:#332A1B;--thread-acc:#E5A93B;color-scheme:dark}
 }
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;font:14px/1.55 var(--ui-font);color:var(--ink);background:var(--bg);display:flex;flex-direction:column;overflow:hidden;-webkit-font-smoothing:antialiased}
-.bar{display:flex;align-items:center;gap:10px;padding:8px 20px;border-bottom:1px solid var(--line);background:var(--panel);min-height:41px}
+.bar{display:flex;align-items:center;gap:8px;padding:5px 14px;border-bottom:1px solid var(--line);background:var(--panel);min-height:40px}
 .sp{flex:1}
 #pending{font-size:12px;color:var(--mute)}
 .btn{font:inherit;font-size:12px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:7px;padding:4px 10px;cursor:pointer}
@@ -57,17 +58,18 @@ article a{color:var(--acc)}
 .tools .ok:hover{background:var(--ins)}.tools .no:hover{background:var(--del)}
 .rb{position:absolute;right:-50px;top:-16px;font:600 10px ui-monospace,Menlo,monospace;color:var(--acc);background:var(--accbg);border-radius:4px;padding:1px 4px;user-select:none;-webkit-user-select:none}
 .chg.sel{outline:2px solid var(--acc);outline-offset:2px}
-.chg.cur{box-shadow:0 0 0 3px #f5c542}
+.chg.cur{box-shadow:0 0 0 3px var(--accline)}
 .chg.peek{outline:1px dashed var(--acc);outline-offset:3px;background:var(--accbg)}
-.chg.refining>ins,#doc > .paragraph-working{background:linear-gradient(90deg,var(--ins) 0%,var(--accbg) 50%,var(--ins) 100%);background-size:200% 100%;animation:sh 1s linear infinite}
-@keyframes sh{to{background-position:-200% 0}}
+/* Calm working shimmer: a soft accent wash drifting across the block plus a gutter glow; no layout change. */
+.chg.refining>ins,#doc > .paragraph-working{background:linear-gradient(100deg,transparent 0%,var(--accbg) 45%,transparent 90%);background-size:250% 100%;animation:working-shimmer 2.4s ease-in-out infinite;box-shadow:inset 3px 0 0 var(--accline);border-radius:4px}
+@keyframes working-shimmer{0%{background-position:100% 0}100%{background-position:-150% 0}}
 .flash{animation:f 1.4s ease}
 @keyframes f{from{box-shadow:0 0 0 5px var(--accline)}to{box-shadow:0 0 0 0 transparent}}
 
 /* read-only preview of an old version */
 article.ro{caret-color:transparent}
 article.ro .tools,article.ro .rb{display:none}
-body.previewing .bar{display:none}
+body.previewing .review{display:none}
 
 /* refine popover */
 .pop{position:fixed;display:none;width:320px;background:var(--panel);border:1px solid var(--accline);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.15);padding:10px;z-index:20}
@@ -103,8 +105,9 @@ article figcaption{font-size:.85em;color:var(--mute);margin-top:.5em;font-style:
 article img:hover{outline:2px solid var(--accline);outline-offset:2px}
 .chg>del img{opacity:.45;filter:grayscale(1)}
 @media (prefers-color-scheme:dark){
-  article img[src$=".svg"]{background:#fff;padding:10px;border-radius:8px}
+  html:not([data-color-scheme=light]) article img[src$=".svg"]{background:#fff;padding:10px;border-radius:8px}
 }
+html[data-color-scheme=dark] article img[src$=".svg"]{background:#fff;padding:10px;border-radius:8px}
 
 /* outline: rail beside the page, or ticks on the right edge when narrow */
 .outline{display:none;position:fixed;z-index:6}
@@ -148,8 +151,7 @@ body:not(.outline-rail) .outline:hover .ohd,body:not(.outline-rail) .outline:hov
 body:not(.outline-rail) .outline:hover .oticks{opacity:0}
 
 /* inline discussion threads */
-::highlight(thread){background-color:rgba(245,197,66,.45)}
-@media (prefers-color-scheme:dark){::highlight(thread){background-color:rgba(245,197,66,.3)}}
+::highlight(thread){background-color:var(--thread-bg)}
 .askchip{position:fixed;display:none;align-items:center;gap:5px;z-index:22;font:600 12px var(--ui-font);color:var(--panel);background:var(--ink);border:0;border-radius:99px;padding:4px 10px 4px 8px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.2)}
 .askchip:hover{background:var(--acc)}
 .bubsvg{width:14px;height:13px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round;overflow:visible}
@@ -164,7 +166,7 @@ body:not(.outline-rail) .outline:hover .oticks{opacity:0}
 article.ro~#tmarks{display:none}
 .tpop{position:fixed;display:none;flex-direction:column;width:360px;max-height:min(520px,70vh);background:var(--panel);border:1px solid var(--accline);border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.18);padding:10px;z-index:24}
 .thd{display:flex;align-items:flex-start;gap:6px;margin-bottom:8px}
-.tq{flex:1;font-size:12.5px;line-height:1.4;color:var(--mute);border-left:3px solid #f5c542;padding:1px 0 1px 8px;font-style:italic;max-height:3.6em;overflow:hidden}
+.tq{flex:1;font-size:12.5px;line-height:1.4;color:var(--mute);border-left:3px solid var(--thread-acc);padding:1px 0 1px 8px;font-style:italic;max-height:3.6em;overflow:hidden}
 .thd button{border:0;background:none;color:var(--mute);cursor:pointer;font-size:12px;border-radius:4px;padding:1px 5px}
 .thd button:hover{background:var(--line);color:var(--ink)}
 .tmsgs{overflow:auto;display:flex;flex-direction:column;gap:6px;min-height:0}
@@ -207,17 +209,15 @@ article.ro~#tmarks{display:none}
 #doc > .paragraph-working{box-shadow:-6px 0 var(--panel),-9px 0 var(--acc);border-radius:4px}
 
 /* Formatting controls stay above the document without taking its selection. */
-.formatbar{display:flex;flex-wrap:wrap;gap:6px;padding:6px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+.formatbar{display:flex;align-items:center;flex-wrap:nowrap;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}
 .formatbar button[aria-pressed=true]{background:var(--accbg);border-color:var(--acc);color:var(--acc)}
 .formatbar-sep{width:1px;align-self:stretch;margin:2px 2px;background:var(--line)}
-body.previewing .formatbar{display:none}
 article ul[data-task]{list-style:none;padding-left:24px}
 article input[type=checkbox]{margin:0 8px 0 -22px;accent-color:var(--acc);cursor:pointer}
 article.ro input[type=checkbox],.chg>del input[type=checkbox]{pointer-events:none}
 
 /* Persistent annotations: all paint and controls stay outside #doc. */
-:root{--annotation-tint:rgba(112,100,232,.105);--comment-ink:#a66516;--comment-bg:rgba(216,148,30,.12)}
-@media (prefers-color-scheme:dark){:root{--annotation-tint:rgba(155,141,255,.17);--comment-ink:#e9b75e;--comment-bg:rgba(233,183,94,.1)}}
+:root{--annotation-tint:color-mix(in srgb,var(--acc) 12%,transparent);--comment-ink:var(--thread-acc);--comment-bg:color-mix(in srgb,var(--thread-acc) 13%,transparent)}
 .annotation-controls{display:inline-flex;align-items:center;flex-wrap:wrap;gap:7px;margin-left:auto;padding-left:10px;border-left:1px solid var(--line)}
 .annotation-toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:650;border:1px solid var(--accline);background:var(--accbg);border-radius:7px;padding:4px 8px;cursor:pointer;white-space:nowrap;color:var(--ink)}
 .annotation-toggle input{width:14px;height:14px;margin:0;accent-color:var(--acc)}

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import MarginsCore
 import SwiftUI
@@ -65,6 +66,33 @@ final class AppState: ObservableObject {
             applyFontsToEditor()
         }
     }
+    // Theme state (logic in AppState+Theme.swift)
+    @Published var selectedThemeID = MarginsTheme.defaultID {
+        didSet {
+            guard selectedThemeID != oldValue else { return }
+            defaults.set(selectedThemeID, forKey: "selectedThemeID")
+            applyThemeToEditor()
+        }
+    }
+    @Published var appearanceMode = AppearanceMode.system {
+        didSet {
+            guard appearanceMode != oldValue else { return }
+            defaults.set(appearanceMode.rawValue, forKey: "appearanceMode")
+            applyAppearance()
+        }
+    }
+    /// The window's effective appearance (system or forced), reported by ContentView.
+    @Published var effectiveColorScheme = ThemeColorScheme.light {
+        didSet { if effectiveColorScheme != oldValue { applyThemeToEditor() } }
+    }
+    var themeObserver: AnyCancellable?
+    // Zen Mode state (logic in AppState+Zen.swift); zenMode is per window, the options persist.
+    @Published var zenMode = false { didSet { if zenMode != oldValue { zenModeChanged() } } }
+    @Published var zenTypewriter = false { didSet { persistZenPreferences(changed: zenTypewriter != oldValue) } }
+    @Published var zenParagraphFocus = false { didSet { persistZenPreferences(changed: zenParagraphFocus != oldValue) } }
+    var zenRestoreHistory = false
+    /// Unsent instruction text; lives here so it survives the instruction pane being hidden (Zen Mode).
+    @Published var composerDraft = ""
 
     let editor = EditorBridge()
     var instances: [UUID: (config: ProviderConfig, provider: ModelProvider)] = [:]
@@ -127,6 +155,8 @@ final class AppState: ObservableObject {
         editor.onMessage = { [weak self] type, body in self?.handle(type, body) }
         editor.assetLookup = { [weak self] id in self?.doc.assets[id] }
         editor.onAddAsset = { [weak self] data, mime in self?.doc.addAsset(data, mime: mime) }
+        loadThemePreferences()
+        loadZenPreferences()
         if ud.object(forKey: "showOutline") != nil { showOutline = ud.bool(forKey: "showOutline") }
         if let p = ud.string(forKey: "toolPolicy").flatMap(AgentToolPolicy.init(rawValue:)) { toolPolicy = p }
         let savedZoom = ud.double(forKey: "zoom")
@@ -138,6 +168,8 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 self?.reloadProviderSettings()
                 self?.reloadFontPreferences()
+                self?.loadThemePreferences()
+                self?.loadZenPreferences()
             }
         }
         projectFolderObserver = NotificationCenter.default.addObserver(
@@ -150,6 +182,9 @@ final class AppState: ObservableObject {
 
         if restoreLastDocument, let last = defaults.url(forKey: "lastDocument"), FileManager.default.fileExists(atPath: last.path) {
             open(last)
+        }
+        themeObserver = ThemeStore.shared.$themes.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyThemeToEditor() }
         }
         startWatchingCurrentFile()
         resumeCloudPolling()

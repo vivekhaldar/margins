@@ -1,0 +1,52 @@
+{
+  "id": "frosted-studio",
+  "name": "Frosted Studio",
+  "author": "Margins",
+  "chrome": {
+    "sheetStyle": "card",
+    "sidebarVibrancy": true,
+    "cornerRadius": 12
+  },
+  "fonts": {
+    "documentFont": "",
+    "uiFont": ""
+  },
+  "light": {
+    "railBg": "#EEF1F6",
+    "canvasBg": "#F5F7FA",
+    "sheetBg": "#FFFFFF",
+    "ink": "#0F172A",
+    "mutedInk": "#64748B",
+    "line": "#DCE3EE",
+    "accent": "#2563EB",
+    "accentBg": "#DBEAFE",
+    "accentLine": "#93C5FD",
+    "insBg": "#F0FDF4",
+    "insBorder": "#16A34A",
+    "insInk": "#166534",
+    "delBg": "#FEF2F2",
+    "delBorder": "#DC2626",
+    "delInk": "#991B1B",
+    "threadBg": "#FEF3C7",
+    "threadAccent": "#2563EB"
+  },
+  "dark": {
+    "railBg": "#0F141C",
+    "canvasBg": "#121821",
+    "sheetBg": "#1A2130",
+    "ink": "#E6EDF7",
+    "mutedInk": "#94A3B8",
+    "line": "#2A3445",
+    "accent": "#60A5FA",
+    "accentBg": "#172A46",
+    "accentLine": "#2B4C7E",
+    "insBg": "#0F2A1C",
+    "insBorder": "#4ADE80",
+    "insInk": "#BBF7D0",
+    "delBg": "#3A1A1D",
+    "delBorder": "#F87171",
+    "delInk": "#FECACA",
+    "threadBg": "#3A3016",
+    "threadAccent": "#60A5FA"
+  }
+}

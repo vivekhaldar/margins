@@ -87,6 +87,8 @@ struct MarginsApp: App {
                 Divider()
                 Button(state.showOutline ? "Hide Outline" : "Show Outline") { state.showOutline.toggle() }
                     .keyboardShortcut("o", modifiers: [.command, .control])
+                Button(state.zenMode ? "Exit Zen Mode" : "Enter Zen Mode") { state.toggleZenMode() }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
                 Divider()
             }
             CommandMenu("Review") {

@@ -77,6 +77,8 @@ if [[ "$LINT_ONLY" == "false" ]]; then
     node scripts/test-annotation-alignment.js
     echo "==> [check] node scripts/test-formatting.js"
     node scripts/test-formatting.js
+    echo "==> [check] node scripts/test-zen.js"
+    node scripts/test-zen.js
   elif [[ "$IS_CI" == "true" ]]; then
     echo "error: node is required in CI" >&2
     exit 1

@@ -1,0 +1,52 @@
+{
+  "id": "botanical-ink",
+  "name": "Botanical Ink",
+  "author": "Margins",
+  "chrome": {
+    "sheetStyle": "card",
+    "sidebarVibrancy": false,
+    "cornerRadius": 10
+  },
+  "fonts": {
+    "documentFont": "__system-serif__",
+    "uiFont": ""
+  },
+  "light": {
+    "railBg": "#E6EDE8",
+    "canvasBg": "#EFF3EF",
+    "sheetBg": "#FCFBF7",
+    "ink": "#1B2620",
+    "mutedInk": "#5F7368",
+    "line": "#D2DDD5",
+    "accent": "#1D6F5E",
+    "accentBg": "#D6EBE5",
+    "accentLine": "#A9CCC3",
+    "insBg": "#E7F4EF",
+    "insBorder": "#1D6F5E",
+    "insInk": "#164A3F",
+    "delBg": "#F5E3E8",
+    "delBorder": "#9E3B52",
+    "delInk": "#7A283C",
+    "threadBg": "#F6EAD2",
+    "threadAccent": "#C68B2C"
+  },
+  "dark": {
+    "railBg": "#121A17",
+    "canvasBg": "#161F1B",
+    "sheetBg": "#1D2621",
+    "ink": "#ECE8DC",
+    "mutedInk": "#93A69B",
+    "line": "#2E3B34",
+    "accent": "#5CC2AC",
+    "accentBg": "#183530",
+    "accentLine": "#2D6358",
+    "insBg": "#17302A",
+    "insBorder": "#5CC2AC",
+    "insInk": "#B9E6DA",
+    "delBg": "#35202A",
+    "delBorder": "#D07A93",
+    "delInk": "#EDB7C6",
+    "threadBg": "#3A301B",
+    "threadAccent": "#D9A548"
+  }
+}

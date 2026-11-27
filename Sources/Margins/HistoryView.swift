@@ -37,6 +37,7 @@ struct HistoryView: View {
                 }
             }
         }
+        .background(ThemedRailBackground())
     }
 }
 
@@ -84,6 +85,6 @@ private struct VersionRow: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(isViewing ? Color.accentColor.opacity(0.12) : .clear))
+        .background(RoundedRectangle(cornerRadius: 8).fill(isViewing ? AnyShapeStyle(.themeAccentBg) : AnyShapeStyle(Color.clear)))
     }
 }

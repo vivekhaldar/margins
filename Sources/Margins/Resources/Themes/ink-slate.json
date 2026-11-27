@@ -1,0 +1,52 @@
+{
+  "id": "ink-slate",
+  "name": "Ink & Slate",
+  "author": "Margins",
+  "chrome": {
+    "sheetStyle": "card",
+    "sidebarVibrancy": false,
+    "cornerRadius": 10
+  },
+  "fonts": {
+    "documentFont": "",
+    "uiFont": ""
+  },
+  "light": {
+    "railBg": "#ECEEF2",
+    "canvasBg": "#F4F5F8",
+    "sheetBg": "#FFFFFF",
+    "ink": "#16181D",
+    "mutedInk": "#5F6675",
+    "line": "#DADDE4",
+    "accent": "#B7791F",
+    "accentBg": "#FBF1DE",
+    "accentLine": "#E6C78E",
+    "insBg": "#EAF8F1",
+    "insBorder": "#1F9D63",
+    "insInk": "#14603F",
+    "delBg": "#FCEBEC",
+    "delBorder": "#C94A50",
+    "delInk": "#8E2A30",
+    "threadBg": "#FBF1DE",
+    "threadAccent": "#B7791F"
+  },
+  "dark": {
+    "railBg": "#111317",
+    "canvasBg": "#16181D",
+    "sheetBg": "#1D2026",
+    "ink": "#ECEEF2",
+    "mutedInk": "#8A91A0",
+    "line": "#2B303B",
+    "accent": "#E5A93B",
+    "accentBg": "#332A18",
+    "accentLine": "#735822",
+    "insBg": "#182E25",
+    "insBorder": "#3ECF8E",
+    "insInk": "#B8F0D6",
+    "delBg": "#351E23",
+    "delBorder": "#E56B6F",
+    "delInk": "#F09AA0",
+    "threadBg": "#332A18",
+    "threadAccent": "#E5A93B"
+  }
+}

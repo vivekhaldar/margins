@@ -47,8 +47,8 @@ extension AppState {
     }
 
     func applyFontsToEditor() {
-        let docFont = fontPreferences.documentFontCSS
-        let uiFont = fontPreferences.uiFontCSS
+        let fonts = effectiveFontPreferences
+        let docFont = fonts.documentFontCSS, uiFont = fonts.uiFontCSS
         Task { await editor.setFonts(document: docFont, ui: uiFont) }
     }
 

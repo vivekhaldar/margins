@@ -1,0 +1,52 @@
+{
+  "id": "warm-editorial",
+  "name": "Warm Editorial",
+  "author": "Margins",
+  "chrome": {
+    "sheetStyle": "card",
+    "sidebarVibrancy": false,
+    "cornerRadius": 8
+  },
+  "fonts": {
+    "documentFont": "__system-serif__",
+    "uiFont": ""
+  },
+  "light": {
+    "railBg": "#F3F0E9",
+    "canvasBg": "#EFECE6",
+    "sheetBg": "#FAF8F4",
+    "ink": "#1F1E1C",
+    "mutedInk": "#7A746A",
+    "line": "#E2DCD1",
+    "accent": "#C2410C",
+    "accentBg": "#F7E3DA",
+    "accentLine": "#E8B59E",
+    "insBg": "#EDF5F0",
+    "insBorder": "#2D6A4F",
+    "insInk": "#1E4D38",
+    "delBg": "#F9E6E6",
+    "delBorder": "#B43E3E",
+    "delInk": "#8F2D2D",
+    "threadBg": "#F6E8C8",
+    "threadAccent": "#C2410C"
+  },
+  "dark": {
+    "railBg": "#151412",
+    "canvasBg": "#1B1917",
+    "sheetBg": "#22201D",
+    "ink": "#EFECE6",
+    "mutedInk": "#9C958B",
+    "line": "#34302B",
+    "accent": "#EA7B4A",
+    "accentBg": "#3A241A",
+    "accentLine": "#6B3B24",
+    "insBg": "#1A2E24",
+    "insBorder": "#4AA67B",
+    "insInk": "#AEE3C8",
+    "delBg": "#361E20",
+    "delBorder": "#D96B6B",
+    "delInk": "#F2B3B3",
+    "threadBg": "#332A1B",
+    "threadAccent": "#E5A93B"
+  }
+}

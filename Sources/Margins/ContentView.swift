@@ -1,3 +1,4 @@
+import AppKit
 import MarginsCore
 import SwiftUI
 
@@ -5,41 +6,34 @@ struct ContentView: View {
     @EnvironmentObject var state: AppState
     @ObservedObject private var sync = SyncController.shared
     @StateObject private var showLibraryPicker = Local(false)
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var intentWidth = Local<CGFloat>(340)
+    @StateObject private var dragStartWidth = Local<CGFloat?>(nil)
 
     var body: some View {
-        HSplitView {
-            IntentPane()
-                .environment(\.interfaceZoom, state.zoom)
-                .environment(\.uiFontFamily, state.fontPreferences.uiFont)
-                .uiFont(.body)
-                .frame(minWidth: 220, idealWidth: 340, maxWidth: .infinity)
-            VStack(spacing: 0) {
-                if sync.showOnboarding {
-                    SyncOnboardingBanner(sync: sync)
+        GeometryReader { geo in
+            let maxIntent = max(220, geo.size.width - 360)
+            let paneWidth = min(max(intentWidth.value, 220), maxIntent)
+            HStack(spacing: 0) {
+                IntentPane()
+                    .environment(\.interfaceZoom, state.zoom)
+                    .environment(\.uiFontFamily, state.effectiveFontPreferences.uiFont)
+                    .uiFont(.body)
+                    .frame(width: paneWidth)
+                    .frame(width: state.zenMode ? 0 : paneWidth, alignment: .trailing)
+                    .opacity(state.zenMode ? 0 : 1)
+                    .clipped()
+                    .disabled(state.zenMode)
+                    .allowsHitTesting(!state.zenMode)
+                    .accessibilityHidden(state.zenMode)
+                if !state.zenMode {
+                    SplitDivider(width: $intentWidth.value, dragStart: $dragStartWidth.value, range: 220...maxIntent)
+                        .transition(.opacity)
                 }
-                if let entry = sync.entry(for: state.doc.id),
-                   entry.state == .conflict,
-                   let conflictName = entry.conflictFilename {
-                    ConflictBanner(
-                        conflictFilename: conflictName,
-                        onOpenConflict: {
-                            let url = AppState.documentsFolder.appendingPathComponent(conflictName)
-                            DocumentWindows.shared.open(url)
-                        },
-                        onDismiss: {
-                            sync.clearConflict(for: state.doc.id)
-                        }
-                    )
-                }
-                if let v = state.previewing {
-                    PreviewBanner(version: v)
-                        .environment(\.interfaceZoom, state.zoom)
-                        .environment(\.uiFontFamily, state.fontPreferences.uiFont)
-                }
-                EditorView(bridge: state.editor)
+                editorColumn
             }
-            .frame(minWidth: 360, maxWidth: .infinity)
-            .layoutPriority(1)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: state.zenMode)
         }
         .sheet(isPresented: $showLibraryPicker.value) {
             LibraryPickerView(sync: sync, onDismiss: { showLibraryPicker.value = false })
@@ -52,18 +46,52 @@ struct ContentView: View {
         .inspector(isPresented: $state.showHistory) {
             HistoryView()
                 .environment(\.interfaceZoom, state.zoom)
-                .environment(\.uiFontFamily, state.fontPreferences.uiFont)
+                .environment(\.uiFontFamily, state.effectiveFontPreferences.uiFont)
                 .uiFont(.body)
                 .inspectorColumnWidth(min: 260, ideal: 320, max: 720)
         }
         .navigationTitle(state.doc.title)
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
+        .toolbar(state.zenMode ? .hidden : .visible, for: .windowToolbar)
+        .environment(\.marginsTheme, state.resolvedTheme)
+        .onAppear { state.effectiveColorScheme = colorScheme == .dark ? .dark : .light }
+        .onChange(of: colorScheme) { _, scheme in state.effectiveColorScheme = scheme == .dark ? .dark : .light }
         .alert("Margins", isPresented: Binding(get: { state.lastError != nil }, set: { if !$0 { state.lastError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(state.lastError ?? "")
         }
+    }
+
+    private var editorColumn: some View {
+        VStack(spacing: 0) {
+            if sync.showOnboarding {
+                SyncOnboardingBanner(sync: sync)
+            }
+            if let entry = sync.entry(for: state.doc.id),
+               entry.state == .conflict,
+               let conflictName = entry.conflictFilename {
+                ConflictBanner(
+                    conflictFilename: conflictName,
+                    onOpenConflict: {
+                        let url = AppState.documentsFolder.appendingPathComponent(conflictName)
+                        DocumentWindows.shared.open(url)
+                    },
+                    onDismiss: {
+                        sync.clearConflict(for: state.doc.id)
+                    }
+                )
+            }
+            if let v = state.previewing {
+                PreviewBanner(version: v)
+                    .environment(\.interfaceZoom, state.zoom)
+                    .environment(\.uiFontFamily, state.effectiveFontPreferences.uiFont)
+            }
+            EditorView(bridge: state.editor)
+        }
+        .frame(minWidth: 360, maxWidth: .infinity)
+        .layoutPriority(1)
     }
 
     private var subtitle: String {
@@ -87,6 +115,13 @@ struct ContentView: View {
                 Label("Outline", systemImage: state.showOutline ? "list.bullet.indent" : "list.bullet")
             }
             .help(state.showOutline ? "Hide outline (⌃⌘O)" : "Show outline (⌃⌘O)")
+            .interfaceZoom(state.zoom)
+            Button {
+                state.toggleZenMode()
+            } label: {
+                Label("Zen Mode", systemImage: "rectangle.center.inset.filled")
+            }
+            .help("Zen Mode (⇧⌘F)")
             .interfaceZoom(state.zoom)
             Button {
                 state.showHistory.toggle()
@@ -241,6 +276,7 @@ struct ProviderMenu: View {
 
 struct PreviewBanner: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.marginsTheme) private var theme
     let version: Version
 
     var body: some View {
@@ -256,7 +292,47 @@ struct PreviewBanner: View {
         .uiFont(.callout)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color.yellow.opacity(0.18))
+        .background(theme.swiftUIColor("threadBg"))
         .overlay(Divider(), alignment: .bottom)
+    }
+}
+
+private struct SplitDivider: View {
+    @Binding var width: CGFloat
+    @Binding var dragStart: CGFloat?
+    let range: ClosedRange<CGFloat>
+    @Environment(\.marginsTheme) private var theme
+    @StateObject private var hovering = Local(false)
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(theme.swiftUIColor("line"))
+                .frame(width: 1)
+            Color.clear
+                .frame(width: 7)
+                .contentShape(Rectangle())
+        }
+        .frame(width: 1)
+        .onHover { inside in
+            guard inside != hovering.value else { return }
+            hovering.value = inside
+            if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+        }
+        .onDisappear {
+            if hovering.value {
+                hovering.value = false
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { value in
+                    if dragStart == nil { dragStart = width }
+                    let proposed = (dragStart ?? width) + value.translation.width
+                    width = min(max(proposed, range.lowerBound), range.upperBound)
+                }
+                .onEnded { _ in dragStart = nil }
+        )
     }
 }

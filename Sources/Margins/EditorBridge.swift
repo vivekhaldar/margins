@@ -188,6 +188,13 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     func setFonts(document: String, ui: String) async {
         _ = try? await call("window.margins.setFonts(docFont, uiFont)", ["docFont": document, "uiFont": ui])
     }
+    func setTheme(_ theme: EditorThemePayload) async {
+        _ = try? await call("window.margins.setTheme(theme)", ["theme": Self.jsonObject(theme)])
+    }
+    func setZenMode(enabled: Bool, typewriter: Bool, paragraphFocus: Bool) async {
+        let options = ["enabled": enabled, "typewriter": typewriter, "paragraphFocus": paragraphFocus]
+        _ = try? await call("window.margins.setZenMode(options)", ["options": options])
+    }
     func setThreads(_ list: [[String: Any]]) async { _ = try? await call("window.margins.setThreads(list)", ["list": list]) }
     func setAnnotationRuns(_ runs: [AnnotationRun], availableIntentIDs: Set<UUID>? = nil) async {
         var payload = Self.jsonObject(runs) as? [[String: Any]] ?? []

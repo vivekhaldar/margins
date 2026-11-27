@@ -551,6 +551,100 @@ test("font preferences round trip and CSS stacks") {
     check(custom.uiFontCSS.hasPrefix("\"Helvetica \\\"Neue\\\"\","), "quotes escaped in CSS font family")
 }
 
+
+let bundledThemesDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    .appendingPathComponent("Sources/Margins/Resources/Themes")
+
+test("theme JSON decode/encode round trip") {
+    let theme = MarginsTheme.builtInDefault
+    let decoded = try JSONDecoder().decode(MarginsTheme.self, from: JSONEncoder().encode(theme))
+    check(decoded == theme, "full theme survives round trip")
+    check(decoded.supportedSchemes == [.light, .dark] && decoded.modeBadge == nil, "dual-mode theme has no badge")
+    let payload = theme.resolved(for: .dark).editorPayload
+    check(payload.vars["--panel"] == "#22201D" && payload.vars["--thread-acc"] == "#E5A93B", "palette maps to editor CSS vars")
+    check(payload.colorScheme == "dark" && payload.sheetStyle == "card" && payload.cornerRadius == 8, "chrome in editor payload")
+}
+
+test("partial palettes fall back to default tokens") {
+    let json = ##"{"id":"p","name":"Partial","chrome":{"sheetStyle":"seamless","cornerRadius":99},"light":{"accent":"#123456","ink":"oops","bogus":"#FFFFFF"},"dark":{"sheetBg":"#000"}}"##
+    let (theme, warnings) = try ThemeLoader.decode(Data(json.utf8))
+    let light = theme.resolvedPalette(for: .light)
+    check(light.isComplete, "resolved palette is complete")
+    check(light["accent"] == "#123456", "own token wins")
+    check(light["ink"] == MarginsTheme.builtInDefault.light?["ink"], "invalid hex falls back to default")
+    check(light["bogus"] == nil, "unknown tokens are dropped")
+    check(warnings.count == 1 && warnings[0].contains("ink"), "invalid hex is reported")
+    check(theme.resolvedPalette(for: .dark)["sheetBg"] == "#000" && theme.resolvedPalette(for: .dark)["ink"] == "#EFECE6", "dark partial merges")
+    check(theme.chrome.sheetStyle == .seamless && theme.chrome.cornerRadius == 24, "chrome decoded and clamped")
+    let bare = try JSONDecoder().decode(ThemeChrome.self, from: Data("{}".utf8))
+    check(bare == ThemeChrome(), "chrome defaults")
+}
+
+test("single-mode themes resolve the default counterpart") {
+    let (dark, _) = try ThemeLoader.decode(Data(##"{"id":"d","name":"D","dark":{"ink":"#EEEEEE"}}"##.utf8))
+    check(dark.supportedSchemes == [.dark] && dark.modeBadge == "Dark only", "dark-only detected")
+    check(dark.resolvedPalette(for: .light) == MarginsTheme.builtInDefault.light, "light falls back to default light")
+    let (light, _) = try ThemeLoader.decode(Data(##"{"id":"l","name":"L","light":{}}"##.utf8))
+    check(light.modeBadge == "Light only", "light-only detected")
+    check(AppearanceMode.system.resolve(systemScheme: .dark) == .dark && AppearanceMode.light.resolve(systemScheme: .dark) == .light, "appearance override")
+}
+
+test("hex validation and contrast") {
+    check(ThemeColor.isValidHex("#abc") && ThemeColor.isValidHex("#A1B2C3") && ThemeColor.isValidHex("#A1B2C3FF"), "valid hex forms")
+    check(!ThemeColor.isValidHex("A1B2C3") && !ThemeColor.isValidHex("#GGGGGG") && !ThemeColor.isValidHex("#12345"), "invalid hex forms")
+    check(abs((ThemeColor.contrastRatio("#000000", "#FFFFFF") ?? 0) - 21) < 0.01, "black on white is 21:1")
+}
+
+test("malformed theme files are skipped during directory load") {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-themes-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try Data("{ not json".utf8).write(to: dir.appendingPathComponent("a-broken.json"))
+    try Data(##"{"id":"","name":"x","light":{}}"##.utf8).write(to: dir.appendingPathComponent("b-noid.json"))
+    try Data(##"{"id":"n","name":"No palettes"}"##.utf8).write(to: dir.appendingPathComponent("c-empty.json"))
+    try Data(##"{"id":"ok","name":"Okay","dark":{"accent":"#FF0000"}}"##.utf8).write(to: dir.appendingPathComponent("d-ok.json"))
+    try Data(##"{"id":"ok","name":"Dup","dark":{}}"##.utf8).write(to: dir.appendingPathComponent("e-dup.json"))
+    try Data("ignored".utf8).write(to: dir.appendingPathComponent("notes.txt"))
+    var logs: [String] = []
+    let themes = ThemeLoader.loadDirectory(dir) { logs.append($0) }
+    check(themes.map(\.id) == ["ok"], "only the valid theme loads")
+    check(logs.count == 4, "each bad file is logged")
+    let merged = ThemeCatalog.merge(builtIn: [], user: themes + [MarginsTheme(id: MarginsTheme.defaultID, name: "Shadow", light: ThemePalette())])
+    check(merged.map(\.id) == [MarginsTheme.defaultID, "ok"], "default is always present and cannot be shadowed")
+    check(ThemeCatalog.theme(id: "missing", in: merged).id == MarginsTheme.defaultID, "unknown selection falls back to default")
+}
+
+test("theme font precedence") {
+    let fonts = ThemeFonts(documentFont: FontPreferences.systemSerif, uiFont: "")
+    let effective = FontPreferences(documentFont: "", uiFont: "").effective(with: fonts)
+    check(effective.documentFont == FontPreferences.systemSerif && effective.uiFont == "", "theme suggestion applies when user has no choice")
+    check(FontPreferences(documentFont: "Charter").effective(with: fonts).documentFont == "Charter", "explicit user font wins")
+    check(FontPreferences().effective(with: nil) == FontPreferences(), "system default without theme")
+    let sans = FontPreferences(documentFont: FontPreferences.systemSans).effective(with: fonts)
+    check(sans.documentFont == FontPreferences.systemSans && sans.documentFontCSS == FontPreferences.defaultCSSStack, "explicit system sans overrides a serif theme")
+    check(FontPreferences.source(user: "", theme: "Avenir") == .theme && FontPreferences.source(user: "X", theme: "Y") == .user, "font source")
+}
+
+test("bundled themes are complete, valid, and legible") {
+    let ids = ["warm-editorial", "frosted-studio", "swiss-studio", "botanical-ink", "ink-slate"]
+    var logs: [String] = []
+    let themes = ThemeLoader.loadDirectory(bundledThemesDir) { logs.append($0) }
+    check(Set(themes.map(\.id)) == Set(ids) && logs.isEmpty, "all five built-in themes load cleanly: \(logs)")
+    for theme in themes {
+        check(!theme.name.isEmpty && theme.author == "Margins", "\(theme.id) has name and author")
+        for scheme in ThemeColorScheme.allCases {
+            guard let palette = theme.palette(for: scheme) else { check(false, "\(theme.id) missing \(scheme)"); continue }
+            check(palette.isComplete && palette.invalidTokens.isEmpty, "\(theme.id) \(scheme) palette complete and valid")
+            let sheet = ThemeColor.contrastRatio(palette["ink"] ?? "", palette["sheetBg"] ?? "") ?? 0
+            let rail = ThemeColor.contrastRatio(palette["ink"] ?? "", palette["railBg"] ?? "") ?? 0
+            check(sheet >= 4.5 && rail >= 4.5, "\(theme.id) \(scheme) ink contrast \(sheet) / \(rail)")
+            check(!palette.tokens.values.contains { $0.lowercased() == "#4f46e5" }, "\(theme.id) retires indigo")
+        }
+    }
+    check(themes.first { $0.id == MarginsTheme.defaultID } == MarginsTheme.builtInDefault, "bundled default matches code default")
+    check(themes.first { $0.id == "frosted-studio" }?.chrome.sidebarVibrancy == true, "frosted uses vibrancy")
+    check(themes.first { $0.id == "swiss-studio" }?.chrome.sheetStyle == .seamless, "swiss is seamless")
+}
 test("per-machine project folder store and migration") {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margins-pf-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
