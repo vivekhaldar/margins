@@ -9,6 +9,7 @@ extension AppState {
     func handle(_ type: String, _ body: [String: Any]) {
         if let session = body["documentSession"] as? String,
            session.lowercased() != documentSessionID.uuidString.lowercased() { return }
+        if handleZenMessage(type, body) { return }
         switch type {
         case "ready":
             lastThreadsJSON = ""
@@ -18,7 +19,7 @@ extension AppState {
             Task {
                 await editor.setOutline(showOutline)
                 await editor.setCloudMode(composerTarget == .cloud)
-                await editor.setFonts(document: fontPreferences.documentFontCSS, ui: fontPreferences.uiFontCSS)
+                await applyEditorChrome()
                 await loadEditorDocument(session: session)
             }
         case "outline":

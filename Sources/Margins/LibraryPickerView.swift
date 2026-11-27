@@ -295,7 +295,7 @@ struct ConflictBanner: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.12))
+        .background(.themeThreadBg)
     }
 }
 
@@ -306,7 +306,7 @@ struct SyncOnboardingBanner: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "icloud")
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(.themeAccent)
             Text("Sync your Margins documents across Macs with Google Drive, or keep everything local.")
                 .font(.callout)
                 .lineLimit(2)
@@ -323,6 +323,6 @@ struct SyncOnboardingBanner: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.accentColor.opacity(0.08))
+        .background(.themeAccentBg)
     }
 }

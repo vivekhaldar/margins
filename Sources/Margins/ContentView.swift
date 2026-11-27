@@ -5,14 +5,17 @@ struct ContentView: View {
     @EnvironmentObject var state: AppState
     @ObservedObject private var sync = SyncController.shared
     @StateObject private var showLibraryPicker = Local(false)
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HSplitView {
-            IntentPane()
-                .environment(\.interfaceZoom, state.zoom)
-                .environment(\.uiFontFamily, state.fontPreferences.uiFont)
-                .uiFont(.body)
-                .frame(minWidth: 220, idealWidth: 340, maxWidth: .infinity)
+            if !state.zenMode {
+                IntentPane()
+                    .environment(\.interfaceZoom, state.zoom)
+                    .environment(\.uiFontFamily, state.effectiveFontPreferences.uiFont)
+                    .uiFont(.body)
+                    .frame(minWidth: 220, idealWidth: 340, maxWidth: .infinity)
+            }
             VStack(spacing: 0) {
                 if sync.showOnboarding {
                     SyncOnboardingBanner(sync: sync)
@@ -34,7 +37,7 @@ struct ContentView: View {
                 if let v = state.previewing {
                     PreviewBanner(version: v)
                         .environment(\.interfaceZoom, state.zoom)
-                        .environment(\.uiFontFamily, state.fontPreferences.uiFont)
+                        .environment(\.uiFontFamily, state.effectiveFontPreferences.uiFont)
                 }
                 EditorView(bridge: state.editor)
             }
@@ -52,13 +55,17 @@ struct ContentView: View {
         .inspector(isPresented: $state.showHistory) {
             HistoryView()
                 .environment(\.interfaceZoom, state.zoom)
-                .environment(\.uiFontFamily, state.fontPreferences.uiFont)
+                .environment(\.uiFontFamily, state.effectiveFontPreferences.uiFont)
                 .uiFont(.body)
                 .inspectorColumnWidth(min: 260, ideal: 320, max: 720)
         }
         .navigationTitle(state.doc.title)
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
+        .toolbar(state.zenMode ? .hidden : .visible, for: .windowToolbar)
+        .environment(\.marginsTheme, state.resolvedTheme)
+        .onAppear { state.effectiveColorScheme = colorScheme == .dark ? .dark : .light }
+        .onChange(of: colorScheme) { _, scheme in state.effectiveColorScheme = scheme == .dark ? .dark : .light }
         .alert("Margins", isPresented: Binding(get: { state.lastError != nil }, set: { if !$0 { state.lastError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -87,6 +94,13 @@ struct ContentView: View {
                 Label("Outline", systemImage: state.showOutline ? "list.bullet.indent" : "list.bullet")
             }
             .help(state.showOutline ? "Hide outline (⌃⌘O)" : "Show outline (⌃⌘O)")
+            .interfaceZoom(state.zoom)
+            Button {
+                state.toggleZenMode()
+            } label: {
+                Label("Zen Mode", systemImage: "rectangle.center.inset.filled")
+            }
+            .help("Zen Mode (⇧⌘F)")
             .interfaceZoom(state.zoom)
             Button {
                 state.showHistory.toggle()
@@ -241,6 +255,7 @@ struct ProviderMenu: View {
 
 struct PreviewBanner: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.marginsTheme) private var theme
     let version: Version
 
     var body: some View {
@@ -256,7 +271,7 @@ struct PreviewBanner: View {
         .uiFont(.callout)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color.yellow.opacity(0.18))
+        .background(theme.swiftUIColor("threadBg"))
         .overlay(Divider(), alignment: .bottom)
     }
 }

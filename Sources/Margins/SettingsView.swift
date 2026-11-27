@@ -79,14 +79,16 @@ private struct AppearanceSettingsTab: View {
 
     var body: some View {
         Form {
+            ThemeSettingsSection()
             Section("Document Font") {
                 FontPicker(label: "Font family", selection: $state.fontPreferences.documentFont, families: installedFamilies)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("The Quick Brown Fox")
-                        .font(UITypography.font(size: 18, scale: 1.0, weight: .semibold, family: state.fontPreferences.documentFont))
+                        .font(UITypography.font(size: 18, scale: 1.0, weight: .semibold, family: state.effectiveFontPreferences.documentFont))
                     Text("Margins keeps your prose readable while tracked changes stay clear and scannable.")
-                        .font(UITypography.font(size: 14, scale: 1.0, family: state.fontPreferences.documentFont))
+                        .font(UITypography.font(size: 14, scale: 1.0, family: state.effectiveFontPreferences.documentFont))
                         .foregroundStyle(.secondary)
+                    FontSourceNote(user: state.fontPreferences.documentFont, theme: state.activeTheme.fonts?.documentFont)
                 }
                 .padding(.vertical, 4)
             }
@@ -94,16 +96,17 @@ private struct AppearanceSettingsTab: View {
                 FontPicker(label: "Font family", selection: $state.fontPreferences.uiFont, families: installedFamilies)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("INSTRUCTIONS · 2 pending")
-                        .font(UITypography.font(.caption, scale: 1.0, weight: .semibold, family: state.fontPreferences.uiFont))
+                        .font(UITypography.font(.caption, scale: 1.0, weight: .semibold, family: state.effectiveFontPreferences.uiFont))
                         .foregroundStyle(.secondary)
                     Text("Tighten the opening paragraph and add a concrete example.")
-                        .font(UITypography.font(.body, scale: 1.0, weight: .medium, family: state.fontPreferences.uiFont))
+                        .font(UITypography.font(.body, scale: 1.0, weight: .medium, family: state.effectiveFontPreferences.uiFont))
+                    FontSourceNote(user: state.fontPreferences.uiFont, theme: state.activeTheme.fonts?.uiFont)
                 }
                 .padding(.vertical, 4)
             }
             Section {
                 HStack {
-                    Text("Font changes apply immediately to all open windows.")
+                    Text("Theme and font changes apply immediately to all open windows.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -134,7 +137,7 @@ private struct FontPicker: View {
 
     var body: some View {
         Picker(label, selection: $selection) {
-            Text("System Default").tag(FontPreferences.systemDefault)
+            Text("Default (Theme or System)").tag(FontPreferences.systemDefault)
             Text("System Serif").tag(FontPreferences.systemSerif)
             Text("System Rounded").tag(FontPreferences.systemRounded)
             Text("System Monospace").tag(FontPreferences.systemMonospace)
