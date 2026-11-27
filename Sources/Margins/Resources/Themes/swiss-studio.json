@@ -1,0 +1,52 @@
+{
+  "id": "swiss-studio",
+  "name": "Swiss Studio",
+  "author": "Margins",
+  "chrome": {
+    "sheetStyle": "seamless",
+    "sidebarVibrancy": false,
+    "cornerRadius": 3
+  },
+  "fonts": {
+    "documentFont": "",
+    "uiFont": ""
+  },
+  "light": {
+    "railBg": "#F2F2EE",
+    "canvasBg": "#FFFFFF",
+    "sheetBg": "#FFFFFF",
+    "ink": "#111111",
+    "mutedInk": "#71716A",
+    "line": "#D6D6CE",
+    "accent": "#E85D04",
+    "accentBg": "#FDECE0",
+    "accentLine": "#F6B98E",
+    "insBg": "#F2FBF5",
+    "insBorder": "#1E7A4C",
+    "insInk": "#145334",
+    "delBg": "#FDF2F2",
+    "delBorder": "#C93B3B",
+    "delInk": "#8F2424",
+    "threadBg": "#FDECE0",
+    "threadAccent": "#E85D04"
+  },
+  "dark": {
+    "railBg": "#141413",
+    "canvasBg": "#191918",
+    "sheetBg": "#191918",
+    "ink": "#F2F2EE",
+    "mutedInk": "#9A9A92",
+    "line": "#33332F",
+    "accent": "#F47A2A",
+    "accentBg": "#3A2414",
+    "accentLine": "#7A3E16",
+    "insBg": "#15291D",
+    "insBorder": "#3DB07A",
+    "insInk": "#B5E8CC",
+    "delBg": "#351C1C",
+    "delBorder": "#E46464",
+    "delInk": "#F4B1B1",
+    "threadBg": "#3A2414",
+    "threadAccent": "#F47A2A"
+  }
+}
