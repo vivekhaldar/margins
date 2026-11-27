@@ -51,35 +51,15 @@ struct MarginsApp: App {
                     .keyboardShortcut("g", modifiers: [.command, .shift])
             }
             CommandMenu("Format") {
-                Button("Body") { Task { await state.editor.format("paragraph") } }
-                    .keyboardShortcut("0", modifiers: [.command, .shift])
-                Button("Heading 1") { Task { await state.editor.format("h1") } }
-                    .keyboardShortcut("1", modifiers: [.command, .option])
-                Button("Heading 2") { Task { await state.editor.format("h2") } }
-                    .keyboardShortcut("2", modifiers: [.command, .option])
-                Button("Heading 3") { Task { await state.editor.format("h3") } }
-                    .keyboardShortcut("3", modifiers: [.command, .option])
-                Divider()
-                Button("Bold") { Task { await state.editor.format("bold") } }.keyboardShortcut("b")
-                Button("Italic") { Task { await state.editor.format("italic") } }.keyboardShortcut("i")
-                Button("Underline") { Task { await state.editor.format("underline") } }.keyboardShortcut("u")
-                Divider()
-                Button("Bulleted List") { Task { await state.editor.format("bullets") } }
-                    .keyboardShortcut("8", modifiers: [.command, .shift])
-                Button("Numbered List") { Task { await state.editor.format("numbers") } }
-                    .keyboardShortcut("7", modifiers: [.command, .shift])
-                Button("Checklist") { Task { await state.editor.format("checklist") } }
-                    .keyboardShortcut("9", modifiers: [.command, .shift])
-                Button("Toggle Checked") { Task { await state.editor.format("toggleCheck") } }
-                    .keyboardShortcut("x", modifiers: [.command, .shift])
-                Divider()
-                Button("Clear Inline Formatting") { Task { await state.editor.format("removeFormat") } }
-                    .keyboardShortcut("0", modifiers: [.command, .option])
+                formatItems
             }
             CommandMenu("Insert") {
                 Button("Link…") { state.editLink() }.keyboardShortcut("k")
+                    .disabled(state.semanticZoomStop.rawValue < 100)
                 Button("Image…") { state.insertImageFromFile() }.keyboardShortcut("i", modifiers: [.command, .shift])
+                    .disabled(state.semanticZoomStop.rawValue < 100)
             }
+            semanticZoomCommands
             CommandGroup(before: .toolbar) {
                 Button("Zoom In") { state.zoomIn() }.keyboardShortcut("+")
                 Button("Zoom Out") { state.zoomOut() }.keyboardShortcut("-")
@@ -94,8 +74,10 @@ struct MarginsApp: App {
             CommandMenu("Review") {
                 Button("Accept All Changes") { state.reviewAll(accept: true) }
                     .keyboardShortcut(.return, modifiers: [.command, .shift])
+                    .disabled(state.semanticZoomStop.rawValue < 100)
                 Button("Reject All Changes") { state.reviewAll(accept: false) }
                     .keyboardShortcut(.delete, modifiers: [.command, .shift])
+                    .disabled(state.semanticZoomStop.rawValue < 100)
                 Divider()
                 Button(state.showHistory ? "Hide History" : "Show History") { state.showHistory.toggle() }
             }
@@ -134,6 +116,53 @@ struct MarginsApp: App {
         Settings {
             SettingsView().environmentObject(DocumentWindows.shared.settingsState)
         }
+    }
+
+    private var semanticZoomCommands: some Commands {
+        CommandGroup(before: .toolbar) {
+            Button("Shorter Document") { state.stepSemanticZoom(shorter: true) }
+                .keyboardShortcut("[", modifiers: [.command, .option])
+                .disabled(state.busy || state.semanticZoomStop.rawValue == 10
+                    || (state.semanticZoomStop.rawValue == 100
+                        && (!state.canSemanticZoom || state.semanticZoomSourceWordCount < SemanticZoomStop.minimumWordCount)))
+            Button("Longer Document") { state.stepSemanticZoom(shorter: false) }
+                .keyboardShortcut("]", modifiers: [.command, .option])
+                .disabled(state.busy || state.semanticZoomStop.rawValue == 100)
+            Button("Full Document") { state.setSemanticZoom(.full) }
+                .keyboardShortcut("0", modifiers: [.command, .option])
+                .disabled(state.semanticZoomStop.rawValue == 100)
+            Divider()
+        }
+    }
+
+    private var formatItems: some View {
+        Group {
+            Button("Body") { Task { await state.editor.format("paragraph") } }
+                .keyboardShortcut("0", modifiers: [.command, .shift])
+            Button("Heading 1") { Task { await state.editor.format("h1") } }
+                .keyboardShortcut("1", modifiers: [.command, .option])
+            Button("Heading 2") { Task { await state.editor.format("h2") } }
+                .keyboardShortcut("2", modifiers: [.command, .option])
+            Button("Heading 3") { Task { await state.editor.format("h3") } }
+                .keyboardShortcut("3", modifiers: [.command, .option])
+            Divider()
+            Button("Bold") { Task { await state.editor.format("bold") } }.keyboardShortcut("b")
+            Button("Italic") { Task { await state.editor.format("italic") } }.keyboardShortcut("i")
+            Button("Underline") { Task { await state.editor.format("underline") } }.keyboardShortcut("u")
+            Divider()
+            Button("Bulleted List") { Task { await state.editor.format("bullets") } }
+                .keyboardShortcut("8", modifiers: [.command, .shift])
+            Button("Numbered List") { Task { await state.editor.format("numbers") } }
+                .keyboardShortcut("7", modifiers: [.command, .shift])
+            Button("Checklist") { Task { await state.editor.format("checklist") } }
+                .keyboardShortcut("9", modifiers: [.command, .shift])
+            Button("Toggle Checked") { Task { await state.editor.format("toggleCheck") } }
+                .keyboardShortcut("x", modifiers: [.command, .shift])
+            Divider()
+            Button("Clear Inline Formatting") { Task { await state.editor.format("removeFormat") } }
+                .keyboardShortcut("0", modifiers: [.command, .option, .shift])
+        }
+        .disabled(state.semanticZoomStop.rawValue < 100)
     }
 }
 

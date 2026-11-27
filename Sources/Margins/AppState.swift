@@ -20,7 +20,7 @@ struct PendingInfo: Equatable {
 
 @MainActor
 final class AppState: ObservableObject {
-    @Published var doc = MarginsDocument() { didSet { scheduleThreads() } }
+    @Published var doc = MarginsDocument() { didSet { scheduleThreads(); refreshSemanticZoomWordCount() } }
     @Published var fileURL: URL
     @Published var pending = PendingInfo() { didSet { scheduleThreads() } }
     @Published var inFlight = 0
@@ -54,6 +54,18 @@ final class AppState: ObservableObject {
     /// Steps whose next thought starts a fresh paragraph (a tool call happened since the last one).
     var thoughtBreak: Set<Int> = []
     @Published var lastError: String?
+    @Published var semanticZoomStop: SemanticZoomStop = .full
+    @Published var semanticZoomLoading = false
+    @Published var semanticZoomError: String?
+    @Published var semanticZoomWordCount = 0
+    @Published var semanticZoomSourceWordCount = 0
+    @Published var semanticZoomStartedAt: Date?
+    @Published var semanticZoomStatus: String?
+    @Published var semanticZoomHTML: String?
+    var semanticZoomTask: Task<Void, Never>?
+    var semanticZoomRequestID = UUID()
+    var semanticZoomAnchorHeading: String?
+    var semanticZoomCache = SemanticZoomCache()
 
     @Published var providers: [ProviderConfig] { didSet { persistProviders() } }
     @Published var activeProviderID: UUID { didSet { defaults.set(activeProviderID.uuidString, forKey: "activeProvider") } }
@@ -192,6 +204,7 @@ final class AppState: ObservableObject {
     }
 
     deinit {
+        semanticZoomTask?.cancel()
         fileWatcher?.stop()
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
         if let projectFolderObserver { NotificationCenter.default.removeObserver(projectFolderObserver) }

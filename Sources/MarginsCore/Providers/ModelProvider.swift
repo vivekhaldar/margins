@@ -10,7 +10,7 @@ public struct ModelInfo: Codable, Hashable, Identifiable, Sendable {
 }
 
 /// A model backend. Margins only needs one capability: given a prompt, return text
-/// (which should contain an EditPlan JSON object).
+/// (an EditPlan JSON object by default, or unconstrained text when outputSchema is nil).
 public protocol ModelProvider: AnyObject {
     var kind: ProviderKind { get }
     var displayName: String { get }

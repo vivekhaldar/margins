@@ -1,0 +1,116 @@
+// Pure checks run in Node; runSemanticZoomEditorTests() exercises the actual editor in a browser.
+(() => {
+  'use strict';
+
+  async function runSemanticZoomEditorTests() {
+    const assert = (value, message) => { if (!value) throw new Error(message); };
+    const api = window.margins, doc = document.getElementById('doc');
+    const annotationUI = window.MarginsAnnotationUI, engine = window.MarginsAnnotations;
+    const wait = () => new Promise(resolve => setTimeout(resolve, 200));
+    const messages = type => (window.__marginsLog || []).filter(message => message.type === type);
+    const source = '<h1>Title</h1><p>Original words here.</p><h3>Detail</h3><p>More source prose.</p>';
+    api.load(source, null, 'semantic-tests');
+    const ids = [...doc.children].map(node => node.dataset.bid), firstNode = doc.firstChild;
+    const fullBlocks = api.getBlocks();
+    const result = api.applyEdits(1, [{op: 'replace', blockId: ids[1], html: '<p>Revised words here.</p>'}], false,
+      {runId: 'test-run', expectedRevision: fullBlocks.revision, blockStates: fullBlocks.blockStates});
+    assert(result.changes === 1, 'Tracked proposal installed');
+    const comment = engine.addComment('Keep this local comment.', {start: 0, end: 5});
+    assert(comment, 'Local comment installed');
+    annotationUI.setEnabled(true);
+    const original = JSON.stringify(api.snapshot()), originalHTML = api.html();
+    const wordCount = api.liveWordCount();
+    const summary = `<h1 data-source-block="${ids[0]}">Title</h1><p data-source-block="${ids[1]}">Brief text.</p>
+      <h3 data-source-block="${ids[2]}">Detail</h3><p>Summary <em>paragraph</em>.</p>`;
+    assert(api.setSemanticZoom(summary, 50, 'Title'), 'Summary installed');
+    assert(doc.contentEditable === 'false' && doc.classList.contains('ro'), 'Summary read-only');
+    assert(document.body.classList.contains('semantic-zoom') && !document.body.classList.contains('previewing'), 'Summary distinct from history');
+    assert(document.getElementById('bar').hasAttribute('inert'), 'Editor controls inert');
+    assert(getComputedStyle(document.getElementById('annotation-layer')).display === 'none', 'Annotations hidden');
+    assert(!annotationUI.isEnabled(), 'Annotation controls disabled');
+    assert(api.html() === originalHTML && JSON.stringify(api.snapshot()) === original, 'Summary never serialized');
+    assert(api.liveWordCount() === wordCount, 'Word count stays on the source');
+    assert(JSON.stringify(window.editorGetAnnotationState()) === JSON.stringify(JSON.parse(original).annotations), 'Annotation snapshots stay original');
+    assert(engine.addComment('Cannot annotate summary.', {start: 0, end: 5}) === null, 'Summary rejects comments');
+    assert(api.accept({all: true}).count === 0, 'Summary rejects review actions');
+    const beforeInput = new InputEvent('beforeinput', {inputType: 'insertText', data: 'x', bubbles: true, cancelable: true});
+    assert(!doc.dispatchEvent(beforeInput), 'Summary blocks native input');
+    const paste = new Event('paste', {bubbles: true, cancelable: true});
+    assert(!doc.dispatchEvent(paste), 'Summary blocks paste');
+    const shortcut = new KeyboardEvent('keydown', {key: 'b', metaKey: true, bubbles: true, cancelable: true});
+    assert(!doc.dispatchEvent(shortcut), 'Summary blocks editor shortcuts');
+    const summaryBefore = doc.innerHTML;
+    api.format('h2'); api.insertImage('https://example.com/image.png', 'blocked');
+    assert(doc.innerHTML === summaryBefore, 'Bridge mutations cannot edit the summary');
+    doc.querySelector('h1').click();
+    assert(messages('semanticZoomSource').at(-1).blockId === ids[0], 'Heading click uses source block');
+    const paragraph = doc.querySelectorAll('p')[1];
+    paragraph.querySelector('em').dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true}));
+    const navigation = messages('semanticZoomSource').at(-1);
+    assert(navigation.blockId === null && navigation.heading === 'Detail', 'Paragraph double-click falls back to nearest heading');
+    assert(navigation.documentSession === 'semantic-tests', 'Source navigation session scoped');
+    getSelection().selectAllChildren(doc.querySelector('p'));
+    document.dispatchEvent(new Event('selectionchange'));
+    assert(getSelection().rangeCount === 0, 'Summary selection cleared');
+    assert(api.setSemanticZoom('<h1>Title</h1><p>Tighter.</p>', 10, 'Title'), 'Switch summary stop');
+    assert(JSON.stringify(api.snapshot()) === original, 'Repeated summary keeps first full snapshot');
+    api.flushForSave();
+    assert(api.html() === originalHTML, 'Flush still serializes source');
+    api.clearSemanticZoom(ids[1], 'Title');
+    assert(!document.body.classList.contains('semantic-zoom') && doc.contentEditable === 'true', 'Full editor restored');
+    assert(doc.firstChild === firstNode && doc.children[1].dataset.bid === ids[1], 'Original nodes and block IDs restored');
+    assert(annotationUI.isEnabled(), 'Annotation visibility restored');
+    assert(JSON.stringify(api.snapshot()) === original, 'Tracked changes and comments restored exactly');
+    api.preview('<p>Historical document.</p>');
+    assert(document.body.classList.contains('previewing') && !document.body.classList.contains('semantic-zoom'), 'History distinct');
+    assert(api.html() === originalHTML && JSON.stringify(api.snapshot()) === original, 'History saves the original');
+    api.setSemanticZoom(summary, 25);
+    assert(!document.body.classList.contains('previewing'), 'Summary exits history');
+    api.preview('<p>Another historical document.</p>');
+    assert(!document.body.classList.contains('semantic-zoom'), 'History exits summary');
+    api.endPreview();
+    const restored = api.snapshot(), expected = JSON.parse(original);
+    assert(restored.html === expected.html && JSON.stringify(restored.annotations.comments) === JSON.stringify(expected.annotations.comments), 'Mutually exclusive previews preserve source and comments');
+    api.setSemanticZoom('', 75);
+    assert(doc.textContent === '' && doc.contentEditable === 'false', 'Loading can show a read-only blank');
+    assert(api.html() === originalHTML, 'Blank loading state still saves source');
+    const returnedBlocks = api.getBlocks();
+    assert(returnedBlocks.blocks.some(block => block.id === ids[1] && /Revised/.test(block.html)), 'Blocks returns source, not summary');
+    assert(!document.body.classList.contains('semantic-zoom'), 'Blocks explicitly restores full editor');
+    api.setSemanticZoom(summary, 50);
+    api.load('<p>New document words.</p>', null, 'new-session');
+    assert(!document.body.classList.contains('semantic-zoom') && /New document/.test(api.html()), 'Document switch discards summary backup');
+    await wait();
+    assert(messages('liveWordCount').at(-1).documentSession === 'new-session', 'Word counts scoped to loaded document');
+    api.load('<p>One,two café déjà-vu <code>inline code</code>.</p><pre>not prose</pre><table><tr><td>not prose</td></tr></table><figure><figcaption>not prose</figcaption></figure>');
+    assert(api.liveWordCount() === 6, 'Word count matches core punctuation, inline code, and nonprose exclusions');
+    const change = document.createElement('div');
+    change.className = 'chg'; change.innerHTML = '<del>deleted words</del><ins>kept <span class="diff-removed">removed words</span></ins>';
+    doc.append(change);
+    assert(api.liveWordCount() === 7, 'Deleted diff wording excluded');
+    const safe = window.MarginsSemanticZoom.summaryHTML('<p id="anchor" style="color:red" onclick="bad()"><a href="https://example.com" title="Link">Link</a><img src="margins-asset://img/asset.png" alt="Picture" width="20"><a href="javascript:bad()">Bad</a></p><script>bad()</script><iframe src="https://example.com"></iframe>');
+    assert(/href="https:\/\/example.com"/.test(safe) && /src="margins-asset:\/\/img\/asset.png"/.test(safe) && /alt="Picture"/.test(safe), 'Safe links and images retained');
+    assert(!/javascript:|onclick|style=|script|iframe/.test(safe), 'Unsafe content and transient attrs removed');
+    const safeTable = window.MarginsSemanticZoom.summaryHTML('<table><tr><td colspan="2" scope="col">Cell</td></tr></table><ol start="3"><li>Item</li></ol>');
+    assert(/colspan="2"/.test(safeTable) && /start="3"/.test(safeTable), 'Semantic table/list attributes retained');
+    annotationUI.setEnabled(false);
+    api.load('<p>Done.</p>');
+    return 'Semantic zoom editor checks passed';
+  }
+
+  if (typeof window !== 'undefined') {
+    window.runSemanticZoomEditorTests = runSemanticZoomEditorTests;
+    return;
+  }
+  const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
+  const assert = require('node:assert/strict');
+  const context = vm.createContext({});
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../Sources/Margins/Resources/Editor/semantic-zoom.js'), 'utf8'), context);
+  const {countWords} = context.MarginsSemanticZoom;
+  assert.equal(countWords(''), 0);
+  assert.equal(countWords('One,two/three — four'), 4);
+  assert.equal(countWords('It’s 2026, café déjà-vu!'), 4);
+  assert.equal(countWords('日本語 テキスト'), 2);
+  assert.equal(countWords('• ✓ ☐'), 0);
+  console.log('semantic zoom pure checks passed');
+})();

@@ -18,7 +18,7 @@ private struct CodexCachedModel: Decodable {
     }
 }
 
-/// ChatGPT subscription via the official Codex CLI: `codex exec --json --output-schema … -`.
+/// ChatGPT subscription via the official Codex CLI, with optional structured output.
 public final class CodexExecProvider: ModelProvider {
     public let kind: ProviderKind = .codex
     public let displayName: String
@@ -78,12 +78,14 @@ public final class CodexExecProvider: ModelProvider {
     }
 
     public func generate(_ request: GenerationRequest) async throws -> String {
-        let schemaURL = ProcessRunner.scratchDirectory().appendingPathComponent("edit-plan.schema.json")
-        try EditPlanSchema.json.write(to: schemaURL, atomically: true, encoding: .utf8)
+        let schemaURL = ProcessRunner.scratchDirectory().appendingPathComponent("output-\(UUID().uuidString).schema.json")
+        let schemaArgs = try Self.schemaArguments(request.outputSchema, at: schemaURL)
+        defer {
+            if request.outputSchema != nil { try? FileManager.default.removeItem(at: schemaURL) }
+        }
         let tools = request.tools
         let cwd = tools?.workspace ?? ProcessRunner.scratchDirectory()
-        var args = ["exec", "--json", "--output-schema", schemaURL.path, "--skip-git-repo-check",
-                    "--ephemeral", "-C", cwd.path]
+        var args = ["exec", "--json"] + schemaArgs + ["--skip-git-repo-check", "--ephemeral", "-C", cwd.path]
         args += Self.effortArguments(request.reasoningEffort)
         args += Self.policyArguments(tools?.policy ?? .off)
         if let m = request.model, !m.isEmpty { args += ["-m", m] }
@@ -100,6 +102,12 @@ public final class CodexExecProvider: ModelProvider {
     static func effortArguments(_ effort: ReasoningEffort?) -> [String] {
         guard let effort else { return [] }
         return ["-c", "model_reasoning_effort=\"\(effort.rawValue)\""]
+    }
+
+    static func schemaArguments(_ schema: String?, at url: URL) throws -> [String] {
+        guard let schema else { return [] }
+        try schema.write(to: url, atomically: true, encoding: .utf8)
+        return ["--output-schema", url.path]
     }
 
     /// Codex enforces policy with its own OS sandbox; it never asks, so `.research` means
@@ -208,8 +216,8 @@ public final class ClaudeCodeProvider: ModelProvider {
     public func generate(_ request: GenerationRequest) async throws -> String {
         let tools = request.tools
         let cwd = tools?.workspace ?? ProcessRunner.scratchDirectory()
-        var args = ["-p", "--output-format", "stream-json", "--verbose", "--json-schema", EditPlanSchema.json,
-                    "--system-prompt", request.system]
+        var args = ["-p", "--output-format", "stream-json", "--verbose", "--system-prompt", request.system]
+        args += Self.schemaArguments(request.outputSchema)
         args += Self.policyArguments(tools?.policy ?? .off)
         if let m = request.model, !m.isEmpty { args += ["--model", m] }
         let emit = request.agent?.onEvent
@@ -219,6 +227,10 @@ public final class ClaudeCodeProvider: ModelProvider {
         if Task.isCancelled { throw CancellationError() }
         let last = r.stdout.split(separator: "\n").last { $0.contains("\"type\":\"result\"") }.map(String.init) ?? r.stdout
         return try Self.extract(stdout: last, status: r.status, stderr: r.stderr)
+    }
+
+    static func schemaArguments(_ schema: String?) -> [String] {
+        schema.map { ["--json-schema", $0] } ?? []
     }
 
     /// Claude Code can't ask Margins mid-run in print mode, so `.research` pre-approves

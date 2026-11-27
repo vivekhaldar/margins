@@ -26,15 +26,18 @@ public struct GenerationRequest: Sendable {
     public var prompt: String
     public var model: String?
     public var reasoningEffort: ReasoningEffort?
+    /// JSON output constraints; nil requests unconstrained text such as summary HTML.
+    public var outputSchema: String?
     /// When set (and the policy isn't `.off`), the provider runs as a tool-using agent.
     public var agent: AgentContext?
 
     public init(system: String, prompt: String, model: String? = nil, agent: AgentContext? = nil,
-                reasoningEffort: ReasoningEffort? = nil) {
+                reasoningEffort: ReasoningEffort? = nil, outputSchema: String? = EditPlanSchema.json) {
         self.system = system
         self.prompt = prompt
         self.model = model
         self.reasoningEffort = reasoningEffort
+        self.outputSchema = outputSchema
         self.agent = agent
     }
 

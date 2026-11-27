@@ -19,6 +19,9 @@ func test(_ name: String, _ body: () throws -> Void) {
     do { try body() } catch { failures += 1; print("✗ \(name) threw \(error)") }
 }
 
+runSemanticZoomTests()
+runGenerationSchemaTests()
+
 test("open window session round trip and restoration") {
     let first = URL(fileURLWithPath: "/documents/first.margins")
     let second = URL(fileURLWithPath: "/documents/second.margins")

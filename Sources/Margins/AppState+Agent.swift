@@ -10,7 +10,7 @@ extension AppState {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard let config = activeProvider else { lastError = "Choose a model provider."; return }
-        previewing = nil
+        prepareForDocumentInstruction()
         let step = doc.nextStep
         doc.nextStep += 1
         doc.intents.append(Intent(step: step, text: text, provider: label(config)))
@@ -26,7 +26,7 @@ extension AppState {
                 let sources = await fetchSources(for: text, step: step)
                 try Task.checkCancellation()
                 guard documentSessionID == documentID else { return }
-                let snapshot = try await editor.blocks()
+                let snapshot = try await instructionBlocks()
                 guard documentSessionID == documentID else { return }
                 if let paragraphBlockID, !snapshot.blocks.contains(where: { $0.id == paragraphBlockID }) {
                     throw ProviderError.protocolError("The prompt paragraph is no longer in the document. Try again from its current location.")
@@ -95,7 +95,7 @@ extension AppState {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard let config = activeProvider else { lastError = "Choose a model provider."; return }
-        previewing = nil
+        prepareForDocumentInstruction()
         let prior = doc.intents.filter { $0.kind == .instruction && $0.thread == thread }
         let quote = prior.first?.quote ?? rawQuote
         let focus = prior.first?.focus ?? rawFocus
@@ -123,7 +123,7 @@ extension AppState {
                 let sources = await fetchSources(for: text, step: step)
                 try Task.checkCancellation()
                 guard documentSessionID == documentID else { return }
-                let snapshot = try await editor.blocks()
+                let snapshot = try await instructionBlocks()
                 guard documentSessionID == documentID else { return }
                 let live = focus.filter { id in snapshot.blocks.contains { $0.id == id } }
                 let agent = agentContext(step: step, kind: config.kind)
@@ -371,7 +371,7 @@ extension AppState {
         scheduleSave()
     }
 
-    func stopAll() { running.keys.forEach(stop(step:)); cancelCloudPolling() }
+    func stopAll() { running.keys.forEach(stop(step:)); cancelCloudPolling(); cancelSemanticZoom() }
 
     private func finish(_ step: Int, documentID: UUID) {
         guard documentSessionID == documentID else { return }
@@ -469,7 +469,7 @@ extension AppState {
         guard let config = activeProvider else { return }
         let documentID = documentSessionID
         Task {
-            guard let ctx = await editor.refineContext(cid: cid) else { return }
+            guard let ctx = await instructionRefineContext(cid: cid) else { return }
             guard documentSessionID == documentID else { return }
             // One agent run per instruction card at a time.
             guard running[ctx.step] == nil else { await editor.refineFailed(cid: cid); return }
@@ -486,7 +486,7 @@ extension AppState {
                 }
                 do {
                     let provider = try provider(for: config)
-                    let blockSnapshot = try await editor.blocks()
+                    let blockSnapshot = try await instructionBlocks()
                     guard documentSessionID == documentID else { return }
                     guard blockSnapshot.blockStates[ctx.blockId] == ctx.blockStates[ctx.blockId] else {
                         throw ProviderError.protocolError("The passage changed before refinement started. Try the refinement again.")
