@@ -4,8 +4,47 @@ import MarginsCore
 extension AppState {
     // MARK: - Providers
 
-    var activeProvider: ProviderConfig? { providers.first { $0.id == activeProviderID } }
+    var activeProvider: ProviderConfig? {
+        guard case .local(let id) = agentTarget else { return nil }
+        return enabledProviders.first { $0.id == id }
+    }
+
+    var lastLocalProvider: ProviderConfig? { enabledProviders.first { $0.id == lastLocalProviderID } }
     var enabledProviders: [ProviderConfig] { providers.filter(\.enabled) }
+
+    var isCloudTarget: Bool { activeCloudBackend != nil }
+    var activeCloudBackend: CloudBackend? {
+        guard case .cloud(let backend) = agentTarget else { return nil }
+        return backend
+    }
+
+    func agentTargetChanged(from previous: AgentTarget) {
+        guard agentTarget != previous else { return }
+        switch agentTarget {
+        case .local(let id): lastLocalProviderID = id
+        case .cloud(let backend): lastCloudBackend = backend
+        }
+        Task { await editor.setCloudMode(isCloudTarget) }
+        if isCloudTarget { refreshCloudContext(forceRepoResolve: false) }
+    }
+
+    func toggleLocalCloudTarget() {
+        agentTarget = agentTarget.toggled(lastLocal: lastLocalProviderID, lastCloud: lastCloudBackend,
+                                          enabledCloud: enabledCloudBackends)
+    }
+
+    func reconcileAgentTarget() {
+        lastLocalProviderID = AgentTarget.localFallback(preferred: lastLocalProviderID, providers: providers)
+            ?? providers.first?.id ?? lastLocalProviderID
+        let target = agentTarget.resolvingDisabledCloud(lastLocal: lastLocalProviderID, enabledCloud: enabledCloudBackends)
+        let resolved = isCloudTarget ? target : .local(lastLocalProviderID)
+        if agentTarget != resolved { agentTarget = resolved }
+    }
+
+    static func readEnabledCloudBackends(_ defaults: UserDefaults) -> Set<CloudBackend> {
+        guard let stored = defaults.stringArray(forKey: "enabledCloudBackends") else { return Set(CloudBackend.allCases) }
+        return Set(stored.compactMap(CloudBackend.init(rawValue:)))
+    }
 
     func setModel(_ model: String, for id: UUID) {
         guard let i = providers.firstIndex(where: { $0.id == id }) else { return }
@@ -18,16 +57,20 @@ extension AppState {
     }
 
     func reloadProviderSettings() {
-        guard let data = defaults.data(forKey: "providers"),
-              let stored = try? JSONDecoder().decode([ProviderConfig].self, from: data), !stored.isEmpty else { return }
-        if providers != stored {
+        // Snapshot all shared settings before applying changes that can write their defaults.
+        let enabled = Self.readEnabledCloudBackends(defaults)
+        let createPR = defaults.bool(forKey: "cloudDefaultCreatePR")
+        let detached = defaults.bool(forKey: "ampDefaultDetached")
+        if let data = defaults.data(forKey: "providers"),
+           let stored = try? JSONDecoder().decode([ProviderConfig].self, from: data),
+           !stored.isEmpty, providers != stored {
             // Existing runs keep their provider; provider(for:) refreshes changed connections on next use.
             for config in providers where !stored.contains(config) { models[config.id] = nil }
             providers = stored
         }
-        let saved = defaults.string(forKey: "activeProvider").flatMap(UUID.init(uuidString:))
-        let selected = providers.first { $0.id == saved }?.id ?? providers.first { $0.enabled }?.id ?? providers[0].id
-        if selected != activeProviderID { activeProviderID = selected }
+        if enabledCloudBackends != enabled { enabledCloudBackends = enabled }
+        if cloudDefaultCreatePR != createPR { cloudDefaultCreatePR = createPR }
+        if ampDefaultDetached != detached { ampDefaultDetached = detached }
     }
 
     func persistProviders() {

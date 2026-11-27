@@ -1,58 +1,54 @@
 import MarginsCore
 import SwiftUI
 
-/// Compact Local / Cloud target pill rendered in the IntentPane composer.
-struct ComposerTargetPill: View {
-    @EnvironmentObject var state: AppState
-
-    var body: some View {
-        HStack(spacing: 2) {
-            pillButton(.local, title: "Local", icon: "laptopcomputer")
-            pillButton(.cloud, title: "Cloud", icon: "cloud")
-        }
-        .padding(2)
-        .background(Capsule().fill(Color.secondary.opacity(0.12)))
-    }
-
-    private func pillButton(_ target: ComposerTarget, title: String, icon: String) -> some View {
-        let selected = state.composerTarget == target
-        return Button {
-            state.composerTarget = target
-            if target == .cloud {
-                state.refreshCloudContext(forceRepoResolve: false)
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                Text(title)
-            }
-            .uiFont(.caption, weight: selected ? .semibold : .regular)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(selected ? Color.accentColor.opacity(0.18) : Color.clear))
-            .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-/// Inline cloud target options shown when the composer is in Cloud mode.
 struct CloudComposerOptions: View {
     @EnvironmentObject var state: AppState
     @Environment(\.interfaceZoom) private var zoom
+    @StateObject private var expanded = Local(false)
+    let backend: CloudBackend
 
-    private var isAmp: Bool { state.cloudBackend == .amp }
+    private var isAmp: Bool { backend == .amp }
+    private var needsInput: Bool {
+        state.cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (!isAmp && state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+    private var authIssue: String? { state.cloudAuthIssue(for: backend) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker("Cloud agent", selection: $state.cloudBackend) {
-                ForEach(CloudBackend.allCases, id: \.self) { Text($0.displayName).tag($0) }
+        DisclosureGroup(isExpanded: $expanded.value) {
+            runOptions.padding(.top, 6)
+        } label: {
+            HStack(spacing: 4) {
+                Text(summary).lineLimit(1).truncationMode(.middle)
+                if authIssue != nil || state.cloudDirtyFilesCount > 0 {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(authIssue != nil ? Color.red : Color.orange)
+                        .accessibilityLabel(authIssue != nil ? "Authentication needs attention" : "Uncommitted changes")
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(UITypography.controlSize(for: zoom, compact: true))
-            .onChange(of: state.cloudBackend) { _, _ in state.refreshCloudContext(forceRepoResolve: false) }
+            .uiFont(.caption)
+            .help(summary)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+        .onChange(of: needsInput, initial: true) { _, missing in
+            if missing { expanded.value = true }
+        }
+        .onChange(of: authIssue, initial: true) { _, issue in
+            if issue != nil { expanded.value = true }
+        }
+    }
 
+    private var summary: String {
+        let repo = state.cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !repo.isEmpty else { return "Set cloud repository" }
+        if isAmp { return "\(repo) · \(state.ampDetached ? "Detached" : "Streaming")" }
+        let branch = state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(repo) · \(branch.isEmpty ? "Set base branch" : branch)"
+    }
+
+    private var runOptions: some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 TextField("owner/repo", text: $state.cloudRepo)
                     .textFieldStyle(.roundedBorder)
@@ -80,10 +76,10 @@ struct CloudComposerOptions: View {
                 .foregroundStyle(.orange)
             }
 
-            if isAmp { ampAuthGuidance } else { authGuidance }
+            if let authIssue {
+                CloudAuthCheck(backend: backend, issue: authIssue, authOnly: false)
+            }
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
     }
 
     private var modeToggle: some View {
@@ -103,57 +99,50 @@ struct CloudComposerOptions: View {
         if isAmp { return state.ampDetached ? "Submit only; follow on ampcode.com" : "Streams the answer back" }
         return state.cloudCreatePR ? "Creates a pull request" : "Read-only instructions"
     }
+}
 
-    @ViewBuilder
-    private var authGuidance: some View {
-        switch state.cloudAuthStatus {
-        case .missingBinary:
-            Label(
-                "GitHub CLI (`gh`) not found. Install it (`brew install gh`) and run `gh auth login`.",
-                systemImage: "terminal"
-            )
-            .uiFont(.caption2)
-            .foregroundStyle(.red)
-        case .notAuthenticated:
-            recheckRow("Not logged in to GitHub CLI. Run `gh auth login` in Terminal.") {
-                state.refreshCloudContext(forceRepoResolve: false)
+struct CloudAuthCheck: View {
+    @EnvironmentObject var state: AppState
+    let backend: CloudBackend
+    let issue: String?
+    let authOnly: Bool
+
+    var body: some View {
+        let checked = backend == .amp ? state.ampAuthStatus != nil : state.cloudAuthStatus != nil
+        VStack(alignment: .leading, spacing: 4) {
+            if let issue {
+                Text(issue).foregroundStyle(.red).textSelection(.enabled)
+            } else {
+                Text(checked ? "Authenticated" : "Authentication not checked").foregroundStyle(.secondary)
             }
-        case .authenticated, .none:
-            EmptyView()
-        }
-    }
-
-    @ViewBuilder
-    private var ampAuthGuidance: some View {
-        switch state.ampAuthStatus {
-        case .missingBinary:
-            recheckRow("Amp CLI (`amp`) not found. Install it from ampcode.com.") { recheckAmp() }
-        case .credentialUnavailable(let detail):
-            VStack(alignment: .leading, spacing: 3) {
-                recheckRow("Amp API key unavailable.") { recheckAmp() }
-                Text("\(detail)\nStore it with `pass insert AMPCODE/API_KEY`; if gpg is locked, Recheck opens pinentry-mac (`brew install pinentry-mac`).")
-                    .uiFont(.caption2)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+            Button(checked ? "Recheck" : "Check auth") {
+                switch backend {
+                case .copilot: state.refreshCopilotCloudContext(authOnly: authOnly)
+                case .amp: state.refreshAmpCloudContext(recheck: true, authOnly: authOnly)
+                }
             }
-        case .ready, .none:
-            EmptyView()
+            .buttonStyle(.borderless)
         }
+        .uiFont(.caption2)
     }
+}
 
-    private func recheckAmp() {
-        state.refreshAmpCloudContext(forceRepoResolve: false, recheck: true)
-    }
-
-    private func recheckRow(_ message: String, action: @escaping () -> Void) -> some View {
-        HStack(spacing: 6) {
-            Label(message, systemImage: "person.crop.circle.badge.exclamationmark")
-                .uiFont(.caption2)
-                .foregroundStyle(.red)
-            Spacer()
-            Button("Recheck", action: action)
-                .buttonStyle(.borderless)
-                .uiFont(.caption2)
+extension AppState {
+    func cloudAuthIssue(for backend: CloudBackend) -> String? {
+        switch backend {
+        case .copilot:
+            switch cloudAuthStatus {
+            case .missingBinary: return "GitHub CLI (gh) not found. Run brew install gh, then gh auth login."
+            case .notAuthenticated: return "Not logged in to GitHub CLI. Run gh auth login in Terminal."
+            case .authenticated, .none: return nil
+            }
+        case .amp:
+            switch ampAuthStatus {
+            case .missingBinary: return "Amp CLI (amp) not found. Install it from ampcode.com."
+            case .credentialUnavailable(let detail):
+                return "Amp API key unavailable. \(detail)\nStore it with pass insert AMPCODE/API_KEY. If GPG is locked, Recheck opens pinentry-mac."
+            case .ready, .none: return nil
+            }
         }
     }
 }

@@ -67,8 +67,21 @@ final class AppState: ObservableObject {
     var semanticZoomAnchorHeading: String?
     var semanticZoomCache = SemanticZoomCache()
 
-    @Published var providers: [ProviderConfig] { didSet { persistProviders() } }
-    @Published var activeProviderID: UUID { didSet { defaults.set(activeProviderID.uuidString, forKey: "activeProvider") } }
+    @Published var providers: [ProviderConfig] { didSet { persistProviders(); reconcileAgentTarget() } }
+    @Published var agentTarget: AgentTarget { didSet { agentTargetChanged(from: oldValue) } }
+    var lastLocalProviderID: UUID {
+        didSet { if lastLocalProviderID != oldValue { defaults.set(lastLocalProviderID.uuidString, forKey: "activeProvider") } }
+    }
+    var lastCloudBackend: CloudBackend {
+        didSet { if lastCloudBackend != oldValue { defaults.set(lastCloudBackend.rawValue, forKey: "lastCloudBackend") } }
+    }
+    @Published var enabledCloudBackends: Set<CloudBackend> {
+        didSet {
+            guard enabledCloudBackends != oldValue else { return }
+            defaults.set(CloudBackend.allCases.filter(enabledCloudBackends.contains).map(\.rawValue), forKey: "enabledCloudBackends")
+            reconcileAgentTarget()
+        }
+    }
     @Published var models: [UUID: [ModelInfo]] = [:]
     @Published private(set) var zoom: Double = 1.0
     @Published var fontPreferences: FontPreferences {
@@ -117,15 +130,16 @@ final class AppState: ObservableObject {
     @Published var projectFolderRevision = 0
 
     // Cloud agent state: Copilot (logic in AppState+CloudAgents.swift)
-    @Published var composerTarget: ComposerTarget = .local {
-        didSet {
-            let isCloud = composerTarget == .cloud
-            Task { await editor.setCloudMode(isCloud) }
-        }
-    }
     @Published var cloudRepo = ""
     @Published var cloudBaseRef = "main"
     @Published var cloudCreatePR = false
+    @Published var cloudDefaultCreatePR: Bool {
+        didSet {
+            guard cloudDefaultCreatePR != oldValue else { return }
+            defaults.set(cloudDefaultCreatePR, forKey: "cloudDefaultCreatePR")
+            if cloudCreatePR == oldValue { cloudCreatePR = cloudDefaultCreatePR }
+        }
+    }
     @Published var cloudAuthStatus: CopilotCloudAuthStatus?
     @Published var cloudDirtyFilesCount = 0
     @Published var cloudLogs: [UUID: String] = [:]
@@ -135,8 +149,14 @@ final class AppState: ObservableObject {
     var cloudNotifiedAttention: Set<UUID> = []
     let cloudClient = CopilotCloudClient()
     // Amp Cloud state (logic in AppState+AmpCloud.swift); `cloudRepo` doubles as the Amp project.
-    @Published var cloudBackend: CloudBackend = .copilot
     @Published var ampDetached = false
+    @Published var ampDefaultDetached: Bool {
+        didSet {
+            guard ampDefaultDetached != oldValue else { return }
+            defaults.set(ampDefaultDetached, forKey: "ampDefaultDetached")
+            if ampDetached == oldValue { ampDetached = ampDefaultDetached }
+        }
+    }
     @Published var ampAuthStatus: AmpPreflightStatus?
     var ampStreamTasks: [UUID: Task<Void, Never>] = [:]
     let ampSerializer = AmpTurnSerializer()
@@ -154,8 +174,18 @@ final class AppState: ObservableObject {
             list = stored
         }
         let saved = ud.string(forKey: "activeProvider").flatMap(UUID.init(uuidString:))
+        let local = AgentTarget.localFallback(preferred: saved, providers: list) ?? list[0].id
         providers = list
-        activeProviderID = list.first { $0.id == saved }?.id ?? list.first { $0.enabled }?.id ?? list[0].id
+        lastLocalProviderID = local
+        agentTarget = .local(local)
+        lastCloudBackend = ud.string(forKey: "lastCloudBackend").flatMap(CloudBackend.init(rawValue:)) ?? .copilot
+        enabledCloudBackends = Self.readEnabledCloudBackends(ud)
+        let createPR = ud.bool(forKey: "cloudDefaultCreatePR")
+        let detached = ud.bool(forKey: "ampDefaultDetached")
+        cloudDefaultCreatePR = createPR
+        ampDefaultDetached = detached
+        cloudCreatePR = createPR
+        ampDetached = detached
         if let data = ud.data(forKey: "fontPreferences"),
            let storedFonts = try? JSONDecoder().decode(FontPreferences.self, from: data) {
             fontPreferences = storedFonts

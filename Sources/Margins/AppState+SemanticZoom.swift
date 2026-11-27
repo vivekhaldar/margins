@@ -3,7 +3,7 @@ import Foundation
 import MarginsCore
 
 extension AppState {
-    var canSemanticZoom: Bool { semanticZoomSourceWordCount >= 200 && !busy && activeProvider != nil }
+    var canSemanticZoom: Bool { semanticZoomSourceWordCount >= 200 && !busy && lastLocalProvider != nil }
 
     func refreshSemanticZoomWordCount() {
         semanticZoomSourceWordCount = SemanticZoom.liveWordCount(in: doc.html)
@@ -18,7 +18,7 @@ extension AppState {
 
     func setSemanticZoom(_ stop: SemanticZoomStop, bypassCache: Bool = false) {
         if stop == .full { cancelSemanticZoom(); return }
-        guard canSemanticZoom, let config = activeProvider else { return }
+        guard canSemanticZoom, let config = lastLocalProvider else { return }
         if !bypassCache && stop == semanticZoomStop && semanticZoomError == nil { return }
         semanticZoomTask?.cancel()
         let requestID = UUID(), session = documentSessionID

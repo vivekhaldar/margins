@@ -466,7 +466,7 @@ extension AppState {
     }
 
     func refine(cid: String, instruction: String) {
-        guard let config = activeProvider else { return }
+        guard let config = lastLocalProvider else { return }
         let documentID = documentSessionID
         Task {
             guard let ctx = await instructionRefineContext(cid: cid) else { return }

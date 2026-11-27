@@ -2,11 +2,6 @@ import AppKit
 import Foundation
 import MarginsCore
 
-enum ComposerTarget: String, CaseIterable {
-    case local
-    case cloud
-}
-
 /// The selected passage an inline thread is anchored to; cloud tasks launched from a thread carry it.
 struct CloudThreadAnchor {
     var id: UUID
@@ -21,10 +16,12 @@ extension AppState {
 
     // MARK: - Context & Preflight
 
-    func refreshCopilotCloudContext(forceRepoResolve: Bool) {
+    func refreshCopilotCloudContext(authOnly: Bool = false) {
         let project = projectURL
-        let shouldResolve = forceRepoResolve || cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let repo = cloudRepo
+        let baseRef = cloudBaseRef
+        let repoMissing = repo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let refMissing = baseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let session = documentSessionID
         let client = cloudClient
 
@@ -32,23 +29,20 @@ extension AppState {
             let auth = await client.checkAuth()
             guard documentSessionID == session else { return }
             cloudAuthStatus = auth
+            guard !authOnly, activeCloudBackend != .amp, projectURL == project else { return }
 
             if let project {
                 let dirtyCount = await Task.detached { ProjectChanges.snapshot(project)?.count ?? 0 }.value
-                guard documentSessionID == session else { return }
+                guard documentSessionID == session, activeCloudBackend != .amp, projectURL == project else { return }
                 cloudDirtyFilesCount = dirtyCount
 
-                if shouldResolve, let info = try? await client.resolveRepo(in: project) {
-                    guard documentSessionID == session else { return }
-                    cloudRepo = info.repo
-                    cloudBaseRef = info.defaultBranch
+                if repoMissing || refMissing, let info = try? await client.resolveRepo(in: project) {
+                    guard documentSessionID == session, activeCloudBackend != .amp, projectURL == project else { return }
+                    if repoMissing && cloudRepo == repo { cloudRepo = info.repo }
+                    if cloudRepo == info.repo && cloudBaseRef == baseRef { cloudBaseRef = info.defaultBranch }
                 }
             } else {
                 cloudDirtyFilesCount = 0
-                if forceRepoResolve {
-                    cloudRepo = ""
-                    cloudBaseRef = "main"
-                }
             }
         }
     }
@@ -62,19 +56,20 @@ extension AppState {
         let quote = body["quote"] as? String ?? ""
         let focus = body["focus"] as? [String] ?? []
         let anchor = body["anchor"] as? String ?? ""
-        guard composerTarget == .cloud else {
+        guard isCloudTarget else {
             discuss(thread: thread, quote: quote, focus: focus, anchor: anchor, message: message)
             return
         }
         // Later messages stay anchored where the thread started, like local discussions.
         let first = doc.intents.first { $0.kind == .instruction && $0.thread == thread }
+        let step = doc.nextStep
         submitCloud(message, thread: CloudThreadAnchor(
             id: thread,
             quote: first?.quote ?? quote,
             focus: first?.focus ?? focus,
             anchor: first?.anchor ?? anchor
         ))
-        if !doc.intents.contains(where: { $0.thread == thread && $0.step == doc.nextStep - 1 }) {
+        if doc.nextStep == step {
             // Launch was refused (e.g. no repo): drop the editor's optimistic "working" bubble.
             lastThreadsJSON = ""
             scheduleThreads()
@@ -83,7 +78,7 @@ extension AppState {
 
     /// Direct `⌘↩` prompt on a document paragraph: follows the main composer's Local/Cloud setting.
     func routeParagraphPrompt(_ raw: String, blockID: String) {
-        if composerTarget == .cloud {
+        if isCloudTarget {
             submitCloud(raw, paragraphBlockID: blockID)
         } else {
             submit(raw, paragraphBlockID: blockID)
