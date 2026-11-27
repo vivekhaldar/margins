@@ -22,6 +22,43 @@ func test(_ name: String, _ body: () throws -> Void) {
 runSemanticZoomTests()
 runGenerationSchemaTests()
 
+test("agent target persistence and fallback") {
+    let first = ProviderConfig(kind: .copilot)
+    var preferred = ProviderConfig(kind: .codex)
+    for target in [AgentTarget.local(preferred.id), .cloud(.amp), .cloud(.copilot)] {
+        let data = try JSONEncoder().encode(target)
+        check(try JSONDecoder().decode(AgentTarget.self, from: data) == target, "agent target round-trips")
+    }
+    check(AgentTarget.localFallback(preferred: preferred.id, providers: [first, preferred]) == preferred.id,
+          "keep the remembered enabled provider")
+    preferred.enabled = false
+    check(AgentTarget.localFallback(preferred: preferred.id, providers: [preferred, first]) == first.id,
+          "skip a disabled provider even if it is first")
+    check(AgentTarget.localFallback(preferred: preferred.id, providers: [first]) == first.id,
+          "fall back when the remembered provider is removed")
+    check(AgentTarget.localFallback(preferred: preferred.id, providers: [preferred]) == nil,
+          "no disabled provider is returned as usable")
+}
+
+test("toggle agent targets and disable active cloud backend") {
+    let providerID = UUID()
+    let local = AgentTarget.local(providerID)
+    let cloud = AgentTarget.cloud(.amp)
+    let all = Set(CloudBackend.allCases)
+    check(local.toggled(lastLocal: providerID, lastCloud: .amp, enabledCloud: all) == cloud,
+          "switch to the remembered cloud backend")
+    check(cloud.toggled(lastLocal: providerID, lastCloud: .amp, enabledCloud: all) == local,
+          "switch back to the remembered local provider")
+    check(local.toggled(lastLocal: providerID, lastCloud: .amp, enabledCloud: [.copilot]) == .cloud(.copilot),
+          "fall back to an enabled backend if the last cloud choice is disabled")
+    check(local.toggled(lastLocal: providerID, lastCloud: .amp, enabledCloud: []) == local,
+          "stay local when no cloud backend is enabled")
+    check(cloud.resolvingDisabledCloud(lastLocal: providerID, enabledCloud: [.copilot]) == local,
+          "disabling the active cloud backend falls back to local, not another cloud agent")
+    check(cloud.resolvingDisabledCloud(lastLocal: providerID, enabledCloud: [.amp]) == cloud,
+          "disabling a different backend leaves the active cloud agent alone")
+}
+
 test("open window session round trip and restoration") {
     let first = URL(fileURLWithPath: "/documents/first.margins")
     let second = URL(fileURLWithPath: "/documents/second.margins")

@@ -2,11 +2,6 @@ import AppKit
 import Foundation
 import MarginsCore
 
-enum ComposerTarget: String, CaseIterable {
-    case local
-    case cloud
-}
-
 /// The selected passage an inline thread is anchored to; cloud tasks launched from a thread carry it.
 struct CloudThreadAnchor {
     var id: UUID
@@ -21,7 +16,7 @@ extension AppState {
 
     // MARK: - Context & Preflight
 
-    func refreshCopilotCloudContext(forceRepoResolve: Bool) {
+    func refreshCopilotCloudContext(forceRepoResolve: Bool, authOnly: Bool = false) {
         let project = projectURL
         let shouldResolve = forceRepoResolve || cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -32,14 +27,15 @@ extension AppState {
             let auth = await client.checkAuth()
             guard documentSessionID == session else { return }
             cloudAuthStatus = auth
+            guard !authOnly, activeCloudBackend != .amp, projectURL == project else { return }
 
             if let project {
                 let dirtyCount = await Task.detached { ProjectChanges.snapshot(project)?.count ?? 0 }.value
-                guard documentSessionID == session else { return }
+                guard documentSessionID == session, activeCloudBackend != .amp, projectURL == project else { return }
                 cloudDirtyFilesCount = dirtyCount
 
                 if shouldResolve, let info = try? await client.resolveRepo(in: project) {
-                    guard documentSessionID == session else { return }
+                    guard documentSessionID == session, activeCloudBackend != .amp, projectURL == project else { return }
                     cloudRepo = info.repo
                     cloudBaseRef = info.defaultBranch
                 }
@@ -62,7 +58,7 @@ extension AppState {
         let quote = body["quote"] as? String ?? ""
         let focus = body["focus"] as? [String] ?? []
         let anchor = body["anchor"] as? String ?? ""
-        guard composerTarget == .cloud else {
+        guard isCloudTarget else {
             discuss(thread: thread, quote: quote, focus: focus, anchor: anchor, message: message)
             return
         }
@@ -83,7 +79,7 @@ extension AppState {
 
     /// Direct `⌘↩` prompt on a document paragraph: follows the main composer's Local/Cloud setting.
     func routeParagraphPrompt(_ raw: String, blockID: String) {
-        if composerTarget == .cloud {
+        if isCloudTarget {
             submitCloud(raw, paragraphBlockID: blockID)
         } else {
             submit(raw, paragraphBlockID: blockID)

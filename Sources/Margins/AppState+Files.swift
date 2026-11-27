@@ -19,7 +19,7 @@ extension AppState {
             let session = documentSessionID
             Task {
                 await editor.setOutline(showOutline)
-                await editor.setCloudMode(composerTarget == .cloud)
+                await editor.setCloudMode(isCloudTarget)
                 await applyEditorChrome()
                 await loadEditorDocument(session: session)
             }

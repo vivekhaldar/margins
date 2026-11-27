@@ -100,7 +100,9 @@ Documents autosave to `~/Documents/Margins/<Title>.margins`, which is JSON and i
 | **Claude Code** | `claude -p --json-schema …` | `claude` → `/login` (Claude plan) |
 | **OpenAI-compatible** | HTTP `/v1/chat/completions` | API key (Keychain), or none for Ollama / LM Studio |
 
-Margins drives each vendor's own CLI, so your subscription is used exactly as the vendor intends. Margins never sees or stores those credentials. Choose the provider and model from the toolbar; configure providers in **Settings** (⌘,).
+Margins drives each vendor's own CLI, so your subscription is used exactly as the vendor intends. Margins never sees or stores those credentials.
+
+Use the **Agent** menu in the toolbar or the matching chip above the composer to pick a local provider and model, Copilot Cloud, or Amp Cloud. The selection also applies to paragraph prompts (⌘↩) and inline threads; follow-ups in an Amp thread stay on Amp when another cloud agent is selected. Use ⌥⇧⌘A to switch between your last-used local and cloud agents. In cloud mode, expand the repository summary above the composer to change run options. **Settings → Providers** lets you enable agents, check cloud authentication, and choose cloud run defaults.
 
 Why it works this way: [docs/03-model-providers.md](docs/03-model-providers.md).
 

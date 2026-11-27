@@ -59,6 +59,10 @@ final class DocumentWindows {
         return states[ObjectIdentifier(window)]
     }
 
+    var frontmostDocumentState: AppState? {
+        NSApp.orderedWindows.lazy.compactMap { self.states[ObjectIdentifier($0)] }.first
+    }
+
     func makeState(url: URL?) -> AppState {
         var documentURL = url
         if !madeInitialWindow {

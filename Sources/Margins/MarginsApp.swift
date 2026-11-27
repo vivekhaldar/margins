@@ -82,6 +82,12 @@ struct MarginsApp: App {
                 Button(state.showHistory ? "Hide History" : "Show History") { state.showHistory.toggle() }
             }
             CommandMenu("Agent") {
+                Button(state.isCloudTarget ? "Switch to Local Agent" : "Switch to Cloud Agent") {
+                    state.toggleLocalCloudTarget()
+                }
+                .keyboardShortcut("a", modifiers: [.command, .option, .shift])
+                .disabled(state.enabledCloudBackends.isEmpty && !state.isCloudTarget)
+                Divider()
                 Picker("Tools", selection: Binding(get: { state.toolPolicy }, set: { state.toolPolicy = $0 })) {
                     ForEach(AgentToolPolicy.allCases) { Text($0.title).tag($0) }
                 }

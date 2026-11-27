@@ -10,12 +10,13 @@ extension AppState {
     // MARK: - Routing
 
     /// Launches a cloud run. Follow-ups in a thread that already talks to Amp stay on Amp; everything
-    /// else follows the composer's Copilot | Amp picker.
+    /// else follows the selected cloud agent.
     func submitCloud(_ raw: String, thread: CloudThreadAnchor? = nil, paragraphBlockID: String? = nil) {
+        guard let backend = activeCloudBackend else { return }
         let ampThread = thread.map { anchor in
             doc.intents.contains { $0.thread == anchor.id && $0.cloudTask?.resolvedBackend == .amp }
         } ?? false
-        if ampThread || cloudBackend == .amp {
+        if ampThread || backend == .amp {
             submitAmpCloud(raw, thread: thread, paragraphBlockID: paragraphBlockID)
         } else {
             submitCopilotCloud(raw, thread: thread, paragraphBlockID: paragraphBlockID)
@@ -23,7 +24,7 @@ extension AppState {
     }
 
     func refreshCloudContext(forceRepoResolve: Bool = false) {
-        switch cloudBackend {
+        switch activeCloudBackend ?? .copilot {
         case .copilot: refreshCopilotCloudContext(forceRepoResolve: forceRepoResolve)
         case .amp: refreshAmpCloudContext(forceRepoResolve: forceRepoResolve, recheck: false)
         }
@@ -78,7 +79,7 @@ extension AppState {
 
     /// Resolves the project from `git remote get-url origin` and counts dirty files. The CLI / key
     /// preflight (which may run `pass`) happens once per window, or when the user presses Recheck.
-    func refreshAmpCloudContext(forceRepoResolve: Bool, recheck: Bool) {
+    func refreshAmpCloudContext(forceRepoResolve: Bool, recheck: Bool, authOnly: Bool = false) {
         let project = projectURL
         let shouldResolve = forceRepoResolve || cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let needsPreflight = recheck || ampAuthStatus == nil
@@ -88,17 +89,8 @@ extension AppState {
         if forceRepoResolve { cloudBaseRef = "" }
 
         Task {
-            if let project {
-                if shouldResolve, let resolved = try? await client.resolveProject(in: project) {
-                    guard documentSessionID == session else { return }
-                    cloudRepo = resolved
-                }
-                let dirtyCount = await Task.detached { ProjectChanges.snapshot(project)?.count ?? 0 }.value
-                guard documentSessionID == session else { return }
-                cloudDirtyFilesCount = dirtyCount
-            } else {
-                cloudDirtyFilesCount = 0
-                if forceRepoResolve { cloudRepo = "" }
+            if !authOnly {
+                await resolveAmpContext(project: project, session: session, shouldResolve: shouldResolve, force: forceRepoResolve)
             }
             guard needsPreflight else { return }
             if recheck { await client.credentials.invalidate() }
@@ -106,6 +98,21 @@ extension AppState {
             guard documentSessionID == session else { return }
             ampAuthStatus = status
         }
+    }
+
+    private func resolveAmpContext(project: URL?, session: UUID, shouldResolve: Bool, force: Bool) async {
+        guard let project else {
+            cloudDirtyFilesCount = 0
+            if force { cloudRepo = "" }
+            return
+        }
+        if shouldResolve, let resolved = try? await ampClient.resolveProject(in: project),
+           documentSessionID == session, activeCloudBackend == .amp, projectURL == project {
+            cloudRepo = resolved
+        }
+        let dirtyCount = await Task.detached { ProjectChanges.snapshot(project)?.count ?? 0 }.value
+        guard documentSessionID == session, activeCloudBackend == .amp, projectURL == project else { return }
+        cloudDirtyFilesCount = dirtyCount
     }
 
     // MARK: - Launch

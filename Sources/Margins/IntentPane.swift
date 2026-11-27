@@ -59,11 +59,11 @@ struct IntentPane: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                ComposerTargetPill()
+                AgentMenu(compact: true)
                 Spacer()
             }
-            if state.composerTarget == .cloud {
-                CloudComposerOptions()
+            if let backend = state.activeCloudBackend {
+                CloudComposerOptions(backend: backend).id(backend)
             } else if !state.doc.intents.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -106,7 +106,7 @@ struct IntentPane: View {
                 Spacer()
                 // Return (including ⌘Return) is handled by the focused composer above.
                 // A window-wide shortcut here would steal ⌘Return from the document.
-                Button(state.composerTarget == .cloud ? "Launch" : "Send") { send() }
+                Button(state.isCloudTarget ? "Launch" : "Send") { send() }
                     .uiFont(.body)
                     .disabled(sendDisabled)
             }
@@ -116,8 +116,8 @@ struct IntentPane: View {
     }
 
     private var composerPlaceholder: String {
-        if state.composerTarget == .cloud {
-            return state.cloudBackend == .amp ? "Describe a task for Amp (remote orb)…" : "Describe a task for Copilot Cloud Agent…"
+        if let backend = state.activeCloudBackend {
+            return "Describe a task for \(backend.providerName)…"
         }
         return state.doc.intents.isEmpty
             ? "What do you want to write? e.g. “A design doc for rate limiting our public API”"
@@ -126,16 +126,16 @@ struct IntentPane: View {
 
     private var sendDisabled: Bool {
         if state.composerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-        if state.composerTarget == .cloud {
+        if let backend = state.activeCloudBackend {
             return state.cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || (state.cloudBackend == .copilot && state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                || (backend == .copilot && state.cloudBaseRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        return false
+        return state.activeProvider == nil
     }
 
     private func send() {
         guard !sendDisabled else { return }
-        if state.composerTarget == .cloud {
+        if state.isCloudTarget {
             state.submitCloud(state.composerDraft)
         } else {
             state.submit(state.composerDraft)

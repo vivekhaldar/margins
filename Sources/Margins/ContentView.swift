@@ -130,7 +130,7 @@ struct ContentView: View {
             if state.busy { ProgressView().controlSize(.small).interfaceZoom(state.zoom) }
             SyncStatusPill(sync: sync).interfaceZoom(state.zoom)
             ProjectMenu().interfaceZoom(state.zoom)
-            ProviderMenu().interfaceZoom(state.zoom)
+            AgentMenu().interfaceZoom(state.zoom)
             SemanticZoomControl().interfaceZoom(state.zoom)
             Button {
                 state.showOutline.toggle()
@@ -205,95 +205,6 @@ struct ProjectMenu: View {
         case .research: return "Agent tools: Research — read-only (Copilot asks before changes)."
         case .off: return "Agent tools: Off — the agent only edits the document."
         }
-    }
-}
-
-struct ProviderMenu: View {
-    @EnvironmentObject var state: AppState
-
-    var body: some View {
-        Menu {
-            ForEach(state.enabledProviders) { p in
-                Section(p.name) {
-                    let list = state.models[p.id] ?? []
-                    if list.isEmpty {
-                        Toggle("Default model", isOn: selection(p, ""))
-                        Button("Load models…") { Task { await state.loadModels(for: p) } }
-                    } else {
-                        ForEach(list) { m in
-                            Toggle(m.name, isOn: selection(p, m.id))
-                        }
-                    }
-                }
-            }
-            Divider()
-            if let p = state.activeProvider {
-                if p.kind == .codex {
-                    Menu("Reasoning effort: \(p.reasoningEffort?.title ?? "Default")") {
-                        Toggle("Default (Codex configuration)", isOn: effortSelection(p, nil))
-                        ForEach(ReasoningEffort.allCases) { effort in
-                            Toggle(effort.title, isOn: effortSelection(p, effort))
-                        }
-                        Divider()
-                        Text("Available levels depend on the model and installed Codex version.")
-                    }
-                } else {
-                    Text("Effort selection is available for Codex.")
-                }
-            }
-            Section("Agent tools") {
-                ForEach(AgentToolPolicy.allCases) { p in
-                    Toggle(p.title, isOn: Binding(get: { state.toolPolicy == p }, set: { _ in state.toolPolicy = p }))
-                }
-                if state.toolPolicy != .off, state.activeProvider?.kind.supportsTools == false {
-                    Text("This provider has no tools; it answers from the document only.")
-                }
-                Button(state.projectURL == nil ? "Reveal Agent Workspace" : "Show Project in Finder") { state.revealWorkspace() }
-            }
-            Divider()
-            SettingsLink { Text("Providers…") }
-        } label: {
-            Label(currentLabel, systemImage: toolsActive ? "wand.and.stars" : "cpu")
-                .labelStyle(.titleAndIcon)
-        }
-        .help(toolsActive ? "Model provider · agent tools: \(state.toolPolicy.shortTitle)" : "Model provider")
-        .task(id: state.activeProviderID) {
-            if let p = state.activeProvider, state.models[p.id] == nil { await state.loadModels(for: p) }
-        }
-    }
-
-    private var toolsActive: Bool { state.toolPolicy != .off && state.activeProvider?.kind.supportsTools == true }
-
-    private func effortSelection(_ p: ProviderConfig, _ effort: ReasoningEffort?) -> Binding<Bool> {
-        Binding(get: { p.reasoningEffort == effort },
-                set: { _ in state.setReasoningEffort(effort, for: p.id) })
-    }
-
-    /// Checkmark binding: on when this provider is active and this model is its selected one.
-    private func selection(_ p: ProviderConfig, _ modelID: String) -> Binding<Bool> {
-        Binding(
-            get: { p.id == state.activeProviderID && p.model == modelID },
-            set: { _ in
-                state.activeProviderID = p.id
-                state.setModel(modelID, for: p.id)
-            }
-        )
-    }
-
-    private var currentLabel: String {
-        guard let p = state.activeProvider else { return "No provider" }
-        var model = state.models[p.id]?.first { $0.id == p.model }?.name ?? p.model
-        // "Default (Claude Sonnet 5.5)" → show the concrete model in the toolbar.
-        if p.model.isEmpty, let open = model.firstIndex(of: "("), model.hasSuffix(")") {
-            model = String(model[model.index(after: open)..<model.index(before: model.endIndex)])
-        } else if p.model.isEmpty, model == "Default" || model.hasPrefix("Default ") {
-            model = "Default"
-        }
-        let label = model.isEmpty ? p.name : "\(p.name) · \(model)"
-        if p.kind == .codex, let effort = p.reasoningEffort {
-            return "\(label) · \(effort.title)"
-        }
-        return label
     }
 }
 

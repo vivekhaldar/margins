@@ -5,10 +5,12 @@ import UserNotifications
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
+    @StateObject private var providerState = Local<AppState?>(nil)
 
     var body: some View {
         TabView {
             ProvidersSettingsTab()
+                .environmentObject(providerState.value ?? state)
                 .tabItem { Label("Providers", systemImage: "cpu") }
             AppearanceSettingsTab()
                 .tabItem { Label("Appearance", systemImage: "textformat") }
@@ -19,23 +21,35 @@ struct SettingsView: View {
                 .tabItem { Label("Sync", systemImage: "icloud") }
         }
         .frame(width: 720, height: 480)
+        .onAppear { providerState.value = DocumentWindows.shared.frontmostDocumentState }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            providerState.value = DocumentWindows.shared.frontmostDocumentState
+        }
     }
 }
 
 private struct ProvidersSettingsTab: View {
     @EnvironmentObject var state: AppState
-    @StateObject private var sel = Local<UUID?>(nil)
+    @StateObject private var sel = Local<AgentTarget?>(nil)
+
+    private var selectedLocalID: UUID? {
+        guard case .local(let id) = sel.value else { return nil }
+        return id
+    }
 
     var body: some View {
         HSplitView {
             List(selection: $sel.value) {
-                ForEach(state.providers) { p in
-                    HStack {
-                        Image(systemName: p.enabled ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(p.enabled ? Color.green : Color.secondary)
-                        Text(p.name)
+                Section("Local") {
+                    ForEach(state.providers) { provider in
+                        statusRow(provider.name, enabled: provider.enabled).tag(AgentTarget.local(provider.id))
                     }
-                    .tag(p.id)
+                }
+                Section("Cloud") {
+                    ForEach(CloudBackend.allCases, id: \.self) { backend in
+                        statusRow(backend.providerName, enabled: state.enabledCloudBackends.contains(backend))
+                            .tag(AgentTarget.cloud(backend))
+                    }
                 }
             }
             .frame(minWidth: 200, maxWidth: 240)
@@ -46,22 +60,26 @@ private struct ProvidersSettingsTab: View {
                             Button(k.title) {
                                 let c = ProviderConfig(kind: k)
                                 state.providers.append(c)
-                                sel.value = c.id
+                                sel.value = .local(c.id)
                             }
                         }
                     } label: { Image(systemName: "plus") }
                     .menuStyle(.borderlessButton).fixedSize()
                     Button {
-                        if let s = sel.value { state.invalidate(s); state.providers.removeAll { $0.id == s } }
-                        sel.value = state.providers.first?.id
+                        guard let id = selectedLocalID else { return }
+                        state.invalidate(id)
+                        state.providers.removeAll { $0.id == id }
+                        sel.value = .local(state.lastLocalProviderID)
                     } label: { Image(systemName: "minus") }
                     .buttonStyle(.borderless)
-                    .disabled(sel.value == nil || state.providers.count <= 1)
+                    .disabled(selectedLocalID == nil || state.providers.count <= 1)
                     Spacer()
                 }
                 .padding(8)
             }
-            if let id = sel.value, let i = state.providers.firstIndex(where: { $0.id == id }) {
+            if case .cloud(let backend) = sel.value {
+                CloudBackendDetail(backend: backend).id(backend).frame(minWidth: 380)
+            } else if let id = selectedLocalID, let i = state.providers.firstIndex(where: { $0.id == id }) {
                 ProviderDetail(config: $state.providers[i])
                     .id(id)
                     .frame(minWidth: 380)
@@ -69,7 +87,59 @@ private struct ProvidersSettingsTab: View {
                 Text("Select a provider").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onAppear { sel.value = sel.value ?? state.activeProviderID }
+        .onAppear { sel.value = sel.value ?? state.agentTarget }
+        .onChange(of: ObjectIdentifier(state)) { _, _ in sel.value = state.agentTarget }
+    }
+
+    private func statusRow(_ name: String, enabled: Bool) -> some View {
+        HStack {
+            Image(systemName: enabled ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(enabled ? Color.green : Color.secondary)
+                .accessibilityLabel(enabled ? "Enabled" : "Disabled")
+            Text(name)
+        }
+    }
+}
+
+private struct CloudBackendDetail: View {
+    @EnvironmentObject var state: AppState
+    let backend: CloudBackend
+
+    private var enabled: Bool { state.enabledCloudBackends.contains(backend) }
+    private var active: Bool { state.activeCloudBackend == backend }
+    private var binary: String { backend == .copilot ? "gh" : "amp" }
+    private var description: String {
+        switch backend {
+        case .copilot:
+            return "Runs GitHub Copilot coding agent on a GitHub repository. Requires a Copilot plan with cloud agent access and an authenticated GitHub CLI."
+        case .amp:
+            return "Runs an Amp remote orb on a GitHub repository. Requires an Amp account with remote agent access and an API key in pass."
+        }
+    }
+
+    var body: some View {
+        Form {
+            Section(backend.providerName) {
+                Text(description).font(.callout).foregroundStyle(.secondary)
+                Toggle("Enabled", isOn: Binding(get: { enabled }, set: { value in
+                    if value { state.enabledCloudBackends.insert(backend) }
+                    else { state.enabledCloudBackends.remove(backend) }
+                }))
+                Button(active ? "Active agent" : "Use this agent") { state.agentTarget = .cloud(backend) }
+                    .disabled(active || !enabled)
+            }
+            Section("Command-line tool") {
+                LabeledContent(binary, value: BinaryLocator.locate(binary)?.path ?? "Not found").textSelection(.enabled)
+                CloudAuthCheck(backend: backend, issue: state.cloudAuthIssue(for: backend), authOnly: true)
+            }
+            Section("Run defaults") {
+                switch backend {
+                case .copilot: Toggle("Open PR by default", isOn: $state.cloudDefaultCreatePR)
+                case .amp: Toggle("Detached by default", isOn: $state.ampDefaultDetached)
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 
@@ -173,10 +243,10 @@ private struct ProviderDetail: View {
                 Text(config.kind.subscriptionNote).font(.callout).foregroundStyle(.secondary)
                 TextField("Name", text: $config.name)
                 Toggle("Enabled", isOn: $config.enabled)
-                Button(state.activeProviderID == config.id ? "Active provider" : "Use this provider") {
-                    state.activeProviderID = config.id
+                Button(state.agentTarget == .local(config.id) ? "Active provider" : "Use this provider") {
+                    state.agentTarget = .local(config.id)
                 }
-                .disabled(state.activeProviderID == config.id || !config.enabled)
+                .disabled(state.agentTarget == .local(config.id) || !config.enabled)
             }
             if config.kind.defaultBinary != nil {
                 Section("Command-line tool") {
@@ -403,4 +473,3 @@ private struct SyncSettingsTab: View {
         }
     }
 }
-
