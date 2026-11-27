@@ -9,7 +9,9 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var intentWidth = Local<CGFloat>(340)
-    @StateObject private var dragStartWidth = Local<CGFloat?>(nil)
+
+    private static let defaultIntentWidth: CGFloat = 340
+    private static let dividerHitWidth: CGFloat = 11
 
     var body: some View {
         GeometryReader { geo in
@@ -28,10 +30,25 @@ struct ContentView: View {
                     .allowsHitTesting(!state.zenMode)
                     .accessibilityHidden(state.zenMode)
                 if !state.zenMode {
-                    SplitDivider(width: $intentWidth.value, dragStart: $dragStartWidth.value, range: 220...maxIntent)
+                    Rectangle()
+                        .fill(state.resolvedTheme.swiftUIColor("line"))
+                        .frame(width: 1)
                         .transition(.opacity)
                 }
                 editorColumn
+            }
+            .overlay(alignment: .leading) {
+                if !state.zenMode {
+                    SplitDivider(
+                        width: $intentWidth.value,
+                        displayedWidth: paneWidth,
+                        range: 220...maxIntent,
+                        defaultWidth: Self.defaultIntentWidth,
+                        hitWidth: Self.dividerHitWidth
+                    )
+                    .padding(.leading, max(0, paneWidth - (Self.dividerHitWidth - 1) / 2))
+                    .transition(.opacity)
+                }
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: state.zenMode)
         }
@@ -299,40 +316,150 @@ struct PreviewBanner: View {
 
 private struct SplitDivider: View {
     @Binding var width: CGFloat
-    @Binding var dragStart: CGFloat?
+    let displayedWidth: CGFloat
     let range: ClosedRange<CGFloat>
+    let defaultWidth: CGFloat
+    let hitWidth: CGFloat
     @Environment(\.marginsTheme) private var theme
-    @StateObject private var hovering = Local(false)
+    @StateObject private var isHovering = Local(false)
+    @StateObject private var isDragging = Local(false)
+
+    private var isActive: Bool { isHovering.value || isDragging.value }
 
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(theme.swiftUIColor("line"))
-                .frame(width: 1)
-            Color.clear
-                .frame(width: 7)
-                .contentShape(Rectangle())
+                .fill(isActive ? theme.swiftUIColor("accent").opacity(isDragging.value ? 0.85 : 0.45) : .clear)
+                .frame(width: isActive ? 3 : 1)
+            Capsule()
+                .fill(
+                    isActive
+                        ? theme.swiftUIColor("accent").opacity(isDragging.value ? 1.0 : 0.85)
+                        : theme.swiftUIColor("mutedInk").opacity(0.35)
+                )
+                .frame(width: isActive ? 4 : 3, height: isActive ? 36 : 28)
+            SplitResizeHandle(
+                width: displayedWidth,
+                range: range,
+                defaultWidth: defaultWidth,
+                onWidthChange: { width = $0 },
+                onHoverChange: { isHovering.value = $0 },
+                onDragChange: { isDragging.value = $0 }
+            )
         }
-        .frame(width: 1)
-        .onHover { inside in
-            guard inside != hovering.value else { return }
-            hovering.value = inside
-            if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-        }
-        .onDisappear {
-            if hovering.value {
-                hovering.value = false
-                NSCursor.pop()
-            }
-        }
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { value in
-                    if dragStart == nil { dragStart = width }
-                    let proposed = (dragStart ?? width) + value.translation.width
-                    width = min(max(proposed, range.lowerBound), range.upperBound)
-                }
-                .onEnded { _ in dragStart = nil }
+        .frame(width: hitWidth)
+        .frame(maxHeight: .infinity)
+        .animation(.easeOut(duration: 0.12), value: isActive)
+    }
+}
+
+/// AppKit-backed resize hit area so the divider sits above WKWebView and tracks cursor/drag reliably.
+private struct SplitResizeHandle: NSViewRepresentable {
+    let width: CGFloat
+    let range: ClosedRange<CGFloat>
+    let defaultWidth: CGFloat
+    let onWidthChange: (CGFloat) -> Void
+    let onHoverChange: (Bool) -> Void
+    let onDragChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> SplitResizeNSView {
+        let view = SplitResizeNSView()
+        sync(view)
+        return view
+    }
+
+    func updateNSView(_ nsView: SplitResizeNSView, context: Context) {
+        sync(nsView)
+    }
+
+    private func sync(_ view: SplitResizeNSView) {
+        view.currentWidth = width
+        view.range = range
+        view.defaultWidth = defaultWidth
+        view.onWidthChange = onWidthChange
+        view.onHoverChange = onHoverChange
+        view.onDragChange = onDragChange
+    }
+}
+
+private final class SplitResizeNSView: NSView {
+    var currentWidth: CGFloat = 340
+    var range: ClosedRange<CGFloat> = 220...600
+    var defaultWidth: CGFloat = 340
+    var onWidthChange: ((CGFloat) -> Void)?
+    var onHoverChange: ((Bool) -> Void)?
+    var onDragChange: ((Bool) -> Void)?
+
+    private var trackingArea: NSTrackingArea?
+    private var dragStartScreenX: CGFloat = 0
+    private var dragStartWidth: CGFloat = 0
+    private var isDragging = false
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea { removeTrackingArea(existing) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
         )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverChange?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if !isDragging { onHoverChange?(false) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            let clamped = min(max(defaultWidth, range.lowerBound), range.upperBound)
+            currentWidth = clamped
+            onWidthChange?(clamped)
+            return
+        }
+        dragStartScreenX = NSEvent.mouseLocation.x
+        dragStartWidth = currentWidth
+        isDragging = true
+        onDragChange?(true)
+        NSCursor.resizeLeftRight.set()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isDragging else { return }
+        let proposed = dragStartWidth + (NSEvent.mouseLocation.x - dragStartScreenX)
+        let clamped = min(max(proposed, range.lowerBound), range.upperBound)
+        currentWidth = clamped
+        onWidthChange?(clamped)
+        NSCursor.resizeLeftRight.set()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isDragging else { return }
+        isDragging = false
+        onDragChange?(false)
+        let point = convert(event.locationInWindow, from: nil)
+        onHoverChange?(bounds.contains(point))
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            isDragging = false
+            onDragChange?(false)
+            onHoverChange?(false)
+        }
     }
 }
