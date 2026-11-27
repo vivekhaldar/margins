@@ -92,6 +92,8 @@ public struct CloudTaskRef: Codable, Equatable, Sendable {
     public var pullRequestURL: String?
     public var lastCheckedAt: Date?
     public var createPullRequest: Bool
+    /// Block ID of the document paragraph when launched via direct `⌘↩` prompt.
+    public var paragraphBlockID: String?
 
     public init(
         repo: String,
@@ -102,7 +104,8 @@ public struct CloudTaskRef: Codable, Equatable, Sendable {
         cloudState: String = "queued",
         pullRequestURL: String? = nil,
         lastCheckedAt: Date? = nil,
-        createPullRequest: Bool = false
+        createPullRequest: Bool = false,
+        paragraphBlockID: String? = nil
     ) {
         self.repo = repo
         self.baseRef = baseRef
@@ -113,6 +116,7 @@ public struct CloudTaskRef: Codable, Equatable, Sendable {
         self.pullRequestURL = pullRequestURL
         self.lastCheckedAt = lastCheckedAt
         self.createPullRequest = createPullRequest
+        self.paragraphBlockID = paragraphBlockID
     }
 }
 

@@ -228,7 +228,12 @@ public enum CloudTaskState: Equatable, Sendable {
         }
     }
 
-    public func notificationOutcome(summary: String, detail: String, error: String? = nil) -> AgentNotificationOutcome? {
+    public func notificationOutcome(
+        summary: String,
+        detail: String,
+        error: String? = nil,
+        hasEdits: Bool = false
+    ) -> AgentNotificationOutcome? {
         switch self {
         case .queued, .inProgress, .unknown:
             return nil
@@ -236,7 +241,7 @@ public enum CloudTaskState: Equatable, Sendable {
             let message = detail.isEmpty ? "Cloud task is waiting for your input on GitHub." : detail
             return .permissionNeeded(title: "Copilot Cloud needs attention", detail: message)
         case .completed:
-            return .completed(hasEdits: false, summary: summary, slug: "cloud task completed", reply: detail)
+            return .completed(hasEdits: hasEdits, summary: summary, slug: "cloud task completed", reply: detail)
         case .failed, .cancelled, .timedOut:
             let fallback = "Cloud task \(displayLabel.lowercased())."
             return .failed(error: error?.isEmpty == false ? error! : (detail.isEmpty ? fallback : detail))

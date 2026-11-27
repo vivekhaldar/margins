@@ -17,6 +17,7 @@ extension AppState {
             let session = documentSessionID
             Task {
                 await editor.setOutline(showOutline)
+                await editor.setCloudMode(composerTarget == .cloud)
                 await editor.setFonts(document: fontPreferences.documentFontCSS, ui: fontPreferences.uiFontCSS)
                 await loadEditorDocument(session: session)
             }
@@ -79,7 +80,7 @@ extension AppState {
         case "submitParagraph":
             if previewing == nil, let text = body["text"] as? String,
                let blockId = body["blockId"] as? String, !blockId.isEmpty {
-                submit(text, paragraphBlockID: blockId)
+                routeParagraphPrompt(text, blockID: blockId)
             }
         case "ask":
             routeThreadMessage(body)

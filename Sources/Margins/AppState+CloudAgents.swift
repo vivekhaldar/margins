@@ -54,15 +54,14 @@ extension AppState {
 
     // MARK: - Launch
 
-    /// Editor "ask" message from an inline thread: local agents discuss in place; `cloud: true` launches a
-    /// Copilot Cloud task anchored to the thread instead.
+    /// Editor "ask" message from an inline thread: follows the main composer's Local/Cloud setting.
     func routeThreadMessage(_ body: [String: Any]) {
         guard let thread = (body["thread"] as? String).flatMap(UUID.init(uuidString:)),
               let message = body["message"] as? String else { return }
         let quote = body["quote"] as? String ?? ""
         let focus = body["focus"] as? [String] ?? []
         let anchor = body["anchor"] as? String ?? ""
-        guard body["cloud"] as? Bool == true else {
+        guard composerTarget == .cloud else {
             discuss(thread: thread, quote: quote, focus: focus, anchor: anchor, message: message)
             return
         }
@@ -81,7 +80,16 @@ extension AppState {
         }
     }
 
-    func submitCloud(_ raw: String, thread: CloudThreadAnchor? = nil) {
+    /// Direct `⌘↩` prompt on a document paragraph: follows the main composer's Local/Cloud setting.
+    func routeParagraphPrompt(_ raw: String, blockID: String) {
+        if composerTarget == .cloud {
+            submitCloud(raw, paragraphBlockID: blockID)
+        } else {
+            submit(raw, paragraphBlockID: blockID)
+        }
+    }
+
+    func submitCloud(_ raw: String, thread: CloudThreadAnchor? = nil, paragraphBlockID: String? = nil) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let repo = cloudRepo.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -113,6 +121,7 @@ extension AppState {
         let client = cloudClient
 
         Task {
+            if let paragraphBlockID { await editor.setParagraphWorking(step: step, blockID: paragraphBlockID) }
             do {
                 let excerpt = await cloudExcerpt(thread: thread)
                 guard documentSessionID == session else { return }
@@ -133,7 +142,8 @@ extension AppState {
                     sessionID: snapshot.sessionID,
                     cloudState: snapshot.state,
                     lastCheckedAt: Date(),
-                    createPullRequest: createPR
+                    createPullRequest: createPR,
+                    paragraphBlockID: paragraphBlockID
                 )
                 updateCloudIntent(intentID) { $0.cloudTask = ref }
                 saveNow()
@@ -144,6 +154,7 @@ extension AppState {
                 }
             } catch {
                 guard documentSessionID == session else { return }
+                if paragraphBlockID != nil { await editor.setParagraphWorking(step: step, blockID: nil) }
                 updateCloudIntent(intentID) {
                     $0.status = .failed
                     $0.error = error.localizedDescription
@@ -172,6 +183,9 @@ extension AppState {
                   CloudTaskState(rawState: task.cloudState).shouldPoll,
                   CloudWatcherPolicy.shouldStartWatcher(trigger: trigger, watcherRunning: cloudPollTasks[intent.id] != nil)
             else { continue }
+            if let blockID = task.paragraphBlockID {
+                Task { await editor.setParagraphWorking(step: intent.step, blockID: blockID) }
+            }
             startCloudPolling(for: intent.id)
         }
     }
@@ -281,6 +295,9 @@ extension AppState {
         }
 
         stopCloudLogStream(for: intentID)
+        if ref.paragraphBlockID != nil {
+            await editor.setParagraphWorking(step: doc.intents[index].step, blockID: nil)
+        }
         await collectCloudOutputs(
             for: intentID, ref: ref, state: transition.newState, previousState: transition.previousState, session: session
         )
@@ -317,6 +334,12 @@ extension AppState {
             CloudTaskLifecycle.applyOutputs(to: &$0, state: state, excerpt: excerpt, pullRequestURL: prURL)
         }
         saveNow()
+        if state == .completed,
+           let updated = doc.intents.first(where: { $0.id == intentID }),
+           CloudInsertionPlan.shouldAutoInsert(intent: updated) {
+            await applyCloudResultToDocument(intentID: intentID, allowEndPreview: false)
+            guard documentSessionID == session else { return }
+        }
         notifyCloudTransition(intentID: intentID, state: state, previousState: previousState, excerpt: excerpt)
     }
 
@@ -326,7 +349,9 @@ extension AppState {
                   state: state, previousState: previousState, alreadyNotifiedAttention: cloudNotifiedAttention.contains(intentID)
               ) else { return }
         if state.needsAttention { cloudNotifiedAttention.insert(intentID) }
-        guard let outcome = state.notificationOutcome(summary: intent.summary, detail: excerpt, error: intent.error) else { return }
+        guard let outcome = state.notificationOutcome(
+            summary: intent.summary, detail: excerpt, error: intent.error, hasEdits: intent.status == .pending
+        ) else { return }
         AgentNotifications.shared.coordinator.notify(
             documentURL: fileURL,
             step: intent.step,
@@ -379,43 +404,46 @@ extension AppState {
     // MARK: - Insert into Document (Tracked Edit)
 
     func insertCloudResultIntoDocument(intentID: UUID) {
+        Task { await applyCloudResultToDocument(intentID: intentID, allowEndPreview: true) }
+    }
+
+    private func applyCloudResultToDocument(intentID: UUID, allowEndPreview: Bool) async {
+        if !allowEndPreview && previewing != nil { return }
         guard let intent = doc.intents.first(where: { $0.id == intentID }), intent.cloudTask != nil else { return }
         let log = cloudLogs[intentID]
         let session = documentSessionID
-        previewing = nil
+        if allowEndPreview { previewing = nil }
 
-        Task {
-            do {
-                let snapshot = try await editor.blocks()
-                guard documentSessionID == session,
-                      let plan = CloudInsertionPlan.make(
-                          intent: intent, log: log, focus: snapshot.focus, blockIDs: snapshot.blocks.map(\.id)
-                      ) else { return }
-                doc.annotationRuns.append(plan.run)
-                let result = try await editor.apply(
-                    step: intent.step,
-                    edits: [plan.edit],
-                    direct: false,
-                    runID: plan.run.id,
-                    expectedRevision: snapshot.revision,
-                    blockStates: snapshot.blockStates
-                )
-                guard documentSessionID == session else { return }
-                updateCloudIntent(intentID) {
-                    $0.status = CloudInsertionPlan.status(afterChanges: result.changes)
-                }
-                doc.snapshot(
-                    html: result.html,
-                    slug: "inserted cloud result",
-                    author: .agent,
-                    detail: intent.text,
-                    annotations: result.annotations
-                )
-                saveNow()
-            } catch {
-                guard documentSessionID == session else { return }
-                lastError = "Couldn't insert cloud result: \(error.localizedDescription)"
+        do {
+            let snapshot = try await editor.blocks()
+            guard documentSessionID == session,
+                  let plan = CloudInsertionPlan.make(
+                      intent: intent, log: log, focus: snapshot.focus, blockIDs: snapshot.blocks.map(\.id)
+                  ) else { return }
+            doc.annotationRuns.append(plan.run)
+            let result = try await editor.apply(
+                step: intent.step,
+                edits: [plan.edit],
+                direct: false,
+                runID: plan.run.id,
+                expectedRevision: snapshot.revision,
+                blockStates: snapshot.blockStates
+            )
+            guard documentSessionID == session else { return }
+            updateCloudIntent(intentID) {
+                $0.status = CloudInsertionPlan.status(afterChanges: result.changes)
             }
+            doc.snapshot(
+                html: result.html,
+                slug: "inserted cloud result",
+                author: .agent,
+                detail: intent.text,
+                annotations: result.annotations
+            )
+            saveNow()
+        } catch {
+            guard documentSessionID == session else { return }
+            lastError = "Couldn't insert cloud result: \(error.localizedDescription)"
         }
     }
 

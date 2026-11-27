@@ -77,7 +77,12 @@ final class AppState: ObservableObject {
     @Published var projectFolderRevision = 0
 
     // Copilot Cloud Agent state (logic in AppState+CloudAgents.swift)
-    @Published var composerTarget: ComposerTarget = .local
+    @Published var composerTarget: ComposerTarget = .local {
+        didSet {
+            let isCloud = composerTarget == .cloud
+            Task { await editor.setCloudMode(isCloud) }
+        }
+    }
     @Published var cloudRepo = ""
     @Published var cloudBaseRef = "main"
     @Published var cloudCreatePR = false

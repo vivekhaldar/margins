@@ -955,7 +955,6 @@
     tquote.textContent = '“' + trunc(openT.quote, 220) + '”';
     tquote.title = openT.quote;
     tin.value = '';
-    setCloudMode(false);
     renderThread();
     placeThread();
     setHL(openT.range);
@@ -1055,7 +1054,7 @@
     text = (text || '').trim();
     if (!openT || !text || tin.disabled) return;
     const t = openT;
-    post('ask', { thread: t.id, quote: t.quote, focus: t.focus, anchor: t.anchor, message: text, cloud: cloudMode });
+    post('ask', { thread: t.id, quote: t.quote, focus: t.focus, anchor: t.anchor, message: text });
     let th = threads.find((x) => x.id === t.id);
     if (!th) { th = { id: t.id, anchor: t.anchor, focus: t.focus, quote: t.quote, messages: [] }; threads.push(th); }
     th.messages.push({ text, status: 'working', activity: 'Starting…' });
@@ -1065,14 +1064,12 @@
     placeThread();
     drawMarks();
   }
-  // ☁ toggle: send this thread's next message to a Copilot Cloud task instead of the local agent.
+  // Mirrors the main composer's Local/Cloud setting in the thread popover.
   function setCloudMode(on) {
     cloudMode = !!on;
-    tcloud.classList.toggle('on', cloudMode);
-    tcloud.setAttribute('aria-pressed', String(cloudMode));
+    tcloud.hidden = !cloudMode;
     renderThread();
   }
-  tcloud.addEventListener('click', () => { setCloudMode(!cloudMode); tin.focus(); });
   function autosize() { tin.style.height = 'auto'; tin.style.height = Math.min(120, tin.scrollHeight + 2) + 'px'; }
   tin.addEventListener('input', autosize);
   tin.addEventListener('keydown', (e) => {
@@ -1364,6 +1361,7 @@
       clearTimeout(revTimer); rev = {ok: 0, no: 0, secs: new Set()};
       annotationInput = null; annotationPaste = null;
       live = null;
+      paragraphRuns.clear();
       formatting.reset();
       closeThread();
       doc.innerHTML = html || '';
@@ -1431,6 +1429,7 @@
     },
     insertImage: (src, alt) => insertImage(src, alt),
     setOutline: (on) => setOutline(on),
+    setCloudMode: (on) => setCloudMode(on),
     setFonts(docFont, uiFont) {
       const root = document.documentElement.style;
       if (docFont) root.setProperty('--doc-font', docFont);

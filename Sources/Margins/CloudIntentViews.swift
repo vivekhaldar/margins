@@ -217,7 +217,7 @@ struct CloudTaskCardSection: View {
                 .uiFont(.caption)
             }
             Spacer()
-            if taskState == .completed {
+            if taskState == .completed && intent.status != .pending && intent.status != .reviewed {
                 Button("Insert into document") {
                     state.insertCloudResultIntoDocument(intentID: intent.id)
                 }

@@ -184,6 +184,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         _ = try? await call("window.margins.insertImage(src, alt)", ["src": src, "alt": alt])
     }
     func setOutline(_ on: Bool) async { _ = try? await call("window.margins.setOutline(on)", ["on": on]) }
+    func setCloudMode(_ on: Bool) async { _ = try? await call("window.margins.setCloudMode(on)", ["on": on]) }
     func setFonts(document: String, ui: String) async {
         _ = try? await call("window.margins.setFonts(docFont, uiFont)", ["docFont": document, "uiFont": ui])
     }

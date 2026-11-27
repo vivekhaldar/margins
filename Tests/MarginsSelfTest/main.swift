@@ -1754,6 +1754,29 @@ test("CloudInsertionPlan targets the right block and builds a tracked edit") {
           "non-cloud intents have no insertion plan")
     check(CloudInsertionPlan.status(afterChanges: 0) == .done && CloudInsertionPlan.status(afterChanges: 2) == .pending,
           "insertion leaves the intent pending review only when it changed the document")
+
+    var directRef = ref
+    directRef.paragraphBlockID = "b2"
+    var directIntent = Intent(step: 8, text: "Expand this", status: .done, summary: "Cloud task completed.", provider: "Copilot Cloud", cloudTask: directRef)
+    directIntent.reply = "Expanded content."
+    let directPlan = CloudInsertionPlan.make(intent: directIntent, log: nil, focus: ["b3"], blockIDs: ["b1", "b2", "b3"])
+    check(directPlan?.edit.op == .replace && directPlan?.edit.blockId == "b2",
+          "direct paragraph prompt replaces its rough prompt block")
+    let fallbackPlan = CloudInsertionPlan.make(intent: directIntent, log: nil, focus: [], blockIDs: ["b1", "b3"])
+    check(fallbackPlan?.edit.op == .insertAfter && fallbackPlan?.edit.blockId == "b3",
+          "deleted prompt block falls back to insertAfter at document end")
+
+    var doneMain = intent
+    doneMain.status = .done
+    var doneThread = threaded
+    doneThread.status = .done
+    check(!CloudInsertionPlan.shouldAutoInsert(intent: doneMain), "main-composer cloud tasks stay manual insert")
+    check(CloudInsertionPlan.shouldAutoInsert(intent: doneThread), "selection-thread cloud tasks auto-insert on completion")
+    check(CloudInsertionPlan.shouldAutoInsert(intent: directIntent), "direct-prompt cloud tasks auto-insert on completion")
+    directIntent.status = .pending
+    check(!CloudInsertionPlan.shouldAutoInsert(intent: directIntent), "already-inserted pending tasks do not auto-insert again")
+    directIntent.status = .reviewed
+    check(!CloudInsertionPlan.shouldAutoInsert(intent: directIntent), "reviewed tasks do not auto-insert again")
 }
 
 let cloudSem = DispatchSemaphore(value: 0)

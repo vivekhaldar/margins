@@ -94,8 +94,26 @@ public struct CloudInsertionPlan: Equatable, Sendable {
             summary: intent.summary,
             status: "pending"
         )
+        let edit = targetEdit(intent: intent, html: html, focus: focus, blockIDs: blockIDs)
+        return CloudInsertionPlan(edit: edit, run: run)
+    }
+
+    /// Direct paragraph prompts replace their rough prompt block when still present; otherwise insert
+    /// after the thread passage, current selection, or end of the document.
+    public static func targetEdit(intent: Intent, html: String, focus: [String], blockIDs: [String]) -> EditOp {
+        if let blockID = intent.cloudTask?.paragraphBlockID, blockIDs.contains(blockID) {
+            return EditOp(op: .replace, blockId: blockID, html: html)
+        }
         let target = targetBlockID(intent: intent, focus: focus, blockIDs: blockIDs)
-        return CloudInsertionPlan(edit: EditOp(op: .insertAfter, blockId: target, html: html), run: run)
+        return EditOp(op: .insertAfter, blockId: target, html: html)
+    }
+
+    /// Selection threads and direct paragraph prompts auto-apply their tracked edit on completion
+    /// unless already inserted into the document.
+    public static func shouldAutoInsert(intent: Intent) -> Bool {
+        guard let task = intent.cloudTask else { return false }
+        guard intent.status != .pending && intent.status != .reviewed else { return false }
+        return intent.thread != nil || task.paragraphBlockID != nil
     }
 
     /// Thread results go right after the discussed passage; otherwise after the current selection, else at
